@@ -1,0 +1,48 @@
+{
+  "name": "mission-control",
+  "version": "1.0.0-alpha.0",
+  "description": "Goal-based autonomous development control plane with isolated execution and encrypted human connectors.",
+  "type": "module",
+  "bin": {
+    "mission-control": "dist/cli.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "!dist/**/*.test.js",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "docs/*.md",
+    "docs/*.json",
+    "examples/*.json",
+    "profiles/*.json",
+    "environments/worker/*",
+    "publication.json",
+    "assets/source.tar.gz",
+    "assets/source-manifest.json",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/*.test.js dist/control/*.test.js",
+    "privacy": "node scripts/publication-audit.mjs",
+    "release": "node scripts/release.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "prettier": "3.9.9",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "3.1143.0",
+    "@azure/identity": "4.13.3",
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "zod": "4.6.5"
+  },
+  "license": "AGPL-3.0-only",
+  "private": true
+}

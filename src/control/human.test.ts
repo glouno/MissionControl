@@ -1,0 +1,28 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {mkdtemp,rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {SqliteStore} from "../sqlite.js";
+import {ControlStore} from "./store.js";
+import {goalSchema} from "./schema.js";
+import {HumanCommandService,pendingDeliveries,settleDelivery,type HumanBinding,type HumanPrincipal} from "./human.js";
+test("encrypted command intake atomically deduplicates goal effects and destination acknowledgments",async t=>{
+ const root=await mkdtemp(join(tmpdir(),"mc-human-"));let now=Date.now();const db=new SqliteStore(join(root,"state.db")),store=new ControlStore(db,()=>now);t.after(async()=>{db.close();await rm(root,{recursive:true,force:true})});
+ const config=goalSchema.parse({title:"Synthetic",description:"Synthetic",repoPath:root,backend:{kind:"fake"},projectId:"sample"});
+ store.setProject({id:"sample",name:"Sample",family:"Example",enabled:false,config},"test");
+ const binding:HumanBinding={connectorId:"matrix-test",kind:"matrix",operatorId:"example",externalIdentity:"@example:example.invalid",destination:"!synthetic:example.invalid",projectIds:["sample"],permissions:["goal","status","answer","pause","projects"],requireVerifiedDevice:true,enabled:true};
+ const principal:HumanPrincipal={connectorId:binding.connectorId,externalIdentity:binding.externalIdentity,destination:binding.destination,trust:{encrypted:true,verifiedDevice:true,allowedMembership:true,deviceId:"VERIFIED"}};
+ const service=new HumanCommandService(store,[binding],(_p,description)=>({...config,description}));
+ const command={eventId:"$event",timestamp:now,action:"goal",projectId:"sample",description:"Synthetic goal"};
+ const first=service.execute(principal,command) as {goalId:string};assert.deepEqual(service.execute(principal,command),first);assert.equal(store.goals().length,1);assert.equal(pendingDeliveries(store,binding.connectorId).length,1);assert.deepEqual(pendingDeliveries(store,"telegram"),[]);
+ assert.throws(()=>service.execute({...principal,trust:{...principal.trust,verifiedDevice:false}},{...command,eventId:"$untrusted"}),/verified/i);
+ assert.throws(()=>service.execute(principal,{...command,description:"Changed"}),/another request/);
+ const delivery=pendingDeliveries(store,binding.connectorId)[0];settleDelivery(store,"telegram",delivery.id,"wrong");assert.equal(pendingDeliveries(store,binding.connectorId).length,1);settleDelivery(store,binding.connectorId,delivery.id,"$receipt");assert.deepEqual(pendingDeliveries(store,binding.connectorId),[]);
+ store.outbox("completed",{goalId:first.goalId,result:{synthetic:true}});assert.equal(pendingDeliveries(store,binding.connectorId).length,1);assert.deepEqual(pendingDeliveries(store,"telegram"),[]);
+ const stale={eventId:"$stale",timestamp:now-86400001,action:"pause",goalId:first.goalId};assert.equal((service.execute(principal,stale) as any).confirmationRequired,true);assert.equal(store.getGoal(first.goalId).status,"planning");
+ now+=1;service.execute(principal,{...stale,eventId:"$confirmed",timestamp:now,confirmationEventId:"$stale"});assert.equal(store.getGoal(first.goalId).status,"paused");
+ const q=store.requestGoalHuman(first.goalId,{question:"Choose",reason:"Synthetic",options:[{id:"a",label:"A"},{id:"b",label:"B"}]});
+ assert.throws(()=>service.execute(principal,{eventId:"$bad-answer",timestamp:now,action:"answer",questionId:q.id,revision:99,option:"a"}),/changed/);
+ service.execute(principal,{eventId:"$answer",timestamp:now-86400001,action:"answer",questionId:q.id,revision:1,option:"a"});assert.equal(store.question(q.id).status,"answered");
+});

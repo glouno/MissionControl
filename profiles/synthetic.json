@@ -1,0 +1,11 @@
+{
+  "id": "builtin.synthetic",
+  "defaults": {
+    "backend": { "kind": "fake" },
+    "maxCostUsd": 0,
+    "maxWorkers": 1,
+    "maxAttempts": 2,
+    "timeoutMs": 30000,
+    "policy": { "publish": false, "autoMerge": false, "targetBranch": "main" }
+  }
+}

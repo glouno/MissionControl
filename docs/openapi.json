@@ -1,0 +1,4193 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MissionControl control plane",
+    "version": "1.0.0"
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/source-info": {
+      "get": {
+        "summary": "Operator: exact installed release source fingerprint",
+        "responses": {
+          "200": {
+            "description": "Version, source revision, SHA-256 and archive bytes"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Reviewed matching archive unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/source": {
+      "get": {
+        "summary": "Operator: download verified installed source archive",
+        "responses": {
+          "200": {
+            "description": "Bounded matching source.tar.gz",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Reviewed matching archive unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/automation-identities": {
+      "get": {
+        "summary": "Operator: list automation policy and expiration",
+        "responses": {
+          "200": {
+            "description": "Policies without credentials"
+          },
+          "403": {
+            "description": "Operator required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Operator: provision or rotate a project-scoped automation credential",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{1,80}$"
+                  },
+                  "projectIds": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    }
+                  },
+                  "permissions": {
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "goals:read",
+                        "goals:create",
+                        "goals:control"
+                      ]
+                    }
+                  },
+                  "expiresInHours": {
+                    "default": 24,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8760
+                  }
+                },
+                "required": [
+                  "id",
+                  "projectIds",
+                  "permissions"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credential and policy; persist credential to a private file and never log response"
+          },
+          "403": {
+            "description": "Operator required"
+          },
+          "409": {
+            "description": "Project disabled or unknown"
+          }
+        }
+      }
+    },
+    "/api/v1/automation-identities/{id}/revoke": {
+      "post": {
+        "summary": "Operator: revoke all credentials for an automation identity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked"
+          },
+          "403": {
+            "description": "Operator required"
+          },
+          "404": {
+            "description": "Identity missing"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/evidence": {
+      "get": {
+        "summary": "Read bounded evidence for an authorized goal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence ordered by ID; use final ID as next cursor"
+          },
+          "403": {
+            "description": "Outside identity scope"
+          }
+        }
+      }
+    },
+    "/api/v1/usage/unresolved": {
+      "get": {
+        "summary": "Operator: inspect unresolved attempt reservations",
+        "responses": {
+          "200": {
+            "description": "Closed and active unresolved reservations"
+          },
+          "403": {
+            "description": "Operator authority required"
+          }
+        }
+      }
+    },
+    "/api/v1/attempts/{id}/usage-reconciliation": {
+      "post": {
+        "summary": "Operator: reconcile closed metered usage from registered evidence",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageReconciliation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable reconciliation recorded; original attempt retained"
+          },
+          "403": {
+            "description": "Operator authority required"
+          },
+          "409": {
+            "description": "Active attempt, missing evidence, or conflicting reconciliation"
+          }
+        }
+      }
+    },
+    "/api/v1/goals": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Goal durably created"
+          },
+          "400": {
+            "description": "Invalid input or missing idempotency key"
+          },
+          "403": {
+            "description": "Outside identity/project authority"
+          },
+          "409": {
+            "description": "Idempotency conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "projectId",
+                      "description"
+                    ],
+                    "properties": {
+                      "projectId": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "$ref": "#/components/schemas/GoalInput"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required for automation creation; reuse unchanged key after ambiguous response",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/goals/{id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/tasks": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/attempts": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/plan": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/state": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required for automation state mutations",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/goals/{id}/backend": {
+      "post": {
+        "summary": "Switch a paused, drained goal backend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackendSwitch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backend changed; goal remains paused"
+          },
+          "400": {
+            "description": "Invalid input or missing authorized budget"
+          },
+          "403": {
+            "description": "Operator authority required"
+          },
+          "409": {
+            "description": "Stale revision, active work, unpaused goal or unreconciled tool"
+          }
+        }
+      }
+    },
+    "/api/v1/goals/{id}/policy": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/claims": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "No approved controller dispatch/environment"
+          }
+        },
+        "summary": "Controller-approved registered dispatch only; arbitrary remote workers are unsupported"
+      }
+    },
+    "/api/v1/tasks/{id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/heartbeat": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/transition": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/checkpoint": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/question": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/release": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/result": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/finding": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/questions": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/questions/{id}/answer": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/workers": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/memory": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/tokens": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "409": {
+            "description": "Revision or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/schedules": {
+      "get": {
+        "summary": "Operator: applied schedules",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      },
+      "post": {
+        "summary": "External schedules are configured and explicitly applied; production rejects inline templates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Schedule"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Operator configuration"
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Project"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Configuration saved"
+          },
+          "403": {
+            "description": "Operator authority required"
+          }
+        }
+      }
+    },
+    "/api/v1/execution-maintenance": {
+      "get": {
+        "summary": "Operator: preview verified temporary execution cleanup",
+        "responses": {
+          "200": {
+            "description": "Cleanup eligibility and retention reasons"
+          },
+          "403": {
+            "description": "Operator authority required"
+          },
+          "409": {
+            "description": "Isolated runtime unavailable or maintenance leased"
+          }
+        }
+      },
+      "post": {
+        "summary": "Operator: preview or apply verified temporary execution cleanup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "apply": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Eligibility report and removed session IDs"
+          },
+          "403": {
+            "description": "Operator authority required"
+          },
+          "409": {
+            "description": "Runtime unavailable, active work or lease conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/storage-policy": {
+      "get": {
+        "summary": "Operator: inspect hourly storage maintenance mode",
+        "responses": {
+          "200": {
+            "description": "Current mode"
+          }
+        }
+      },
+      "post": {
+        "summary": "Operator: configure progressive hourly cleanup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "mode"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "preview",
+                      "workspaces",
+                      "branches"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded maintenance policy"
+          },
+          "403": {
+            "description": "Operator required"
+          }
+        }
+      }
+    },
+    "/api/v1/operations": {
+      "get": {
+        "summary": "Operator: inspect requested and executing infrastructure operations",
+        "responses": {
+          "200": {
+            "description": "Durable operation requests"
+          },
+          "403": {
+            "description": "Operator required"
+          }
+        }
+      }
+    },
+    "/api/v1/operations/{id}": {
+      "post": {
+        "summary": "Record owner intent or reconciled result",
+        "responses": {
+          "200": {
+            "description": "Response recorded"
+          },
+          "403": {
+            "description": "Operator required"
+          },
+          "409": {
+            "description": "Already completed"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}/operation": {
+      "post": {
+        "summary": "Leased worker requests owner operation after checkpoint",
+        "responses": {
+          "200": {
+            "description": "Affected task checkpointed and resources released"
+          },
+          "409": {
+            "description": "Stale lease or missing checkpoint"
+          }
+        }
+      }
+    },
+    "/api/v1/dashboard": {
+      "get": {
+        "summary": "Operator: goals, tasks, decisions and execution health",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/artifacts/{id}/content": {
+      "get": {
+        "summary": "Operator: bounded download of an instance-relative recorded artifact; rejects redirected paths",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/goal-drafts": {
+      "post": {
+        "summary": "Validate a draft against applied project authority",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  }
+                },
+                "required": [
+                  "projectId",
+                  "description"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/configuration": {
+      "post": {
+        "summary": "Explicitly apply a validated external configuration revision",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "hash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "hash"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/backups": {
+      "post": {
+        "summary": "Operator: encrypted online SQLite and identity backup",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "destination": {
+                    "type": "string"
+                  },
+                  "recipientFile": {
+                    "type": "string"
+                  },
+                  "complete": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "destination",
+                  "recipientFile"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "post": {
+        "summary": "Exchange the private operator bearer for a browser session; returns csrf and expiry",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/session/logout": {
+      "post": {
+        "summary": "Revoke the current browser session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/storage": {
+      "get": {
+        "summary": "Operator: storage pressure and cleanup preview",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/human/commands": {
+      "post": {
+        "summary": "Scoped connector: trusted event intake, atomic domain effect and destination acknowledgment",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "principal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "externalIdentity",
+                      "destination",
+                      "trust"
+                    ],
+                    "properties": {
+                      "externalIdentity": {
+                        "type": "string"
+                      },
+                      "destination": {
+                        "type": "string"
+                      },
+                      "trust": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "encrypted",
+                          "verifiedDevice",
+                          "allowedMembership"
+                        ],
+                        "properties": {
+                          "encrypted": {
+                            "type": "boolean"
+                          },
+                          "verifiedDevice": {
+                            "type": "boolean"
+                          },
+                          "allowedMembership": {
+                            "type": "boolean"
+                          },
+                          "deviceId": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "command": {
+                    "$ref": "#/components/schemas/HumanCommand"
+                  }
+                },
+                "required": [
+                  "principal",
+                  "command"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/human/transport-state": {
+      "get": {
+        "summary": "Scoped connector: durable polling cursor",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      },
+      "post": {
+        "summary": "Scoped connector: advance cursor after staging intake",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "offset": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "offset"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/human/health": {
+      "post": {
+        "summary": "Scoped connector: bounded redacted health observation; grants no trust or authority",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "state": {
+                    "enum": [
+                      "starting",
+                      "healthy",
+                      "degraded",
+                      "stopped"
+                    ]
+                  },
+                  "fault": {
+                    "enum": [
+                      "transport",
+                      "controller",
+                      "auth",
+                      "trust",
+                      "replay",
+                      "undecryptable",
+                      "delivery"
+                    ]
+                  },
+                  "lastSyncAt": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pendingInbox": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "exhaustedInbox": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "historyRecovery": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/connectors": {
+      "get": {
+        "summary": "Operator: applied connector health, stale observations and destination backlog",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/connector-auth": {
+      "post": {
+        "summary": "Operator: write a scoped connector credential into its private file",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/connector-deliveries": {
+      "get": {
+        "summary": "Scoped connector: only this connector's pending destination snapshots",
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/connector-deliveries/{id}": {
+      "post": {
+        "summary": "Scoped connector: record transport receipt or bounded retry",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "sent"
+                      },
+                      "receipt": {
+                        "type": "string",
+                        "maxLength": 1000
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "receipt"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "const": "retry"
+                      }
+                    },
+                    "required": [
+                      "status"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "GoalInput": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "repoPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "publicationSummary": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "body": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 12000
+              }
+            },
+            "required": [
+              "title",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "admission": {
+            "type": "object",
+            "properties": {
+              "configurationHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "executionMode": {
+                "type": "string",
+                "enum": [
+                  "fake",
+                  "isolated"
+                ]
+              },
+              "providerId": {
+                "type": "string"
+              },
+              "executionImageDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "authenticationPolicyHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "runtimeHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "contexts": {
+                "default": [],
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "hash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 64000
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "hash",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "prompts": {
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "hash": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 64000
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "hash",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "configurationHash",
+              "executionMode",
+              "prompts"
+            ],
+            "additionalProperties": false
+          },
+          "instructionFiles": {
+            "default": [
+              "AGENTS.md",
+              "README.md"
+            ],
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "siblingContracts": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "repositoryPath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "revision": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40,64}$"
+                },
+                "files": {
+                  "minItems": 1,
+                  "maxItems": 20,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "required": [
+                "repositoryPath",
+                "revision",
+                "files"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "repository": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "local"
+                  },
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "mode",
+                  "branch"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "remote"
+                  },
+                  "remoteUrl": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "primaryBranch": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "auditedPrimarySha": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{40,64}$"
+                  },
+                  "verificationEnvironment": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "mode",
+                  "remoteUrl",
+                  "primaryBranch",
+                  "auditedPrimarySha",
+                  "verificationEnvironment"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "executionContract": {
+            "type": "object",
+            "properties": {
+              "harness": {
+                "type": "string",
+                "enum": [
+                  "fake",
+                  "tool-loop",
+                  "codex",
+                  "claude-code"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "fake",
+                  "azure",
+                  "bedrock",
+                  "codex-subscription",
+                  "claude-subscription"
+                ]
+              },
+              "authentication": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "none"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "controller"
+                      },
+                      "reference": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "reference"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "session"
+                      },
+                      "reference": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "reference"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "execution": {
+                "type": "string",
+                "enum": [
+                  "fake",
+                  "isolated"
+                ]
+              },
+              "usagePolicy": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "synthetic"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "metered"
+                      },
+                      "maxCostUsd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "estimatePerRunUsd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "maxCostUsd",
+                      "estimatePerRunUsd"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "subscription"
+                      },
+                      "maxAttempts": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 3600000
+                      },
+                      "maxConcurrency": {
+                        "type": "number",
+                        "const": 1
+                      },
+                      "maxReportedTokens": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "maxAttempts",
+                      "timeoutMs",
+                      "maxConcurrency"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "harness",
+              "provider",
+              "authentication",
+              "execution",
+              "usagePolicy"
+            ],
+            "additionalProperties": false
+          },
+          "backend": {
+            "default": {
+              "kind": "fake"
+            },
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "fake"
+                  },
+                  "model": {
+                    "default": "fake",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "codex"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "default": "codex",
+                    "type": "string",
+                    "const": "codex"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "claude-code"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "default": "claude",
+                    "type": "string",
+                    "const": "claude"
+                  },
+                  "maxTurns": {
+                    "default": 40,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "foundry": {
+                    "type": "object",
+                    "properties": {
+                      "resource": {
+                        "type": "string",
+                        "pattern": "^[a-zA-Z0-9-]+$"
+                      },
+                      "credential": {
+                        "default": "identity",
+                        "type": "string",
+                        "enum": [
+                          "identity",
+                          "key"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "resource"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "azure"
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "reasoningEffort": {
+                    "default": "medium",
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "maxOutputTokens": {
+                    "default": 8192,
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 8192
+                  },
+                  "credential": {
+                    "default": "identity",
+                    "type": "string",
+                    "enum": [
+                      "identity",
+                      "key"
+                    ]
+                  },
+                  "inputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "outputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "kind",
+                  "model",
+                  "endpoint",
+                  "inputUsdPerMillion",
+                  "outputUsdPerMillion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "bedrock"
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "region": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "inputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "outputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "kind",
+                  "model",
+                  "region",
+                  "inputUsdPerMillion",
+                  "outputUsdPerMillion"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "verificationCommands": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "maxCostUsd": {
+            "default": 0,
+            "type": "number",
+            "minimum": 0
+          },
+          "estimatePerRunUsd": {
+            "default": 0,
+            "type": "number",
+            "minimum": 0
+          },
+          "containerNetwork": {
+            "default": "none",
+            "type": "string",
+            "enum": [
+              "none",
+              "bridge"
+            ]
+          },
+          "containerImage": {
+            "type": "string",
+            "pattern": "^[\\w./:@-]+$"
+          },
+          "maxWorkers": {
+            "default": 2,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "maxAttempts": {
+            "default": 3,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "timeoutMs": {
+            "default": 3600000,
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 3600000
+          },
+          "maxReplans": {
+            "default": 3,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "policy": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "targetBranch": {
+                "default": "development",
+                "type": "string",
+                "minLength": 1
+              },
+              "publish": {
+                "default": false,
+                "type": "boolean"
+              },
+              "autoMerge": {
+                "default": false,
+                "type": "boolean"
+              },
+              "productionDeploymentExcluded": {
+                "default": false,
+                "type": "boolean"
+              },
+              "approvedPaths": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "protectedPaths": {
+                "default": [
+                  "**/auth/**",
+                  "**/billing/**",
+                  "**/migrations/**",
+                  ".github/workflows/**"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredChecks": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "scheduledAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "repoPath"
+        ],
+        "additionalProperties": false
+      },
+      "Plan": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9_-]{1,80}$"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "dependencies": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "acceptanceCriteria": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "allowedPaths": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "verificationCommands": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "capability": {
+                  "default": "developer",
+                  "type": "string",
+                  "enum": [
+                    "developer",
+                    "researcher",
+                    "reviewer",
+                    "security",
+                    "performance",
+                    "ui"
+                  ]
+                },
+                "priority": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "resources": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cpuUnits": {
+                  "default": 2,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "memoryMiB": {
+                  "default": 2048,
+                  "type": "integer",
+                  "minimum": 128,
+                  "maximum": 32768
+                }
+              },
+              "required": [
+                "key",
+                "title",
+                "description",
+                "acceptanceCriteria",
+                "allowedPaths"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tasks"
+        ]
+      },
+      "Schedule": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "config": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              },
+              "repoPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "publicationSummary": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12000
+                  }
+                },
+                "required": [
+                  "title",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "admission": {
+                "type": "object",
+                "properties": {
+                  "configurationHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "executionMode": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "isolated"
+                    ]
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "executionImageDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "authenticationPolicyHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "runtimeHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "contexts": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "hash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "content": {
+                          "type": "string",
+                          "maxLength": 64000
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "hash",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "prompts": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "hash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "content": {
+                          "type": "string",
+                          "maxLength": 64000
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "configurationHash",
+                  "executionMode",
+                  "prompts"
+                ],
+                "additionalProperties": false
+              },
+              "instructionFiles": {
+                "default": [
+                  "AGENTS.md",
+                  "README.md"
+                ],
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "siblingContracts": {
+                "default": [],
+                "maxItems": 10,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "repositoryPath": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "revision": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{40,64}$"
+                    },
+                    "files": {
+                      "minItems": 1,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "repositoryPath",
+                    "revision",
+                    "files"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "repository": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "local"
+                      },
+                      "branch": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "branch"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "remote"
+                      },
+                      "remoteUrl": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "primaryBranch": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "auditedPrimarySha": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{40,64}$"
+                      },
+                      "verificationEnvironment": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "remoteUrl",
+                      "primaryBranch",
+                      "auditedPrimarySha",
+                      "verificationEnvironment"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "executionContract": {
+                "type": "object",
+                "properties": {
+                  "harness": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "tool-loop",
+                      "codex",
+                      "claude-code"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "azure",
+                      "bedrock",
+                      "codex-subscription",
+                      "claude-subscription"
+                    ]
+                  },
+                  "authentication": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "none"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "controller"
+                          },
+                          "reference": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "reference"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "session"
+                          },
+                          "reference": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "reference"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "execution": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "isolated"
+                    ]
+                  },
+                  "usagePolicy": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "synthetic"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "metered"
+                          },
+                          "maxCostUsd": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "estimatePerRunUsd": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "maxCostUsd",
+                          "estimatePerRunUsd"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "subscription"
+                          },
+                          "maxAttempts": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10
+                          },
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 3600000
+                          },
+                          "maxConcurrency": {
+                            "type": "number",
+                            "const": 1
+                          },
+                          "maxReportedTokens": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "maxAttempts",
+                          "timeoutMs",
+                          "maxConcurrency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "harness",
+                  "provider",
+                  "authentication",
+                  "execution",
+                  "usagePolicy"
+                ],
+                "additionalProperties": false
+              },
+              "backend": {
+                "default": {
+                  "kind": "fake"
+                },
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "fake"
+                      },
+                      "model": {
+                        "default": "fake",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "codex"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "default": "codex",
+                        "type": "string",
+                        "const": "codex"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "claude-code"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "default": "claude",
+                        "type": "string",
+                        "const": "claude"
+                      },
+                      "maxTurns": {
+                        "default": 40,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
+                      "foundry": {
+                        "type": "object",
+                        "properties": {
+                          "resource": {
+                            "type": "string",
+                            "pattern": "^[a-zA-Z0-9-]+$"
+                          },
+                          "credential": {
+                            "default": "identity",
+                            "type": "string",
+                            "enum": [
+                              "identity",
+                              "key"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "resource"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "azure"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "reasoningEffort": {
+                        "default": "medium",
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "maxOutputTokens": {
+                        "default": 8192,
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 8192
+                      },
+                      "credential": {
+                        "default": "identity",
+                        "type": "string",
+                        "enum": [
+                          "identity",
+                          "key"
+                        ]
+                      },
+                      "inputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "outputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "model",
+                      "endpoint",
+                      "inputUsdPerMillion",
+                      "outputUsdPerMillion"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "bedrock"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "region": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "inputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "outputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "model",
+                      "region",
+                      "inputUsdPerMillion",
+                      "outputUsdPerMillion"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "verificationCommands": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "maxCostUsd": {
+                "default": 0,
+                "type": "number",
+                "minimum": 0
+              },
+              "estimatePerRunUsd": {
+                "default": 0,
+                "type": "number",
+                "minimum": 0
+              },
+              "containerNetwork": {
+                "default": "none",
+                "type": "string",
+                "enum": [
+                  "none",
+                  "bridge"
+                ]
+              },
+              "containerImage": {
+                "type": "string",
+                "pattern": "^[\\w./:@-]+$"
+              },
+              "maxWorkers": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4
+              },
+              "maxAttempts": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "timeoutMs": {
+                "default": 3600000,
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000
+              },
+              "maxReplans": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "policy": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "targetBranch": {
+                    "default": "development",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "publish": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "autoMerge": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "productionDeploymentExcluded": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "approvedPaths": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "protectedPaths": {
+                    "default": [
+                      "**/auth/**",
+                      "**/billing/**",
+                      "**/migrations/**",
+                      ".github/workflows/**"
+                    ],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "requiredChecks": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "scheduledAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "repoPath"
+            ],
+            "additionalProperties": false
+          },
+          "intervalMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 9007199254740991
+          },
+          "timezone": {
+            "default": "UTC",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "config",
+          "intervalMs"
+        ]
+      },
+      "BackendSwitch": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "backend": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "fake"
+                  },
+                  "model": {
+                    "default": "fake",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "codex"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "default": "codex",
+                    "type": "string",
+                    "const": "codex"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "claude-code"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "default": "claude",
+                    "type": "string",
+                    "const": "claude"
+                  },
+                  "maxTurns": {
+                    "default": 40,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "foundry": {
+                    "type": "object",
+                    "properties": {
+                      "resource": {
+                        "type": "string",
+                        "pattern": "^[a-zA-Z0-9-]+$"
+                      },
+                      "credential": {
+                        "default": "identity",
+                        "type": "string",
+                        "enum": [
+                          "identity",
+                          "key"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "resource"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "azure"
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "reasoningEffort": {
+                    "default": "medium",
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "maxOutputTokens": {
+                    "default": 8192,
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 8192
+                  },
+                  "credential": {
+                    "default": "identity",
+                    "type": "string",
+                    "enum": [
+                      "identity",
+                      "key"
+                    ]
+                  },
+                  "inputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "outputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "kind",
+                  "model",
+                  "endpoint",
+                  "inputUsdPerMillion",
+                  "outputUsdPerMillion"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "bedrock"
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "region": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "inputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "outputUsdPerMillion": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "kind",
+                  "model",
+                  "region",
+                  "inputUsdPerMillion",
+                  "outputUsdPerMillion"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "backend"
+        ],
+        "additionalProperties": false
+      },
+      "Project": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "config": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100000
+              },
+              "repoPath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "publicationSummary": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 240
+                  },
+                  "body": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 12000
+                  }
+                },
+                "required": [
+                  "title",
+                  "body"
+                ],
+                "additionalProperties": false
+              },
+              "admission": {
+                "type": "object",
+                "properties": {
+                  "configurationHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "executionMode": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "isolated"
+                    ]
+                  },
+                  "providerId": {
+                    "type": "string"
+                  },
+                  "executionImageDigest": {
+                    "type": "string",
+                    "pattern": "^sha256:[a-f0-9]{64}$"
+                  },
+                  "authenticationPolicyHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "runtimeHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "contexts": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "hash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "content": {
+                          "type": "string",
+                          "maxLength": 64000
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "hash",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "prompts": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "hash": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "content": {
+                          "type": "string",
+                          "maxLength": 64000
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "content"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "configurationHash",
+                  "executionMode",
+                  "prompts"
+                ],
+                "additionalProperties": false
+              },
+              "instructionFiles": {
+                "default": [
+                  "AGENTS.md",
+                  "README.md"
+                ],
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "siblingContracts": {
+                "default": [],
+                "maxItems": 10,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "repositoryPath": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "revision": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{40,64}$"
+                    },
+                    "files": {
+                      "minItems": 1,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "required": [
+                    "repositoryPath",
+                    "revision",
+                    "files"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "repository": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "local"
+                      },
+                      "branch": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "branch"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "const": "remote"
+                      },
+                      "remoteUrl": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "primaryBranch": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "auditedPrimarySha": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{40,64}$"
+                      },
+                      "verificationEnvironment": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "mode",
+                      "remoteUrl",
+                      "primaryBranch",
+                      "auditedPrimarySha",
+                      "verificationEnvironment"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "executionContract": {
+                "type": "object",
+                "properties": {
+                  "harness": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "tool-loop",
+                      "codex",
+                      "claude-code"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "azure",
+                      "bedrock",
+                      "codex-subscription",
+                      "claude-subscription"
+                    ]
+                  },
+                  "authentication": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "none"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "controller"
+                          },
+                          "reference": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "reference"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "session"
+                          },
+                          "reference": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "reference"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "execution": {
+                    "type": "string",
+                    "enum": [
+                      "fake",
+                      "isolated"
+                    ]
+                  },
+                  "usagePolicy": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "synthetic"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "metered"
+                          },
+                          "maxCostUsd": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "estimatePerRunUsd": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "maxCostUsd",
+                          "estimatePerRunUsd"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "subscription"
+                          },
+                          "maxAttempts": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10
+                          },
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 3600000
+                          },
+                          "maxConcurrency": {
+                            "type": "number",
+                            "const": 1
+                          },
+                          "maxReportedTokens": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "maxAttempts",
+                          "timeoutMs",
+                          "maxConcurrency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "harness",
+                  "provider",
+                  "authentication",
+                  "execution",
+                  "usagePolicy"
+                ],
+                "additionalProperties": false
+              },
+              "backend": {
+                "default": {
+                  "kind": "fake"
+                },
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "fake"
+                      },
+                      "model": {
+                        "default": "fake",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "codex"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "default": "codex",
+                        "type": "string",
+                        "const": "codex"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "claude-code"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "command": {
+                        "default": "claude",
+                        "type": "string",
+                        "const": "claude"
+                      },
+                      "maxTurns": {
+                        "default": 40,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100
+                      },
+                      "foundry": {
+                        "type": "object",
+                        "properties": {
+                          "resource": {
+                            "type": "string",
+                            "pattern": "^[a-zA-Z0-9-]+$"
+                          },
+                          "credential": {
+                            "default": "identity",
+                            "type": "string",
+                            "enum": [
+                              "identity",
+                              "key"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "resource"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "azure"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "reasoningEffort": {
+                        "default": "medium",
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "maxOutputTokens": {
+                        "default": 8192,
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 8192
+                      },
+                      "credential": {
+                        "default": "identity",
+                        "type": "string",
+                        "enum": [
+                          "identity",
+                          "key"
+                        ]
+                      },
+                      "inputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "outputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "model",
+                      "endpoint",
+                      "inputUsdPerMillion",
+                      "outputUsdPerMillion"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "bedrock"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "region": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "inputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "outputUsdPerMillion": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "model",
+                      "region",
+                      "inputUsdPerMillion",
+                      "outputUsdPerMillion"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "verificationCommands": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "maxCostUsd": {
+                "default": 0,
+                "type": "number",
+                "minimum": 0
+              },
+              "estimatePerRunUsd": {
+                "default": 0,
+                "type": "number",
+                "minimum": 0
+              },
+              "containerNetwork": {
+                "default": "none",
+                "type": "string",
+                "enum": [
+                  "none",
+                  "bridge"
+                ]
+              },
+              "containerImage": {
+                "type": "string",
+                "pattern": "^[\\w./:@-]+$"
+              },
+              "maxWorkers": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4
+              },
+              "maxAttempts": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "timeoutMs": {
+                "default": 3600000,
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000
+              },
+              "maxReplans": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "policy": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "targetBranch": {
+                    "default": "development",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "publish": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "autoMerge": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "productionDeploymentExcluded": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "approvedPaths": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "protectedPaths": {
+                    "default": [
+                      "**/auth/**",
+                      "**/billing/**",
+                      "**/migrations/**",
+                      ".github/workflows/**"
+                    ],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "requiredChecks": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "scheduledAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "repoPath"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "family",
+          "config"
+        ]
+      },
+      "Question": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "options": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "id",
+                "label"
+              ]
+            }
+          },
+          "recoveryAttemptId": {
+            "type": "string"
+          },
+          "recommendedOption": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "requestedMaxCostUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "requestedRunEstimateUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "category": {
+            "default": "product",
+            "type": "string",
+            "enum": [
+              "product",
+              "auth",
+              "billing",
+              "migration",
+              "policy",
+              "spending"
+            ]
+          }
+        },
+        "required": [
+          "question",
+          "reason",
+          "options"
+        ]
+      },
+      "HumanCommand": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "timestamp": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "projects",
+              "status",
+              "goal",
+              "pause",
+              "resume",
+              "cancel",
+              "decisions",
+              "answer",
+              "context"
+            ]
+          },
+          "transportTimestamp": {
+            "type": "string",
+            "enum": [
+              "received"
+            ]
+          },
+          "projectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "questionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "revision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "option": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "context": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          },
+          "confirmationEventId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "selectionToken": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{32}$"
+          }
+        },
+        "required": [
+          "eventId",
+          "timestamp",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "UsageReconciliation": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "costUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "reported",
+              "estimated"
+            ]
+          },
+          "evidenceArtifactId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "explanation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "costUsd",
+          "status",
+          "evidenceArtifactId",
+          "explanation"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
