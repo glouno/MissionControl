@@ -188,9 +188,10 @@ export class ControlStore {
     taskId?: string,
     workerId?: string,
     operation?: string,
+    completedInvocation?: string,
   ) {
     if (goal.config.executionContract?.usagePolicy.kind === "subscription") {
-      const limits = this.subscriptionCapacity(goal.id);
+      const limits = this.subscriptionCapacity(goal.id, completedInvocation);
       if (!limits?.admissionAllowed)
         throw new ControlError(
           "subscription_capacity",
@@ -1923,13 +1924,52 @@ export class ControlStore {
     const result = JSON.parse(String(r.value));
     return pathSetting ? transform(result, false) : result;
   }
-  reserveOperation(goalId: string, label: string): string {
+  reserveOperation(goalId: string, label: string, parent?: Claim): string {
     return this.db.transaction(() => {
       const g = this.getGoal(goalId),
         amount = g.config.estimatePerRunUsd;
       if (g.config.executionContract?.usagePolicy.kind === "subscription") {
         const attemptId = id(`subscription_${label}`);
-        this.startAttempt(attemptId, g, 0, undefined, "scheduler", label);
+        let completedInvocation: string | undefined;
+        if (parent) {
+          const task = this.assertLease(
+            parent.task.id,
+            parent.workerId,
+            parent.generation,
+          );
+          if (
+            task.goalId !== goalId ||
+            !["verifying", "integrating"].includes(task.status)
+          )
+            throw new ControlError(
+              "subscription_parent",
+              "Controller continuation requires its current verifying task",
+              409,
+            );
+          const invocation = this.db.one<{
+            id: string;
+            usage: string | null;
+            execution_session_id: string | null;
+          }>(
+            `SELECT id,usage,execution_session_id FROM control_attempts WHERE task_id=${sql(task.id)} AND generation=${parent.generation} AND outcome='active'`,
+          );
+          if (!invocation?.usage || !invocation.execution_session_id)
+            throw new ControlError(
+              "subscription_parent",
+              "Coding completion must retain native usage and session evidence",
+              409,
+            );
+          completedInvocation = invocation.id;
+        }
+        this.startAttempt(
+          attemptId,
+          g,
+          0,
+          undefined,
+          "scheduler",
+          label,
+          completedInvocation,
+        );
         this.event(
           "SUBSCRIPTION_CAPACITY_RESERVED",
           "scheduler",
@@ -2021,7 +2061,7 @@ export class ControlStore {
     );
   }
   /** Counts all native invocations, including planning/review; unknown counters close admission when a token ceiling is configured. */
-  subscriptionCapacity(goalId: string) {
+  subscriptionCapacity(goalId: string, completedInvocation?: string) {
     const goal = this.getGoal(goalId),
       contract = goal.config.executionContract;
     if (
@@ -2044,7 +2084,7 @@ export class ControlStore {
           { authId: string; status: string }[] | undefined
       )?.some((run) => run.authId === reference && run.status !== "stopped") ||
       !!this.db.one(
-        `SELECT id FROM control_attempts WHERE outcome IN ('active','recovering') AND json_extract(configuration,'$.executionContract.authentication.kind')='session' AND json_extract(configuration,'$.executionContract.authentication.reference')=${sql(reference)} LIMIT 1`,
+        `SELECT id FROM control_attempts WHERE outcome IN ('active','recovering') ${completedInvocation ? `AND id!=${sql(completedInvocation)}` : ""} AND json_extract(configuration,'$.executionContract.authentication.kind')='session' AND json_extract(configuration,'$.executionContract.authentication.reference')=${sql(reference)} LIMIT 1`,
       );
     let reportedTokens = 0,
       unknownAttempts = 0;

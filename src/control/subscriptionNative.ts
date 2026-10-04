@@ -9,6 +9,10 @@ import {
 } from "./executionContract.js";
 import { workerResponseSchema, responseHandoff } from "./workerHandoff.js";
 import { terminateProcessTree } from "../util.js";
+import {
+  nativeOutputSchema,
+  normalizeNativeOutput,
+} from "./nativeOutputSchema.js";
 
 const count = z.number().int().nonnegative().safe();
 /** Native counters are reports, not provider-enforced limits or dollar charges. */
@@ -59,6 +63,10 @@ export class SubscriptionNativeBackend implements AgentBackend {
         "Subscription coding requires its admitted limits and dedicated isolated execution",
       );
     const harness = contract.harness;
+    const originalOutputSchema =
+      c.outputSchema ??
+      z.toJSONSchema(workerResponseSchema, { io: "input", target: "draft-7" });
+    const outputSchema = nativeOutputSchema(originalOutputSchema);
     if (harness !== "codex" && harness !== "claude-code")
       throw Error("Native subscription harness required");
     const policy = contract.usagePolicy;
@@ -130,19 +138,17 @@ export class SubscriptionNativeBackend implements AgentBackend {
                 : 1,
             ),
             "--json-schema",
-            JSON.stringify(
-              c.outputSchema ??
-                z.toJSONSchema(workerResponseSchema, {
-                  io: "input",
-                  target: "draft-7",
-                }),
-            ),
+            JSON.stringify(outputSchema),
           ];
     if (configuration.backend.model)
       args.push("--model", configuration.backend.model);
     if (harness === "codex") args.push("-");
     const startedAt = Date.now();
-    const p = c.execution.spawn(harness === "codex" ? "codex" : "claude", args);
+    const p = c.execution.spawn(
+      harness === "codex" ? "codex" : "claude",
+      args,
+      outputSchema,
+    );
     const lines = createInterface({ input: p.stdout });
     let terminal: any,
       sessionId: string | undefined,
@@ -241,9 +247,11 @@ export class SubscriptionNativeBackend implements AgentBackend {
       }
     });
     p.stdin.on("error", () => {});
-    const instructions = c.outputSchema
-      ? `Return only a JSON object matching this schema: ${JSON.stringify(c.outputSchema)}`
-      : `Return only a JSON object matching this schema: ${JSON.stringify(z.toJSONSchema(workerResponseSchema, { io: "input", target: "draft-7" }))}. Set question/ownerOperation to null unless you must stop for an authorized handoff. Do not perform host or infrastructure operations; request ownerOperation instead. MissionControl runs independent checks and review.`;
+    const instructions =
+      `Return only a JSON object matching this schema: ${JSON.stringify(outputSchema)}.` +
+      (c.outputSchema
+        ? ""
+        : " Set question/ownerOperation to null unless you must stop for an authorized handoff. Do not perform host or infrastructure operations; request ownerOperation instead. MissionControl runs independent checks and review.");
     p.stdin.end(c.prompt + "\n" + instructions + "\n");
     if (c.signal.aborted) abort();
     try {
@@ -279,10 +287,12 @@ export class SubscriptionNativeBackend implements AgentBackend {
             { usage },
           );
       }
-      const raw =
+      const raw = normalizeNativeOutput(
         harness === "codex"
           ? JSON.parse(z.string().parse(finalText))
-          : terminal.structured_output;
+          : terminal.structured_output,
+        originalOutputSchema,
+      );
       const handoff = c.outputSchema
         ? undefined
         : responseHandoff(

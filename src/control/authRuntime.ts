@@ -32,7 +32,7 @@ const relayScript = fileURLToPath(
   new URL("../../environments/worker/subscription-egress.py", import.meta.url),
 );
 // Proxy capability travels over stdin, never in Docker CLI arguments/configuration.
-const runner = `import json,os,sys\nline=b''\nwhile not line.endswith(b'\\n'):line+=os.read(0,1)\nc=json.loads(line)\nos.umask(0o077)\nos.makedirs('/tmp/mc-home',mode=0o700,exist_ok=True)\ne={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':'/tmp/mc-home','LANG':'C.UTF-8','TERM':'dumb','HTTPS_PROXY':c['proxy'],'HTTP_PROXY':c['proxy'],'https_proxy':c['proxy'],'http_proxy':c['proxy'],'NO_PROXY':'','no_proxy':'','NODE_USE_ENV_PROXY':'1','DO_NOT_TRACK':'1','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'}\ne.update(c['environment'])\nos.chdir(c.get('workingDirectory','/tmp/mc-home'))\nos.execvpe(c['argv'][0],c['argv'],e)\n`;
+const runner = `import json,os,sys\nline=b''\nwhile not line.endswith(b'\\n'):line+=os.read(0,1)\nc=json.loads(line)\nos.umask(0o077)\nos.makedirs('/tmp/mc-home',mode=0o700,exist_ok=True)\ne={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':'/tmp/mc-home','LANG':'C.UTF-8','TERM':'dumb','HTTPS_PROXY':c['proxy'],'HTTP_PROXY':c['proxy'],'https_proxy':c['proxy'],'http_proxy':c['proxy'],'NO_PROXY':'','no_proxy':'','NODE_USE_ENV_PROXY':'1','DO_NOT_TRACK':'1','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'}\ne.update(c['environment'])\nif c.get('outputSchema'):\n with open('/tmp/mc-output-schema.json','w') as f:json.dump(c['outputSchema'],f)\nos.chdir(c.get('workingDirectory','/tmp/mc-home'))\nos.execvpe(c['argv'][0],c['argv'],e)\n`;
 export function authInvocation(
   config: AuthEnvironment,
   action: "login" | "status",
@@ -511,14 +511,21 @@ export class AuthRuntime {
         );
       return use({
         workspace: "/workspace",
-        spawn: (command, args) => {
+        spawn: (command, args, outputSchema) => {
           const expected = this.config.harness === "codex" ? "codex" : "claude";
           if (command !== expected)
             throw Error(
               "Subscription coding must use its pinned native harness",
             );
           return execute({
-            argv: [command, ...args],
+            argv: [
+              command,
+              ...args,
+              ...(outputSchema && command === "codex"
+                ? ["--output-schema", "/tmp/mc-output-schema.json"]
+                : []),
+            ],
+            ...(outputSchema ? { outputSchema } : {}),
             environment: authInvocation(this.config, "status").environment,
           }) as ReturnType<NativeExecution["spawn"]>;
         },
