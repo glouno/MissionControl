@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
+  realpath,
   mkdir,
   readdir,
   rm,
@@ -19,7 +20,7 @@ import {
 } from "./instance.js";
 import { ControlStore } from "./control/store.js";
 test("fresh instance refuses concurrent ownership and inspection never creates missing state", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-instance-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mc-instance-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(inspectState(join(root, "missing")));
   assert.deepEqual(await readdir(root), []);
@@ -34,7 +35,7 @@ test("fresh instance refuses concurrent ownership and inspection never creates m
   await assert.rejects(initializeState(state), /EEXIST/);
 });
 test("pre-v1 and future databases are refused, registry tables share application state", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-schema-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mc-schema-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const legacy = new SqliteStore(join(root, "legacy.db"));
   legacy.exec("CREATE TABLE missions(id TEXT)");
@@ -54,7 +55,7 @@ test("pre-v1 and future databases are refused, registry tables share application
   assert.deepEqual(await readdir(join(state, "sandbox")), []);
 });
 test("failed transactional changes roll back and online backups contain committed data", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-sqlite-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mc-sqlite-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const db = new SqliteStore(join(root, "source.db"));
   try {
@@ -83,7 +84,9 @@ test("failed transactional changes roll back and online backups contain committe
 });
 
 test("stale lock recovery refuses living owners, wrong nonces and foreign hosts", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-lock-recovery-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "mc-lock-recovery-")),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeState(root);
   const unlock = await lockInstance(root),
@@ -115,7 +118,7 @@ test("stale lock recovery refuses living owners, wrong nonces and foreign hosts"
 });
 
 test("instance artifacts record relative paths and reject traversal and symlinks", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-artifact-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mc-artifact-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const state = join(root, "state");
   await initializeState(state);
@@ -149,7 +152,9 @@ test("instance artifacts record relative paths and reject traversal and symlinks
 });
 
 test("controller redaction also covers execution registries and filesystem checkpoints/reports", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-shared-redaction-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "mc-shared-redaction-")),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeState(root);
   const db = new SqliteStore(join(root, "mission-control.db"), {
@@ -200,7 +205,9 @@ test("controller redaction also covers execution registries and filesystem check
 });
 
 test("migration failure preserves its prior ledger/schema and retries transactionally", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-migration-fault-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "mc-migration-fault-")),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   const db = new SqliteStore(join(root, "db"));
   t.after(() => db.close());

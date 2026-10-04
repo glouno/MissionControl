@@ -29,6 +29,7 @@ test("service definitions quote paths, use separate v1 identity and require expl
 
 import {
   mkdtemp,
+  realpath,
   mkdir,
   writeFile,
   readFile,
@@ -44,7 +45,9 @@ async function fixture(
   t: { after: (fn: () => Promise<void>) => void },
   platform = "linux",
 ) {
-  const home = await mkdtemp(join(tmpdir(), "mc-controller-service-"));
+  const home = await realpath(
+    await mkdtemp(join(tmpdir(), "mc-controller-service-")),
+  );
   t.after(() => rm(home, { recursive: true, force: true }));
   const config = join(home, "private-config"),
     path =
@@ -221,6 +224,21 @@ test("controller rejects redirected service directories and loaded jobs without 
     serviceCommand("install", f.config, f.options),
     /already loaded/,
   );
+});
+test("controller still rejects an aliased fixture home before activation", async (t) => {
+  const f = await fixture(t);
+  const alias = join(f.home, "alias");
+  await symlink(f.home, alias);
+  await assert.rejects(
+    serviceCommand("install", f.config, {
+      ...f.options,
+      home: alias,
+      xdgConfig: join(alias, ".config"),
+    }),
+    /directory is redirected/,
+  );
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.calls[0].includes("show"));
 });
 test("launchd lifecycle bootstraps explicitly and distinguishes unloaded from failed inspection", async (t) => {
   const f = await fixture(t, "darwin");

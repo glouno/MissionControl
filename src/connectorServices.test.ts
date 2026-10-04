@@ -6,6 +6,7 @@ import {
 } from "./connectorServices.js";
 import {
   mkdtemp,
+  realpath,
   rm,
   readFile,
   writeFile,
@@ -57,7 +58,9 @@ test("connector services use fixed scoped CLI, private logging and separate name
   );
 });
 test("connector service lifecycle checks exact ownership and never addresses legacy units", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "mc-connector-service-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "mc-connector-service-")),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   const config: any = {
     root: join(root, "config"),
@@ -88,6 +91,17 @@ test("connector service lifecycle checks exact ownership and never addresses leg
       };
     },
   };
+  const alias = join(root, "alias");
+  await symlink(root, alias);
+  await assert.rejects(
+    connectorServiceCommand(config, "synthetic", "install", {
+      ...options,
+      home: alias,
+      xdgConfig: join(alias, "xdg"),
+    }),
+    /directory is redirected/,
+  );
+  assert.equal(calls.length, 0);
   assert.equal(
     (await connectorServiceCommand(config, "synthetic", "status", options))
       .installed,

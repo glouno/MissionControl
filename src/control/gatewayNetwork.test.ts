@@ -2,13 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:net";
-import { mkdtemp, mkdir, writeFile, chmod, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  chmod,
+  rm,
+  realpath,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SqliteStore } from "../sqlite.js";
 import { GatewayNetworkManager } from "./gatewayNetwork.js";
 async function fixture(t: any) {
-  const root = await mkdtemp(join(tmpdir(), "mc-network-"));
+  // Darwin Unix sockets need a short path even when TMPDIR is deeply nested.
+  const base = await realpath(
+    process.platform === "darwin" ? "/tmp" : tmpdir(),
+  );
+  const root = await mkdtemp(join(base, "mc-network-"));
   const socketDirectory = join(root, "socket");
   await mkdir(socketDirectory, { mode: 0o700 });
   const server = createServer();
