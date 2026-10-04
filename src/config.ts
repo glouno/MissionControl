@@ -1,3 +1,4 @@
+import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { readFile, realpath, lstat, mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname, join, isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -634,8 +635,10 @@ export function effectiveGoal(
           "Subscription requires a configured dedicated authentication environment",
         );
       if (p.enabled && provider?.enabled)
-        throw Error(
-          "Subscription coding qualification is incomplete; admission remains disabled",
+        assertSubscriptionQualification(
+          config.settings.stateDir,
+          baseline,
+          auth,
         );
     }
     if (

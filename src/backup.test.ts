@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { initializeState, inspectState, lockInstance } from "./instance.js";
+import { ControlStore } from "./control/store.js";
 import { SqliteStore } from "./sqlite.js";
 import {
   createBackup,
@@ -49,6 +50,22 @@ test(
       }),
       backup = join(root, "complete.age");
     try {
+      const store = new ControlStore(db);
+      store.setProject(
+        {
+          id: "backlog-fixture",
+          name: "Backlog",
+          family: "fixture",
+          enabled: false,
+          config: { title: "Fixture", description: "Fixture", repoPath: root },
+        },
+        "operator",
+      );
+      const backlog = store.addBacklog({
+        projectId: "backlog-fixture",
+        title: "Restore work",
+        description: "Durable pending work",
+      });
       db.exec(
         `INSERT INTO sessions VALUES('synthetic','task',1,'{"container":"synthetic","status":"active"}')`,
       );
@@ -61,6 +78,7 @@ test(
       const manifest = await createBackup(db, state, backup, recipient, true);
       assert.equal(manifest.instanceId, id.id);
       assert.equal(manifest.complete, true);
+      assert.equal(manifest.schemaVersion, 7);
       assert.equal(
         (await readFile(backup)).includes(
           Buffer.from("Synthetic private evidence"),
@@ -70,6 +88,19 @@ test(
       const restore = join(root, "restored");
       await restoreBackup(backup, identity, restore);
       assert.equal((await inspectState(restore)).id, id.id);
+      assert.equal((await inspectState(restore)).schemaVersion, 7);
+      const restoredDb = new SqliteStore(join(restore, "mission-control.db"));
+      try {
+        assert.deepEqual(
+          new ControlStore(restoredDb).getBacklog(
+            backlog.id,
+            "backlog-fixture",
+          ),
+          backlog,
+        );
+      } finally {
+        restoredDb.close();
+      }
       assert.equal(
         await readFile(join(restore, "evidence/example.txt"), "utf8"),
         "Synthetic private evidence",

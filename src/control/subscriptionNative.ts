@@ -142,7 +142,15 @@ export class SubscriptionNativeBackend implements AgentBackend {
       args.push("--model", configuration.backend.model);
     if (harness === "codex") args.push("-");
     const startedAt = Date.now();
-    const p = c.execution.spawn(harness === "codex" ? "codex" : "claude", args);
+    const p = c.execution.spawn(
+      harness === "codex" ? "codex" : "claude",
+      args,
+      c.outputSchema ??
+        z.toJSONSchema(workerResponseSchema, {
+          io: "input",
+          target: "draft-7",
+        }),
+    );
     const lines = createInterface({ input: p.stdout });
     let terminal: any,
       sessionId: string | undefined,

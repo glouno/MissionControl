@@ -95,17 +95,20 @@ export function authorizeAutomation(
   goalId?: string,
 ) {
   const policy = automationPolicy(store, principal);
+  const backlog = /^\/backlog(?:\/[^/]+(?:\/(?:archive|launch))?)?$/.test(path);
   const read =
     method === "GET" &&
     (/^\/goals(?:\/[^/]+(?:\/(?:tasks|attempts|artifacts|findings|evidence))?)?$/.test(
       path,
     ) ||
+      backlog ||
       path === "/projects" ||
       path === "/events" ||
       /^\/tasks\/[^/]+$/.test(path) ||
       /^\/artifacts\/[^/]+\/content$/.test(path));
   const create =
-    method === "POST" && (path === "/goals" || path === "/goal-drafts");
+    method === "POST" &&
+    (path === "/goals" || path === "/goal-drafts" || backlog);
   const control = method === "POST" && /^\/goals\/[^/]+\/state$/.test(path);
   const permission = read
     ? "goals:read"
@@ -121,7 +124,11 @@ export function authorizeAutomation(
       403,
     );
   let projectId: string | undefined;
-  if (create)
+  if (create && backlog)
+    projectId = z
+      .object({ projectId: z.string().min(1) })
+      .parse(body).projectId;
+  else if (create)
     projectId = z
       .object({
         projectId: z.string().min(1),

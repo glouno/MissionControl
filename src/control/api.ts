@@ -8,6 +8,9 @@ import { usageReconciliationSchema } from "./usage.js";
 import { z } from "zod";
 import { ControlStore, type Principal } from "./store.js";
 import {
+  backlogInputSchema,
+  backlogUpdateSchema,
+  backlogRevisionSchema,
   ControlError,
   goalSchema,
   backendSwitchSchema,
@@ -566,6 +569,58 @@ export function createControlServer(
             url.searchParams.get("after") ?? "",
             options.connectors?.() ?? [],
             url.searchParams.get("activeAfter") ?? "",
+          );
+        }
+        const backlogMatch =
+          /^\/backlog\/([a-zA-Z0-9_-]+)(?:\/(archive|launch))?$/.exec(path);
+        if (path === "/backlog" || backlogMatch) {
+          scopedRead();
+          const projectId =
+            method === "GET"
+              ? url.searchParams.get("projectId")
+              : (body as { projectId?: string })?.projectId;
+          if (!projectId)
+            throw new ControlError("input", "Explicit projectId required", 400);
+          if (automation && !automation.projectIds.includes(projectId))
+            throw new ControlError(
+              "forbidden",
+              "Project is outside automation scope",
+              403,
+            );
+          if (backlogMatch) store.getBacklog(backlogMatch[1], projectId);
+          if (path === "/backlog" && method === "GET")
+            return store.listBacklog(
+              projectId,
+              url.searchParams.get("status") as
+                import("./schema.js").BacklogEntry["status"] | undefined,
+            );
+          if (path === "/backlog" && method === "POST")
+            return store.addBacklog(backlogInputSchema.parse(body));
+          if (backlogMatch && method === "GET" && !backlogMatch[2])
+            return store.getBacklog(backlogMatch[1], projectId);
+          if (backlogMatch && method === "POST") {
+            if (backlogMatch[2] === "launch")
+              return store.launchBacklog(
+                backlogMatch[1],
+                backlogRevisionSchema.parse(body),
+                principal.actor,
+                options.validateGoal,
+              );
+            if (backlogMatch[2] === "archive")
+              return store.archiveBacklog(
+                backlogMatch[1],
+                backlogRevisionSchema.parse(body),
+              );
+            if (!backlogMatch[2])
+              return store.updateBacklog(
+                backlogMatch[1],
+                backlogUpdateSchema.parse(body),
+              );
+          }
+          throw new ControlError(
+            "not_found",
+            "Backlog endpoint not found",
+            404,
           );
         }
         if (path === "/goal-drafts" && method === "POST") {
@@ -1466,6 +1521,154 @@ export function openApi() {
     get: operation(
       "Operator: bounded download of an instance-relative recorded artifact; rejects redirected paths",
     ),
+  };
+  const backlogFields = {
+    projectId: {
+      type: "string",
+      description:
+        "Required project scope; stored entries and dependencies must belong to this project",
+    },
+    title: { type: "string", minLength: 1, maxLength: 200 },
+    description: { type: "string", minLength: 1, maxLength: 100000 },
+    priority: { type: "integer", minimum: -1000, maximum: 1000, default: 0 },
+    dependencies: {
+      type: "array",
+      maxItems: 100,
+      items: { type: "string" },
+      description:
+        "Same-project backlog IDs whose linked goals must complete before launch",
+    },
+    acceptanceCriteria: {
+      type: "array",
+      maxItems: 100,
+      items: { type: "string", minLength: 1, maxLength: 10000 },
+    },
+  };
+  const backlogRevision = {
+    type: "integer",
+    minimum: 1,
+    description:
+      "Required pending revision; matching launchedRevision replays original goal",
+  };
+  const backlogOutput = objectSchema(
+    {
+      ...backlogFields,
+      id: { type: "string" },
+      status: { type: "string", enum: ["backlog", "archived", "launched"] },
+      revision: backlogRevision,
+      createdAt: { type: "string", format: "date-time" },
+      updatedAt: { type: "string", format: "date-time" },
+      goalId: { type: ["string", "null"] },
+      launchedRevision: { type: ["integer", "null"] },
+    },
+    [
+      "id",
+      "projectId",
+      "title",
+      "description",
+      "priority",
+      "dependencies",
+      "acceptanceCriteria",
+      "status",
+      "revision",
+      "createdAt",
+      "updatedAt",
+      "goalId",
+      "launchedRevision",
+    ],
+  );
+  const backlogOperation = (
+    summary: string,
+    input?: Record<string, unknown>,
+    collection = false,
+  ) => ({
+    ...operation(summary, input),
+    responses: {
+      ...operation(summary).responses,
+      200: {
+        description: "Durable backlog record",
+        content: {
+          "application/json": {
+            schema: collection
+              ? { type: "array", items: backlogOutput }
+              : backlogOutput,
+          },
+        },
+      },
+    },
+  });
+  const backlogScope = {
+    name: "projectId",
+    in: "query",
+    required: true,
+    schema: { type: "string" },
+  };
+  const backlogId = {
+    name: "id",
+    in: "path",
+    required: true,
+    schema: { type: "string" },
+  };
+  paths["/api/v1/backlog"] = {
+    get: {
+      ...backlogOperation(
+        "List durable project backlog; goals:read scope",
+        undefined,
+        true,
+      ),
+      parameters: [
+        backlogScope,
+        {
+          name: "status",
+          in: "query",
+          schema: { type: "string", enum: ["backlog", "archived", "launched"] },
+        },
+      ],
+    },
+    post: backlogOperation(
+      "Add work without admitting a goal; goals:create scope",
+      objectSchema(backlogFields, ["projectId", "title", "description"]),
+    ),
+  };
+  paths["/api/v1/backlog/{id}"] = {
+    get: {
+      ...backlogOperation("Read a stored entry in project scope"),
+      parameters: [backlogId, backlogScope],
+    },
+    post: {
+      ...backlogOperation(
+        "Update pending work with revision concurrency control",
+        objectSchema({ ...backlogFields, revision: backlogRevision }, [
+          "projectId",
+          "revision",
+        ]),
+      ),
+      parameters: [backlogId],
+    },
+  };
+  paths["/api/v1/backlog/{id}/archive"] = {
+    post: {
+      ...backlogOperation(
+        "Archive pending work without execution",
+        objectSchema(
+          { projectId: backlogFields.projectId, revision: backlogRevision },
+          ["projectId", "revision"],
+        ),
+      ),
+      parameters: [backlogId],
+    },
+  };
+  paths["/api/v1/backlog/{id}/launch"] = {
+    post: {
+      ...operation(
+        "Atomically admit and link one goal using current trusted configuration. 409: stale revision, archived entry, unmet dependency, disabled project or authority refusal. Matching launch revision replays original goal after restart.",
+        objectSchema(
+          { projectId: backlogFields.projectId, revision: backlogRevision },
+          ["projectId", "revision"],
+        ),
+      ),
+      parameters: [backlogId],
+    },
   };
   paths["/api/v1/goal-drafts"] = {
     post: operation(

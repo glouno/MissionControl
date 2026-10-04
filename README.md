@@ -60,3 +60,8 @@ Original MissionControl code is **AGPL-3.0-only**. Builds include the exact revi
 original source for the dashboard/API source download. Dependencies retain their
 own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md). No vendor
 executables, prebuilt worker images or homeserver images are distributed here.
+
+Work also maintains a project backlog independently of admitted goals. Saving or
+archiving backlog does not start execution. Explicit launch uses the applied
+project configuration after dependency and admission checks; see the
+[compute-ready backlog workflow](docs/configuration.md#synthetic-project-backlog-and-explicit-launch).

@@ -109,3 +109,10 @@ an ephemeral loopback controller, and removes its owned resources. It tests actu
 operator login, goal submission/details/decisions/control/history/evidence and
 source download workflows. It does not start installed services, authenticate a
 real provider, or qualify optional connectors/platforms.
+
+For work you want to retain before admitting execution, configure and apply a
+[synthetic project](configuration.md#synthetic-project-backlog-and-explicit-launch),
+then open Work and select its project. Saving backlog is inert. Launch explicitly
+when dependencies have completed and the applied project is ready; inspect the
+linked goal for scheduler outcomes and recorded attempts. The same workflow is
+available through the [API and CLI](agents.md#durable-project-backlog).

@@ -1,3 +1,4 @@
+import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { createHash, randomUUID } from "node:crypto";
 import { availableParallelism, totalmem } from "node:os";
 import { projectIdentity, overlapEvidence } from "./projectContext.js";
@@ -19,6 +20,10 @@ import {
 } from "./usage.js";
 import { enqueueDeliveries } from "./human.js";
 import {
+  backlogInputSchema,
+  backlogUpdateSchema,
+  backlogRevisionSchema,
+  type BacklogEntry,
   checkpointSchema,
   backendSchema,
   scheduleSchema,
@@ -54,6 +59,7 @@ export class ControlStore {
   constructor(
     readonly db: SqliteStore,
     readonly clock: () => number = Date.now,
+    readonly qualifySubscription?: (config: GoalInput) => void,
   ) {
     this.migrate();
   }
@@ -65,7 +71,7 @@ export class ControlStore {
     const tables = this.db.query<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     );
-    if (version > 6)
+    if (version > 7)
       throw new Error("Database schema is newer than this release");
     if (version === 0 && tables.length)
       throw new Error(
@@ -93,6 +99,7 @@ export class ControlStore {
       this.migrateStatePaths();
       this.migrateAttempts();
       this.migrateUsageReconciliation();
+      this.migrateBacklog();
       return;
     }
     this.db.transaction(() => {
@@ -132,6 +139,203 @@ export class ControlStore {
     this.migrateStatePaths();
     this.migrateAttempts();
     this.migrateUsageReconciliation();
+    this.migrateBacklog();
+  }
+  private migrateBacklog() {
+    if (
+      Number(
+        this.db.one<{ user_version: number }>("PRAGMA user_version")
+          ?.user_version,
+      ) >= 7
+    )
+      return;
+    this.db.transaction(() =>
+      this.db.exec(`
+      CREATE TABLE control_backlog(
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL CHECK(length(title)>0),
+        description TEXT NOT NULL CHECK(length(description)>0), priority INTEGER NOT NULL,
+        dependencies TEXT NOT NULL CHECK(json_valid(dependencies) AND json_type(dependencies)='array'),
+        acceptance_criteria TEXT NOT NULL CHECK(json_valid(acceptance_criteria) AND json_type(acceptance_criteria)='array'),
+        status TEXT NOT NULL CHECK(status IN ('backlog','archived','launched')),
+        revision INTEGER NOT NULL CHECK(revision>0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        goal_id TEXT UNIQUE REFERENCES control_goals(id), launched_revision INTEGER,
+        CHECK((status='launched' AND goal_id IS NOT NULL AND launched_revision IS NOT NULL AND launched_revision>0) OR
+              (status!='launched' AND goal_id IS NULL AND launched_revision IS NULL))
+      );
+      CREATE INDEX control_backlog_project ON control_backlog(project_id,status,priority,created_at,id);
+      INSERT INTO schema_migrations VALUES(7,strftime('%Y-%m-%dT%H:%M:%fZ','now')); PRAGMA user_version=7;
+    `),
+    );
+  }
+  getBacklog(entryId: string, projectId: string): BacklogEntry {
+    const r = this.db.one<Row>(
+      `SELECT * FROM control_backlog WHERE id=${sql(entryId)}`,
+    );
+    if (!r) throw new ControlError("not_found", "Backlog entry not found", 404);
+    if (r.project_id !== projectId)
+      throw new ControlError(
+        "forbidden",
+        "Backlog entry is outside project scope",
+        403,
+      );
+    return {
+      id: String(r.id),
+      projectId: String(r.project_id),
+      title: String(r.title),
+      description: String(r.description),
+      priority: Number(r.priority),
+      dependencies: JSON.parse(String(r.dependencies)),
+      acceptanceCriteria: JSON.parse(String(r.acceptance_criteria)),
+      status: r.status as BacklogEntry["status"],
+      revision: Number(r.revision),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at),
+      goalId: r.goal_id as string | null,
+      launchedRevision:
+        r.launched_revision === null ? null : Number(r.launched_revision),
+    };
+  }
+  listBacklog(projectId: string, status?: BacklogEntry["status"]) {
+    if (
+      !projectId ||
+      (status && !["backlog", "archived", "launched"].includes(status))
+    )
+      throw new ControlError("input", "Project and valid status required", 400);
+    return this.db
+      .query<Row>(
+        `SELECT id FROM control_backlog WHERE project_id=${sql(projectId)} ${status ? `AND status=${sql(status)}` : ""} ORDER BY priority DESC,created_at,id`,
+      )
+      .map((r) => this.getBacklog(String(r.id), projectId));
+  }
+  private validateBacklogDependencies(
+    entry: Pick<BacklogEntry, "projectId" | "dependencies">,
+    entryId?: string,
+  ) {
+    if (new Set(entry.dependencies).size !== entry.dependencies.length)
+      throw new ControlError("dependency", "Duplicate dependencies", 400);
+    const visit = (dependency: string, seen: Set<string>) => {
+      if (dependency === entryId)
+        throw new ControlError("dependency", "Dependency cycle", 409);
+      if (seen.has(dependency)) return;
+      seen.add(dependency);
+      const other = this.getBacklog(dependency, entry.projectId);
+      for (const next of other.dependencies) visit(next, seen);
+    };
+    for (const dependency of entry.dependencies) visit(dependency, new Set());
+  }
+  addBacklog(input: unknown) {
+    const entry = backlogInputSchema.parse(input);
+    return this.db.transaction(() => {
+      if (!this.projects().some((p) => p.id === entry.projectId))
+        throw new ControlError("project", "Unknown project", 409);
+      this.validateBacklogDependencies(entry);
+      const entryId = id("backlog"),
+        now = this.now();
+      this.db.exec(
+        `INSERT INTO control_backlog VALUES(${sql(entryId)},${sql(entry.projectId)},${sql(entry.title)},${sql(entry.description)},${sql(entry.priority)},${this.encode(entry.dependencies)},${this.encode(entry.acceptanceCriteria)},'backlog',1,${sql(now)},${sql(now)},NULL,NULL)`,
+      );
+      return this.getBacklog(entryId, entry.projectId);
+    });
+  }
+  updateBacklog(entryId: string, input: unknown) {
+    const patch = backlogUpdateSchema.parse(input);
+    return this.db.transaction(() => {
+      const previous = this.getBacklog(entryId, patch.projectId);
+      this.pendingBacklog(previous, patch.revision);
+      const {
+        id: _id,
+        status: _status,
+        revision: _revision,
+        createdAt: _created,
+        updatedAt: _updated,
+        goalId: _goal,
+        launchedRevision: _launch,
+        ...fields
+      } = previous;
+      const { revision: _requested, ...changes } = patch;
+      const entry = backlogInputSchema.parse({ ...fields, ...changes });
+      this.validateBacklogDependencies(entry, entryId);
+      this.db.exec(
+        `UPDATE control_backlog SET title=${sql(entry.title)},description=${sql(entry.description)},priority=${sql(entry.priority)},dependencies=${this.encode(entry.dependencies)},acceptance_criteria=${this.encode(entry.acceptanceCriteria)},revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entryId)}`,
+      );
+      return this.getBacklog(entryId, entry.projectId);
+    });
+  }
+  private pendingBacklog(entry: BacklogEntry, revision: number) {
+    if (entry.revision !== revision)
+      throw new ControlError("revision", "Backlog revision changed", 409);
+    if (entry.status !== "backlog")
+      throw new ControlError("status", "Backlog entry is not pending", 409);
+  }
+  archiveBacklog(entryId: string, input: unknown) {
+    const request = backlogRevisionSchema.parse(input);
+    return this.db.transaction(() => {
+      const entry = this.getBacklog(entryId, request.projectId);
+      this.pendingBacklog(entry, request.revision);
+      this.db.exec(
+        `UPDATE control_backlog SET status='archived',revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entryId)}`,
+      );
+      return this.getBacklog(entryId, request.projectId);
+    });
+  }
+  launchBacklog(
+    entryId: string,
+    input: unknown,
+    actor = "operator",
+    validate?: (input: GoalInput) => GoalInput,
+  ): Goal {
+    const request = backlogRevisionSchema.parse(input);
+    return this.db.transaction(() => {
+      const entry = this.getBacklog(entryId, request.projectId);
+      if (entry.status === "launched") {
+        if (entry.launchedRevision !== request.revision)
+          throw new ControlError("revision", "Launch revision differs", 409);
+        return this.getGoal(entry.goalId!);
+      }
+      this.pendingBacklog(entry, request.revision);
+      this.validateBacklogDependencies(entry, entry.id);
+      for (const dep of entry.dependencies) {
+        const other = this.getBacklog(dep, entry.projectId);
+        if (
+          !other.goalId ||
+          other.status !== "launched" ||
+          this.getGoal(other.goalId).status !== "completed"
+        )
+          throw new ControlError(
+            "dependency",
+            "Dependency goal is not completed",
+            409,
+          );
+      }
+      const snapshot = this.setting("configuration-snapshot") as
+        LoadedConfiguration | undefined;
+      if (!snapshot)
+        throw new ControlError(
+          "configuration",
+          "Trusted project configuration is unavailable",
+          409,
+        );
+      if (!snapshot.projects.some((p) => p.id === entry.projectId && p.enabled))
+        throw new ControlError(
+          "project",
+          "Project is disabled or unknown",
+          409,
+        );
+      const description = `${entry.title}\n\n${entry.description}${entry.acceptanceCriteria.length ? "\n\nAcceptance criteria:\n" + entry.acceptanceCriteria.map((c) => "- " + c).join("\n") : ""}`;
+      let config: ReturnType<typeof effectiveGoal>;
+      try {
+        config = effectiveGoal(snapshot, entry.projectId, description);
+        if (validate) config = this.validateGoalConfiguration(validate(config));
+      } catch (error) {
+        if (error instanceof ControlError) throw error;
+        throw new ControlError("configuration", (error as Error).message, 409);
+      }
+      const goal = this.createGoal(config, actor);
+      this.db.exec(
+        `UPDATE control_backlog SET status='launched',goal_id=${sql(goal.id)},launched_revision=${sql(entry.revision)},revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entry.id)}`,
+      );
+      return goal;
+    });
   }
   private migrateUsageReconciliation() {
     if (
@@ -702,11 +906,16 @@ export class ControlStore {
         config.backend,
         config.executionContract,
       );
-      if (contract.usagePolicy.kind === "subscription")
+      if (
+        contract.usagePolicy.kind === "subscription" &&
+        !this.qualifySubscription
+      )
         throw new ControlError(
           "subscription_unqualified",
           "Subscription coding admission requires qualified isolated execution",
         );
+      if (contract.usagePolicy.kind === "subscription")
+        this.qualifySubscription!(config);
       if (
         contract.usagePolicy.kind === "metered" &&
         (config.maxCostUsd > contract.usagePolicy.maxCostUsd ||
@@ -726,6 +935,7 @@ export class ControlStore {
         "Automatic merge requires publication and explicit production exclusion",
       );
     if (
+      config.executionContract?.usagePolicy.kind !== "subscription" &&
       ["azure", "bedrock", "claude-code"].includes(config.backend.kind) &&
       (config.maxCostUsd <= 0 || config.estimatePerRunUsd <= 0)
     )
