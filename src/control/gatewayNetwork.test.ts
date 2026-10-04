@@ -20,15 +20,23 @@ async function fixture(t: any) {
     process.platform === "darwin" ? "/tmp" : tmpdir(),
   );
   const root = await mkdtemp(join(base, "mc-network-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
   const socketDirectory = join(root, "socket");
   await mkdir(socketDirectory, { mode: 0o700 });
   const server = createServer();
+  t.after(async () => {
+    if (server.listening)
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+  });
   server.listen(join(socketDirectory, "inference.sock"));
   await once(server, "listening");
   await chmod(join(socketDirectory, "inference.sock"), 0o600);
   const relayScript = join(root, "relay.py");
   await writeFile(relayScript, "# trusted relay");
   const db = new SqliteStore(join(root, "state.db"));
+  t.after(() => db.close());
   const objects = new Map<string, any>(),
     calls: string[][] = [],
     revoked: string[] = [];
@@ -92,11 +100,6 @@ async function fixture(t: any) {
     socketDirectory,
     relayScript,
   };
-  t.after(async () => {
-    await new Promise<void>((r) => server.close(() => r()));
-    db.close();
-    await rm(root, { recursive: true });
-  });
   return {
     manager,
     spec,
