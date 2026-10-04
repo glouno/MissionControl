@@ -1,4 +1,5 @@
-import { readFileSync, lstatSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { readFileSync, lstatSync, realpathSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -18,37 +19,33 @@ const hash = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
 /** A changed installed implementation invalidates its private acceptance receipt. */
 export function subscriptionImplementationHash() {
-  const files = [
-    "subscriptionQualification",
-    "subscriptionBackend",
-    "subscriptionNative",
-    "subscriptionEgress",
-    "tlsSni",
-    "authRuntime",
-    "authEnvironment",
-    "egressPolicy",
-    "environments",
-    "isolatedRuntime",
-    "isolatedVerifier",
-    "scheduler",
-    "store",
-    "api",
-    "configuration",
-    "executionContract",
-    "schema",
-    "usage",
-    "../config",
-    "../cli",
-    "../util",
-  ].map(
-    (name) => [name + ".js", new URL(name + ".js", import.meta.url)] as const,
+  const files: [string, string][] = [];
+  const visit = (root: string, prefix: string, compiled: boolean) => {
+    for (const entry of readdirSync(root, { withFileTypes: true }).sort(
+      (a, b) => a.name.localeCompare(b.name),
+    )) {
+      const path = join(root, entry.name),
+        name = prefix + entry.name;
+      if (entry.isSymbolicLink())
+        throw Error("Implementation asset cannot be a symlink");
+      if (entry.isDirectory()) visit(path, name + "/", compiled);
+      else if (
+        !compiled ||
+        (name.endsWith(".js") && !name.endsWith(".test.js"))
+      )
+        files.push([name, path]);
+    }
+  };
+  const dist = fileURLToPath(new URL("../", import.meta.url));
+  visit(dist, "dist/", true);
+  visit(
+    fileURLToPath(new URL("../../environments/worker/", import.meta.url)),
+    "environments/worker/",
+    false,
   );
   files.push([
-    "subscription-egress.py",
-    new URL(
-      "../../environments/worker/subscription-egress.py",
-      import.meta.url,
-    ),
+    "package-lock.json",
+    fileURLToPath(new URL("../../package-lock.json", import.meta.url)),
   ]);
   return hash(
     JSON.stringify(
