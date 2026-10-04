@@ -43,14 +43,23 @@ export function subscriptionImplementationHash() {
     "environments/worker/",
     false,
   );
-  files.push([
-    "package-lock.json",
-    fileURLToPath(new URL("../../package-lock.json", import.meta.url)),
-  ]);
-  return hash(
-    JSON.stringify(
-      files.map(([name, path]) => [name, hash(readFileSync(path))]),
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL("../../assets/source-manifest.json", import.meta.url),
+      "utf8",
     ),
+  );
+  const lockHash = manifest.files?.find(
+    (file: { path: string; sha256: string }) =>
+      file.path === "package-lock.json",
+  )?.sha256;
+  if (typeof lockHash !== "string" || !/^[a-f0-9]{64}$/.test(lockHash))
+    throw Error("Bundled source lockfile fingerprint unavailable");
+  return hash(
+    JSON.stringify([
+      ...files.map(([name, path]) => [name, hash(readFileSync(path))]),
+      ["package-lock.json", lockHash],
+    ]),
   );
 }
 
