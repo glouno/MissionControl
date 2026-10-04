@@ -18,30 +18,45 @@ const hash = (bytes: string | Buffer) =>
   createHash("sha256").update(bytes).digest("hex");
 /** A changed installed implementation invalidates its private acceptance receipt. */
 export function subscriptionImplementationHash() {
+  const files = [
+    "subscriptionQualification",
+    "subscriptionBackend",
+    "subscriptionNative",
+    "subscriptionEgress",
+    "tlsSni",
+    "authRuntime",
+    "authEnvironment",
+    "egressPolicy",
+    "environments",
+    "isolatedRuntime",
+    "isolatedVerifier",
+    "scheduler",
+    "store",
+    "api",
+    "configuration",
+    "executionContract",
+    "schema",
+    "usage",
+    "../config",
+    "../cli",
+    "../util",
+  ].map(
+    (name) => [name + ".js", new URL(name + ".js", import.meta.url)] as const,
+  );
+  files.push([
+    "subscription-egress.py",
+    new URL(
+      "../../environments/worker/subscription-egress.py",
+      import.meta.url,
+    ),
+  ]);
   return hash(
     JSON.stringify(
-      [
-        "subscriptionQualification",
-        "subscriptionBackend",
-        "subscriptionNative",
-        "authRuntime",
-        "authEnvironment",
-        "egressPolicy",
-        "environments",
-        "isolatedRuntime",
-        "scheduler",
-        "store",
-        "api",
-        "configuration",
-        "../config",
-        "../cli",
-      ].map((name) => [
-        name,
-        hash(readFileSync(new URL(name + ".js", import.meta.url))),
-      ]),
+      files.map(([name, path]) => [name, hash(readFileSync(path))]),
     ),
   );
 }
+
 const receiptSchema = z
   .object({
     schemaVersion: z.literal(1),

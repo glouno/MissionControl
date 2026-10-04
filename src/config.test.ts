@@ -299,7 +299,14 @@ test("provider configuration resolves exact authentication/protocol and permits 
     join(f.configDir, "projects/sample.json"),
     JSON.stringify({ ...staged.projects[0], enabled: true }),
   );
-  await assert.rejects(loadConfiguration(f.configDir), /qualification/);
+  const recoverable = await loadConfiguration(f.configDir);
+  assert.throws(
+    () => effectiveGoal(recoverable, "sample", "Coding admission"),
+    /acceptance/,
+  );
+  assert.ok(
+    effectiveGoal(recoverable, "sample", "Maintenance inspection", {}, false),
+  );
 });
 
 test("execution limits reject absent real contracts, unsupported native providers and subscription widening", () => {
