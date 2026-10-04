@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Read-only MissionControl overview across local and SSH installations (v1 and legacy)."""
+import argparse
+from contextlib import closing
+import base64
+import collections
+import concurrent.futures
+import json
+import os
+import plistlib
+import shlex
+import sqlite3
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def text(value, width=110):
+    return ''.join(c if c.isprintable() else ' ' for c in str(value))[:width]
+
+
+def inspect_database(path):
+    result = {'path': str(path), 'version': 'unknown', 'counts': {}, 'items': [], 'tasks': [], 'workers_fresh': None}
+    now = int(time.time() * 1000)
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'control_goals' in tables:
+                result['version'] = 'v1'
+                result['counts'] = dict(db.execute('SELECT status,count(*) FROM control_goals GROUP BY status'))
+                for row in db.execute("SELECT id,status,config FROM control_goals WHERE status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 8"):
+                    config = json.loads(row['config'])
+                    result['items'].append({'id': row['id'], 'status': row['status'], 'title': config.get('title', row['id'])})
+                for row in db.execute("SELECT id,goal_id,key,status,worker_id,lease_until FROM control_tasks WHERE worker_id IS NOT NULL OR status IN ('running','claimed') ORDER BY created_at DESC LIMIT 12"):
+                    d = dict(row)
+                    d['lease_valid'] = d['lease_until'] is not None and d['lease_until'] > now
+                    result['tasks'].append(d)
+                if 'control_workers' in tables:
+                    result['workers_fresh'] = db.execute('SELECT count(*) FROM control_workers WHERE last_seen > ?', (now - 120000,)).fetchone()[0]
+            elif 'missions' in tables:
+                result['version'] = 'legacy'
+                result['counts'] = dict(db.execute('SELECT status,count(*) FROM missions GROUP BY status'))
+                for row in db.execute("SELECT id,status,objective FROM missions WHERE status NOT IN ('completed','cancelled') ORDER BY created_at DESC LIMIT 8"):
+                    result['items'].append({'id': row['id'], 'status': row['status'], 'title': row['objective']})
+                for row in db.execute("SELECT id,mission_id,title,status FROM tasks WHERE status='running' LIMIT 12"):
+                    result['tasks'].append(dict(row))
+            else:
+                result['error'] = 'Unrecognized database schema'
+    except (sqlite3.Error, OSError, ValueError) as e:
+        result['error'] = type(e).__name__ + ': ' + str(e)
+    heartbeat = path.parent / 'worker-heartbeat.json'
+    if result['version'] == 'legacy' and heartbeat.is_file():
+        try:
+            h = json.loads(heartbeat.read_text())
+            age = time.time() - datetime.fromisoformat(h['updatedAt'].replace('Z', '+00:00')).timestamp()
+            result['heartbeat'] = {'state': h['state'], 'age_s': round(age), 'fresh': 0 <= age < 120}
+        except (OSError, ValueError, KeyError):
+            result['heartbeat'] = {'error': 'Unreadable heartbeat'}
+    return result
+
+
+def discover(config_dirs=(), state_dirs=(), catalogs=()):
+    home = Path.home()
+    states = {Path(p).expanduser().resolve(): 'explicit' for p in state_dirs}
+    configs = set(Path(p).expanduser() for p in config_dirs)
+    configs.add(Path(os.environ.get('MISSIONCONTROL_CONFIG_DIR', home / ('Library/Application Support/MissionControl/config' if sys.platform == 'darwin' else '.config/mission-control'))))
+    defaults = [home / '.local/state/mission-control', home / 'Library/Application Support/MissionControl/state']
+    if os.environ.get('MISSIONCONTROL_STATE_DIR'):
+        defaults.append(Path(os.environ['MISSIONCONTROL_STATE_DIR']))
+    for p in defaults:
+        if (p / 'mission-control.db').is_file():
+            states[p.resolve()] = 'default'
+    # Discover config roots from live processes, without returning their command lines.
+    if Path('/proc').is_dir():
+        for p in Path('/proc').glob('[0-9]*/cmdline'):
+            try:
+                args = p.read_bytes().decode().split('\0')
+                if '--config-dir' in args and any('missioncontrol' in x.lower() or 'mission-control' in x.lower() for x in args[:3]):
+                    configs.add(Path(args[args.index('--config-dir') + 1]))
+            except (OSError, ValueError, IndexError, UnicodeError):
+                pass
+    for p in (home / 'Library/LaunchAgents').glob('*mission*.plist'):
+        try:
+            d = plistlib.loads(p.read_bytes())
+            args = d.get('ProgramArguments', [])
+            if '--config-dir' in args:
+                configs.add(Path(args[args.index('--config-dir') + 1]))
+            s = d.get('EnvironmentVariables', {}).get('MISSIONCONTROL_STATE_DIR')
+            if s:
+                states[Path(s).resolve()] = p.stem
+            elif d.get('WorkingDirectory'):
+                s = Path(d['WorkingDirectory']) / '.missioncontrol'
+                if (s / 'mission-control.db').is_file():
+                    states[s.resolve()] = p.stem
+        except (OSError, ValueError, IndexError):
+            pass
+    # Bounded known installation catalog; no scanning archives or arbitrary home content.
+    for directory in catalogs:
+        catalog = Path(directory).expanduser()
+        if catalog.is_dir():
+            configs.update(p.parent for p in catalog.glob('*/config.json'))
+    errors = []
+    uninitialized = []
+    explicit = {Path(p).expanduser() for p in config_dirs}
+    for root in configs:
+        p = root / 'config.json'
+        if not p.is_file():
+            if root in explicit:
+                errors.append(str(root) + ': configuration not found')
+            continue
+        try:
+            s = (root / json.loads(p.read_text())['stateDir']).resolve()
+            states[s] = str(root)
+        except (OSError, ValueError, KeyError) as e:
+            errors.append(str(root) + ': ' + type(e).__name__)
+    instances = []
+    for state, origin in sorted(states.items(), key=lambda x: str(x[0])):
+        p = state / 'mission-control.db'
+        if not p.is_file():
+            if origin == 'explicit':
+                errors.append(str(state) + ': database not found')
+            else:
+                uninitialized.append(str(state))
+            continue
+        instance = inspect_database(p)
+        instance['discovered_from'] = origin
+        instance['label'] = state.parent.name if state.name == 'state' else state.name
+        instances.append(instance)
+    return {'sampled_at': datetime.now(timezone.utc).isoformat(), 'instances': instances, 'errors': errors, 'uninitialized': uninitialized}
+
+
+def remote(host, settings):
+    try:
+        encoded = base64.b64encode(json.dumps(settings).encode()).decode()
+        remote_args = [*settings.get('command_prefix', []), 'python3', '-', '--probe', '--probe-settings', encoded]
+        remote_command = subprocess.list2cmdline(remote_args) if settings.get('shell') == 'windows' else shlex.join(remote_args)
+        p = subprocess.run(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', host,
+                            remote_command], input=Path(__file__).read_text(), capture_output=True, text=True, timeout=20)
+        if p.returncode:
+            raise RuntimeError(p.stderr.strip())
+        return json.loads(p.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired, RuntimeError) as e:
+        return {'error': text(e, 300), 'instances': [], 'errors': []}
+
+
+def render(hosts):
+    bold = '\033[1;36m' if sys.stdout.isatty() and 'NO_COLOR' not in os.environ else ''
+    reset = '\033[0m' if bold else ''
+    print(f'{bold}╭─ MISSIONCONTROL · live overview ──────────────────{reset}')
+    for host, data in hosts.items():
+        print('│')
+        print('│ ' + text(host).upper())
+        if 'error' in data:
+            print('│   ? Unavailable: ' + text(data['error']))
+            continue
+        valid = sum(sum(bool(t.get('lease_valid')) for t in i['tasks']) for i in data['instances'])
+        recorded = sum(i['counts'].get('running', 0) for i in data['instances'])
+        print(f'│   {valid} valid v1 task leases · {recorded} goals/missions recorded running')
+        if not data['instances']:
+            print('│   No installation discovered. Use --state-dir / --config-dir for custom paths.')
+        for d in data['instances']:
+            print(f"│   {text(d['label'])} [{d['version']}] · " + (' · '.join(f'{k} {v}' for k, v in sorted(d['counts'].items())) or 'no missions/goals'))
+            print('│     State: ' + text(Path(d['path']).parent))
+            if d.get('error'):
+                print('│     ? ' + text(d['error']))
+                continue
+            if d['workers_fresh'] is not None:
+                print('│     Recent worker heartbeat: ' + ('yes (does not imply executing work)' if d['workers_fresh'] else 'none within 2 min'))
+            if 'heartbeat' in d:
+                h = d['heartbeat']
+                print('│     Worker: ' + (f"{h['state']} · heartbeat {h['age_s']}s ago" if 'state' in h else h['error']))
+            for task in d['tasks']:
+                evidence = ('lease valid' if task['lease_valid'] else 'lease EXPIRED / unknown') if 'lease_valid' in task else 'recorded running; execution unverified'
+                print(f"│     ▶ {text(task.get('key', task.get('title', task['id'])), 55)} · {evidence}")
+                if task.get('worker_id'):
+                    print('│       Worker: ' + text(task['worker_id']))
+            for item in d['items'][:5]:
+                print(f"│     {text(item['status'], 22):22} {text(item['title'], 70)}")
+            if len(d['items']) > 5:
+                print('│     … more items in --json')
+        if data.get('uninitialized'):
+            print(f"│   {len(data['uninitialized'])} configured installation(s) not initialized")
+        for e in data['errors']:
+            print('│   ? ' + text(e))
+    print('╰─ Read-only · host labels identify state location; leases/heartbeats are liveness evidence.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', nargs='?', choices=['status'], default='status')
+    parser.add_argument('--host', default='all', help='all, local, or a name in the private observer configuration')
+    parser.add_argument('--ssh-host', help='Inspect an additional SSH endpoint')
+    parser.add_argument('--observer-config', default=os.environ.get('MISSIONCONTROL_OBSERVER_CONFIG', str(Path.home() / '.config/missioncontrol-status/config.json')))
+    parser.add_argument('--catalog', action='append', default=[], help='Local installation catalog directory')
+    parser.add_argument('--state-dir', action='append', default=[], help='Local state directory; repeat for multiple installations')
+    parser.add_argument('--config-dir', action='append', default=[], help='Local config directory; repeat as needed')
+    parser.add_argument('--json', action='store_true')
+    parser.add_argument('--probe', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--probe-settings', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.ssh_host and args.ssh_host.startswith('-'):
+        parser.error('SSH host must not start with -')
+    if args.probe:
+        remote_settings = json.loads(base64.b64decode(args.probe_settings)) if args.probe_settings else {}
+        print(json.dumps(discover(args.config_dir + remote_settings.get('config_dirs', []), args.state_dir + remote_settings.get('state_dirs', []), args.catalog + remote_settings.get('catalogs', []))))
+        return 0
+    settings = {'hosts': {'local': {'label': 'Local'}}}
+    config_path = Path(args.observer_config).expanduser()
+    if config_path.is_file():
+        settings = json.loads(config_path.read_text())
+    hosts = settings['hosts']
+    if args.ssh_host:
+        hosts['remote'] = {'label': args.ssh_host, 'ssh': args.ssh_host}
+    if args.host != 'all' and args.host not in hosts:
+        parser.error('unknown host; configure it in --observer-config')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = {}
+        for name, host in hosts.items():
+            if args.host not in ('all', name) or args.host == 'all' and not host.get('include_in_all', True):
+                continue
+            label = host.get('label', name)
+            if 'ssh' in host:
+                if host['ssh'].startswith('-'):
+                    parser.error('SSH host must not start with -')
+                jobs[label] = pool.submit(remote, host['ssh'], host)
+            else:
+                jobs[label] = pool.submit(discover, args.config_dir + host.get('config_dirs', []),
+                                         args.state_dir + host.get('state_dirs', []), args.catalog + host.get('catalogs', []))
+        data = {label: future.result() for label, future in jobs.items()}
+    print(json.dumps(data, indent=2)) if args.json else render(data)
+    return int(any(d.get('error') or d['errors'] or any(i.get('error') for i in d['instances']) for d in data.values()))
+
+
+if __name__ == '__main__':
+    sys.exit(main())
