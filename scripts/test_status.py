@@ -5,6 +5,10 @@ import sqlite3
 import tempfile
 import time
 import unittest
+import sys
+
+# Keep synthetic test runs source-only for the publication audit.
+sys.dont_write_bytecode = True
 from unittest.mock import patch
 from pathlib import Path
 
