@@ -208,3 +208,53 @@ test("subscription reported token totals stop new invocation admission at the ca
   assert.equal(store.subscriptionCapacity(goal.id)?.admissionAllowed, false);
   assert.throws(() => store.reserveOperation(goal.id, "review"), /usage/);
 });
+
+test("completed coding hands its verifying lease to review without admitting another writer", async (t) => {
+  const { store, goal } = await fixture(t, 4, 100);
+  const claim = store.claimNextTask("worker", { goalId: goal.id })!;
+  store.transition(claim.task.id, "worker", claim.generation, "running");
+  assert.throws(
+    () => store.reserveOperation(goal.id, "review", claim),
+    /verifying/,
+  );
+  store.transition(claim.task.id, "worker", claim.generation, "verifying", {
+    executionSessionId: "synthetic-completed-session",
+    usage: {
+      kind: "subscription",
+      status: "reported",
+      inputTokens: 2,
+      outputTokens: 1,
+    },
+  });
+  assert.throws(() => store.reserveOperation(goal.id, "review"), /identity/);
+  assert.throws(
+    () =>
+      store.reserveOperation(goal.id, "review", { ...claim, generation: 99 }),
+    /lease|generation/i,
+  );
+  store.setting("subscription-auth-runs", [
+    { authId: "synthetic-identity", status: "running" },
+  ]);
+  assert.throws(
+    () => store.reserveOperation(goal.id, "review", claim),
+    /identity/,
+  );
+  store.setting("subscription-auth-runs", []);
+  const review = store.reserveOperation(goal.id, "review", claim);
+  assert.throws(
+    () => store.reserveOperation(goal.id, "review", claim),
+    /identity/,
+  );
+  store.settleOperation(review, undefined, {
+    kind: "subscription",
+    status: "reported",
+    inputTokens: 2,
+    outputTokens: 1,
+  });
+  assert.equal(store.subscriptionCapacity(goal.id)?.attempts, 2);
+  assert.equal(store.subscriptionCapacity(goal.id)?.reportedTokens, 6);
+  assert.equal(
+    store.attempts(goal.id).find((a) => a.taskId === claim.task.id)?.outcome,
+    "active",
+  );
+});

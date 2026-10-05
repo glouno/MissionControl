@@ -156,7 +156,10 @@ export class Scheduler {
           claim.goal,
           claim.task,
         );
-        if (this.controllerWorkers.get(workerId) !== dispatch || dispatch.closed)
+        if (
+          this.controllerWorkers.get(workerId) !== dispatch ||
+          dispatch.closed
+        )
           throw new ControlError(
             "worker_registration",
             "Dispatch was revoked during workspace preparation",
@@ -470,7 +473,12 @@ export class Scheduler {
     context: Parameters<AgentBackend["run"]>[0],
     label: string,
   ) {
-    const budget = this.store.reserveOperation(g.id, label);
+    const parent =
+      context.claim.generation > 0 &&
+      ["verifying", "integrating"].includes(context.claim.task.status)
+        ? context.claim
+        : undefined;
+    const budget = this.store.reserveOperation(g.id, label, parent);
     let cost: number | undefined, usage: import("./usage.js").Usage | undefined;
     let outcome = "failed",
       result: unknown;
