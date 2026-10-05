@@ -108,10 +108,10 @@ test("usage reconciliation preserves unknown attempt evidence, requires scoped a
   store.settleOperation(attemptId, 0);
   assert.equal(store.canSpend(goal.id).settledUsd, 1.25);
 });
-async function fixture(t: any, metered = false) {
+async function fixture(t: any, metered = false, clock = Date.now) {
   const root = await mkdtemp(join(tmpdir(), "mc-attempt-")),
     db = new SqliteStore(join(root, "db")),
-    store = new ControlStore(db);
+    store = new ControlStore(db, clock);
   t.after(async () => {
     db.close();
     await rm(root, { recursive: true, force: true });
@@ -310,10 +310,14 @@ test("operation attempts close transactionally and unresolved spending stays cou
   assert.equal(store.canSpend(goal.id).unresolvedUsd, 1);
 });
 test("attempt pages show newest activity first and reject foreign cursors", async (t) => {
-  const { store, goal } = await fixture(t, true);
+  let now = 1700000000000;
+  const { store, goal } = await fixture(t, true, () => now);
+  // Distinguish the fixture task, older operation and latest operation explicitly.
+  // Wall-clock millisecond ties otherwise make random attempt IDs decide order.
+  now += 1000;
   const old = store.reserveOperation(goal.id, "older");
   store.settleOperation(old, 0.01);
-  await new Promise((r) => setTimeout(r, 5));
+  now += 1000;
   const latest = store.reserveOperation(goal.id, "latest");
   const first = store.attempts(goal.id, 1);
   assert.equal(first[0].id, latest);

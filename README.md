@@ -60,3 +60,8 @@ Original MissionControl code is **AGPL-3.0-only**. Builds include the exact revi
 original source for the dashboard/API source download. Dependencies retain their
 own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md). No vendor
 executables, prebuilt worker images or homeserver images are distributed here.
+
+For a concise read-only overview across configured local and remote installations, install the
+[`missioncontrol status` companion](docs/status-cli.md) with
+`./scripts/install-status.sh`. It supports v1 goals and legacy missions without
+starting workers or changing state.
