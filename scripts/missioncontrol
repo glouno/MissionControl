@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only MissionControl overview across local and SSH installations (v1 and legacy)."""
+"""MissionControl overview and explicitly configured controller dispatch."""
 import argparse
 from contextlib import closing
 import base64
@@ -190,7 +190,38 @@ def render(hosts):
     print('╰─ Read-only · host labels identify state location; leases/heartbeats are liveness evidence.')
 
 
+def control(argv):
+    parser = argparse.ArgumentParser(description='Dispatch to an explicitly configured MissionControl controller')
+    parser.add_argument('--target', help='Controller name in private configuration')
+    parser.add_argument('--observer-config', default=os.environ.get('MISSIONCONTROL_OBSERVER_CONFIG', str(Path.home() / '.config/missioncontrol-status/config.json')))
+    parser.add_argument('arguments', nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    settings = json.loads(Path(args.observer_config).expanduser().read_text())
+    target = args.target or settings.get('default_controller')
+    controller = settings.get('controllers', {}).get(target)
+    if not controller:
+        parser.error('No configured controller for this target; configure controllers and default_controller')
+    command = controller.get('command')
+    if not isinstance(command, list) or not command or any(not isinstance(a, str) or not a for a in command):
+        parser.error('Controller command must be a nonempty array of arguments')
+    forwarded = args.arguments
+    if forwarded[:1] == ['--']:
+        forwarded = forwarded[1:]
+    if not forwarded:
+        forwarded = ['--help']
+    ssh = controller.get('ssh')
+    if ssh:
+        if not isinstance(ssh, str) or ssh.startswith('-'):
+            parser.error('Invalid controller SSH host')
+        command = ['ssh', '-o', 'BatchMode=yes', ssh, shlex.join(command + forwarded)]
+    else:
+        command = command + forwarded
+    return subprocess.call(command)
+
+
 def main():
+    if sys.argv[1:2] == ['control']:
+        return control(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', nargs='?', choices=['status'], default='status')
     parser.add_argument('--host', default='all', help='all, local, or a name in the private observer configuration')

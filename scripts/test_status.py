@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 loader = importlib.machinery.SourceFileLoader('status_cli', str(Path(__file__).with_name('missioncontrol')))
@@ -50,6 +51,31 @@ class StatusTests(unittest.TestCase):
             d = status.inspect_database(p)
             self.assertEqual(d['version'],'legacy')
             self.assertNotIn('lease_valid',d['tasks'][0])
+
+    def test_controller_dispatch_keeps_native_arguments_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / 'config.json'
+            config.write_text(json.dumps({'default_controller': 'primary', 'controllers': {'primary': {'command': ['/native/cli', '--config-dir', '/private/config']}}}))
+            with patch.object(status.subprocess, 'call', return_value=0) as run:
+                self.assertEqual(status.control(['--observer-config', str(config), 'goal', 'list']), 0)
+                run.assert_called_once_with(['/native/cli', '--config-dir', '/private/config', 'goal', 'list'])
+
+    def test_remote_controller_shell_quotes_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / 'config.json'
+            config.write_text(json.dumps({'default_controller': 'remote', 'controllers': {'remote': {'ssh': 'devbox', 'command': ['/native/cli']}}}))
+            with patch.object(status.subprocess, 'call', return_value=0) as run:
+                status.control(['--observer-config', str(config), 'goal', 'inspect', 'literal; unsafe'])
+                self.assertEqual(run.call_args.args[0][-1], "/native/cli goal inspect 'literal; unsafe'")
+
+    def test_missing_controller_refuses_instead_of_guessing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / 'config.json'
+            config.write_text('{}')
+            with patch.object(status.subprocess, 'call') as run, patch('sys.stderr'):
+                with self.assertRaises(SystemExit):
+                    status.control(['--observer-config', str(config), 'goal', 'list'])
+                run.assert_not_called()
 
     def test_terminal_escape_removed(self):
         self.assertNotIn('\x1b',status.text('\x1b[2Junsafe'))

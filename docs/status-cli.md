@@ -63,3 +63,32 @@ Windows command line. Such a route may start an environment; keep it out of the
 default inventory with `include_in_all: false` and explicitly select that host
 when recovery inspection is needed. Host names, launchers and installation paths
 remain private configuration.
+
+
+## One command for overview and control
+
+`missioncontrol status` is a read-only overview across configured installations.
+`missioncontrol control goal list` invokes the explicitly configured controller;
+`missioncontrol control --target NAME goal list` selects a named controller.
+Controller operations can change state; their native authorization and safeguards
+still apply. The observer never guesses a controller from discovered databases.
+
+In your private observer JSON, add `default_controller` and `controllers`:
+
+```json
+{
+  "hosts": {"local": {"label": "Local"}},
+  "default_controller": "primary",
+  "controllers": {
+    "primary": {"command": ["/absolute/path/node", "/installed/package/dist/cli.js", "--config-dir", "/private/config"]},
+    "remote": {"ssh": "configured-ssh-host", "command": ["missioncontrol", "control", "--target", "local"]}
+  }
+}
+```
+
+Keep public source, private installation configuration, installed releases and
+runtime state separate. A worktree is a branch workspace, not another product.
+Legacy and current controllers can retain incompatible databases and active work;
+renaming folders or selecting a command is not a state migration. Compatibility
+aliases may remain until existing consumers are migrated. Platform qualification
+belongs to the exact installed release, not to the command name.
