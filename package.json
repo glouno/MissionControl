@@ -4,7 +4,8 @@
   "description": "Goal-based autonomous development control plane with isolated execution and encrypted human connectors.",
   "type": "module",
   "bin": {
-    "mission-control": "dist/cli.js"
+    "mission-control": "dist/cli.js",
+    "missioncontrol": "scripts/missioncontrol"
   },
   "files": [
     "dist/**/*.js",
@@ -20,7 +21,9 @@
     "publication.json",
     "assets/source.tar.gz",
     "assets/source-manifest.json",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "scripts/missioncontrol",
+    "scripts/install-status.sh"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

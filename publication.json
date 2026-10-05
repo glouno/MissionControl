@@ -43,7 +43,9 @@
     "package-lock.json",
     "assets/source.tar.gz",
     "assets/source-manifest.json",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "scripts/missioncontrol",
+    "scripts/install-status.sh"
   ],
   "excludedDirectories": [
     ".git",
