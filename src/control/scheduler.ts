@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { executionUsage } from "./usage.js";
 import { matchesGlob, join } from "node:path";
 import { writeFile } from "node:fs/promises";
@@ -10,7 +11,7 @@ import {
   HumanWait,
   type AgentBackend,
 } from "./backends.js";
-import { ControlError, validatePlan, type Claim, type Goal } from "./schema.js";
+import { ControlError, validatePlan, type Claim, type Goal, planSchema } from "./schema.js";
 import { instructionManifest } from "./projectContext.js";
 import {
   git,
@@ -554,6 +555,7 @@ export class Scheduler {
           claim,
           workspace,
           mode: "plan",
+          outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
           signal: controller.signal,
           onCheckpoint: async () => {},
           prompt: `Investigate this repository and decompose the goal into a bounded DAG. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,

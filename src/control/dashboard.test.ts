@@ -207,3 +207,56 @@ test("dashboard reports active truncation and allows bounded active continuation
     /cursor/,
   );
 });
+
+test("backlog projection is independent of goals and reports same-project dependency blockers", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mc-backlog-dashboard-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const db = new SqliteStore(join(root, "db")),
+    store = new ControlStore(db);
+  t.after(() => db.close());
+  for (const id of ["a", "b"])
+    store.setProject(
+      {
+        id,
+        name: id,
+        family: "synthetic",
+        enabled: true,
+        config: {
+          title: "Fixture",
+          description: "Fixture",
+          repoPath: root,
+          repository: { mode: "local", branch: "main" },
+          verificationCommands: ["true"],
+          backend: { kind: "fake" },
+        },
+      },
+      "operator",
+    );
+  const first = store.addBacklog({
+    projectId: "a",
+    title: "<img src=x>",
+    description: "Synthetic",
+    priority: 10,
+  });
+  const dependent = store.addBacklog({
+    projectId: "a",
+    title: "Dependent",
+    description: "Synthetic",
+    dependencies: [first.id],
+  });
+  store.addBacklog({
+    projectId: "b",
+    title: "Foreign",
+    description: "Synthetic",
+  });
+  const snapshot = dashboardSnapshot(store);
+  assert.equal(snapshot.goals.length, 0);
+  assert.equal(snapshot.tasks.length, 0);
+  assert.equal(snapshot.backlog.length, 3);
+  const projected = snapshot.backlog.find((e) => e.id === dependent.id)!;
+  assert.equal(projected.blockedReasons.length, 1);
+  assert.equal(projected.dependencyStatus[0].completed, false);
+  assert.equal(snapshot.backlog.filter((e) => e.projectId === "a").length, 2);
+  assert.equal(store.goals().length, 0);
+  assert.equal(store.attempts().length, 0);
+});

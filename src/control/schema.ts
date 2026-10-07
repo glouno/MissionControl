@@ -368,3 +368,47 @@ export const limitsSchema = z.object({
   providerWorkers: z.number().int().min(1).max(4),
   repositoryWorkers: z.number().int().min(1).max(4),
 });
+
+/** Backlog carries work text only; execution authority comes from project configuration. */
+export const backlogInputSchema = z
+  .object({
+    projectId: z.string().min(1).max(120),
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1).max(100000),
+    priority: z.number().int().min(-1000).max(1000).default(0),
+    dependencies: z.array(z.string().min(1).max(120)).max(100).default([]),
+    acceptanceCriteria: z
+      .array(z.string().trim().min(1).max(10000))
+      .max(100)
+      .default([]),
+  })
+  .strict();
+export const backlogRevisionSchema = z
+  .object({
+    projectId: z.string().min(1).max(120),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export const backlogUpdateSchema = backlogInputSchema
+  .omit({ projectId: true })
+  .extend({
+    priority: backlogInputSchema.shape.priority.removeDefault(),
+    dependencies: backlogInputSchema.shape.dependencies.removeDefault(),
+    acceptanceCriteria:
+      backlogInputSchema.shape.acceptanceCriteria.removeDefault(),
+  })
+  .partial()
+  .extend({
+    projectId: z.string().min(1).max(120),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export interface BacklogEntry extends z.output<typeof backlogInputSchema> {
+  id: string;
+  status: "backlog" | "archived" | "launched";
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  goalId: string | null;
+  launchedRevision: number | null;
+}

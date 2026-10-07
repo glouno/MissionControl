@@ -297,9 +297,34 @@ test("provider configuration resolves exact authentication/protocol and permits 
   );
   await writeFile(
     join(f.configDir, "projects/sample.json"),
-    JSON.stringify({ ...staged.projects[0], enabled: true }),
+    JSON.stringify({
+      ...staged.projects[0],
+      enabled: true,
+      config: {
+        ...staged.projects[0].config,
+        containerImage: "sha256:" + "a".repeat(64),
+      },
+    }),
   );
-  await assert.rejects(loadConfiguration(f.configDir), /qualification/);
+  await writeFile(
+    join(f.configDir, "config.json"),
+    JSON.stringify({
+      ...staged.settings,
+      authority: {
+        ...staged.settings.authority,
+        allowedProviders: ["cloud"],
+        allowedExecutionModes: ["isolated"],
+      },
+    }),
+  );
+  const recoverable = await loadConfiguration(f.configDir);
+  assert.throws(
+    () => effectiveGoal(recoverable, "sample", "Coding admission"),
+    /acceptance/,
+  );
+  assert.ok(
+    effectiveGoal(recoverable, "sample", "Maintenance inspection", {}, false),
+  );
 });
 
 test("execution limits reject absent real contracts, unsupported native providers and subscription widening", () => {

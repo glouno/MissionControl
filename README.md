@@ -65,3 +65,8 @@ For a concise read-only overview across configured local and remote installation
 [`missioncontrol status` companion](docs/status-cli.md) with
 `./scripts/install-status.sh`. It supports v1 goals and legacy missions without
 starting workers or changing state.
+
+Work also maintains a project backlog independently of admitted goals. Saving or
+archiving backlog does not start execution. Explicit launch uses the applied
+project configuration after dependency and admission checks; see the
+[compute-ready backlog workflow](docs/configuration.md#synthetic-project-backlog-and-explicit-launch).

@@ -101,6 +101,32 @@ export function dashboardSnapshot(
     activeTruncated,
     tasks,
     projects,
+    backlog: projects.flatMap((project) =>
+      store.listBacklog(project.id).map((entry) => {
+        const dependencies = entry.dependencies.map((id) => {
+          const dependency = store.getBacklog(id, project.id);
+          const status = dependency.goalId
+            ? store.getGoal(dependency.goalId).status
+            : dependency.status;
+          return {
+            id,
+            title: dependency.title,
+            status,
+            completed: status === "completed",
+          };
+        });
+        return {
+          ...entry,
+          dependencyStatus: dependencies,
+          blockedReasons: dependencies
+            .filter((dependency) => !dependency.completed)
+            .map(
+              (dependency) =>
+                `Dependency ${dependency.id} is ${dependency.status}`,
+            ),
+        };
+      }),
+    ),
     questions: store.questions(),
     schedules: store.schedules(),
     executions,

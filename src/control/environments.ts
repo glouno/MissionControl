@@ -407,6 +407,7 @@ export class DockerEnvironment implements ExecutionEnvironment {
 
     await this.docker([
       "create",
+      "--init",
       "--name",
       container,
       "--label",

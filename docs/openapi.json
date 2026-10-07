@@ -956,6 +956,863 @@
         }
       }
     },
+    "/api/v1/backlog": {
+      "get": {
+        "summary": "List durable project backlog; goals:read scope",
+        "responses": {
+          "200": {
+            "description": "Durable backlog record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "projectId": {
+                        "type": "string",
+                        "description": "Required project scope; stored entries and dependencies must belong to this project"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100000
+                      },
+                      "priority": {
+                        "type": "integer",
+                        "minimum": -1000,
+                        "maximum": 1000,
+                        "default": 0
+                      },
+                      "dependencies": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                      },
+                      "acceptanceCriteria": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 10000
+                        }
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "backlog",
+                          "archived",
+                          "launched"
+                        ]
+                      },
+                      "revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Required pending revision; matching launchedRevision replays original goal"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "goalId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "launchedRevision": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "projectId",
+                      "title",
+                      "description",
+                      "priority",
+                      "dependencies",
+                      "acceptanceCriteria",
+                      "status",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "goalId",
+                      "launchedRevision"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "backlog",
+                "archived",
+                "launched"
+              ]
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Add work without admitting a goal; goals:create scope",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "type": "string",
+                    "description": "Required project scope; stored entries and dependencies must belong to this project"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": -1000,
+                    "maximum": 1000,
+                    "default": 0
+                  },
+                  "dependencies": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                  },
+                  "acceptanceCriteria": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 10000
+                    }
+                  }
+                },
+                "required": [
+                  "projectId",
+                  "title",
+                  "description"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Durable backlog record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "projectId": {
+                      "type": "string",
+                      "description": "Required project scope; stored entries and dependencies must belong to this project"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100000
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "minimum": -1000,
+                      "maximum": 1000,
+                      "default": 0
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                    },
+                    "acceptanceCriteria": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "backlog",
+                        "archived",
+                        "launched"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Required pending revision; matching launchedRevision replays original goal"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "goalId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "launchedRevision": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "title",
+                    "description",
+                    "priority",
+                    "dependencies",
+                    "acceptanceCriteria",
+                    "status",
+                    "revision",
+                    "createdAt",
+                    "updatedAt",
+                    "goalId",
+                    "launchedRevision"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/backlog/{id}": {
+      "get": {
+        "summary": "Read a stored entry in project scope",
+        "responses": {
+          "200": {
+            "description": "Durable backlog record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "projectId": {
+                      "type": "string",
+                      "description": "Required project scope; stored entries and dependencies must belong to this project"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100000
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "minimum": -1000,
+                      "maximum": 1000,
+                      "default": 0
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                    },
+                    "acceptanceCriteria": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "backlog",
+                        "archived",
+                        "launched"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Required pending revision; matching launchedRevision replays original goal"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "goalId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "launchedRevision": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "title",
+                    "description",
+                    "priority",
+                    "dependencies",
+                    "acceptanceCriteria",
+                    "status",
+                    "revision",
+                    "createdAt",
+                    "updatedAt",
+                    "goalId",
+                    "launchedRevision"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Update pending work with revision concurrency control",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "type": "string",
+                    "description": "Required project scope; stored entries and dependencies must belong to this project"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100000
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": -1000,
+                    "maximum": 1000,
+                    "default": 0
+                  },
+                  "dependencies": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                  },
+                  "acceptanceCriteria": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 10000
+                    }
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Required pending revision; matching launchedRevision replays original goal"
+                  }
+                },
+                "required": [
+                  "projectId",
+                  "revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Durable backlog record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "projectId": {
+                      "type": "string",
+                      "description": "Required project scope; stored entries and dependencies must belong to this project"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100000
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "minimum": -1000,
+                      "maximum": 1000,
+                      "default": 0
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                    },
+                    "acceptanceCriteria": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "backlog",
+                        "archived",
+                        "launched"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Required pending revision; matching launchedRevision replays original goal"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "goalId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "launchedRevision": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "title",
+                    "description",
+                    "priority",
+                    "dependencies",
+                    "acceptanceCriteria",
+                    "status",
+                    "revision",
+                    "createdAt",
+                    "updatedAt",
+                    "goalId",
+                    "launchedRevision"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/backlog/{id}/archive": {
+      "post": {
+        "summary": "Archive pending work without execution",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "type": "string",
+                    "description": "Required project scope; stored entries and dependencies must belong to this project"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Required pending revision; matching launchedRevision replays original goal"
+                  }
+                },
+                "required": [
+                  "projectId",
+                  "revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Durable backlog record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "projectId": {
+                      "type": "string",
+                      "description": "Required project scope; stored entries and dependencies must belong to this project"
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100000
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "minimum": -1000,
+                      "maximum": 1000,
+                      "default": 0
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Same-project backlog IDs whose linked goals must complete before launch"
+                    },
+                    "acceptanceCriteria": {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "backlog",
+                        "archived",
+                        "launched"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Required pending revision; matching launchedRevision replays original goal"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "goalId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "launchedRevision": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "projectId",
+                    "title",
+                    "description",
+                    "priority",
+                    "dependencies",
+                    "acceptanceCriteria",
+                    "status",
+                    "revision",
+                    "createdAt",
+                    "updatedAt",
+                    "goalId",
+                    "launchedRevision"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/backlog/{id}/launch": {
+      "post": {
+        "summary": "Atomically admit and link one goal using current trusted configuration. 409: stale revision, archived entry, unmet dependency, disabled project or authority refusal. Matching launch revision replays original goal after restart.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "projectId": {
+                    "type": "string",
+                    "description": "Required project scope; stored entries and dependencies must belong to this project"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Required pending revision; matching launchedRevision replays original goal"
+                  }
+                },
+                "required": [
+                  "projectId",
+                  "revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful durable operation"
+          },
+          "400": {
+            "description": "Invalid input"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Insufficient scope, trust or browser CSRF"
+          },
+          "409": {
+            "description": "Revision, configuration or ownership conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/v1/goal-drafts": {
       "post": {
         "summary": "Validate a draft against applied project authority",

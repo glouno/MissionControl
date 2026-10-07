@@ -97,3 +97,71 @@ source commit, byte count and SHA-256 without checkout paths. Missing or altered
 source assets return unavailable; they are never replaced with a guessed URL.
 Source download is operator-authenticated and does not contain installation config,
 state, secrets or runtime reports.
+
+## Durable project backlog
+
+Backlog stores work for later review in the controller's SQLite database. Add,
+show, list, update and archive never create goals, jobs, leases, attempts or budget
+reservations and never invoke models. Operators can use all backlog operations;
+automation uses its existing `goals:read` permission for reads and `goals:create`
+for mutations, with its existing project restrictions and mutation idempotency
+requirement. Workers and connectors cannot access backlog.
+
+Create a private JSON input file such as `/private/backlog.json`:
+
+```json
+{
+  "title": "Improve validation",
+  "description": "Validate incoming requests before writing state.",
+  "priority": 10,
+  "dependencies": [],
+  "acceptanceCriteria": ["Invalid input leaves state unchanged"]
+}
+```
+
+All commands require explicit project scope; mutations of existing entries also
+require the current pending revision. Update input contains only fields to change.
+Higher numeric priority sorts first; priority does not schedule execution.
+
+```sh
+mission-control --config-dir /private/config backlog add --project synthetic \
+  --input /private/backlog.json --idempotency-key backlog-add-1
+mission-control --config-dir /private/config backlog list --project synthetic --status backlog
+mission-control --config-dir /private/config backlog show BACKLOG_ID --project synthetic
+mission-control --config-dir /private/config backlog update BACKLOG_ID --project synthetic \
+  --revision 1 --input /private/backlog-edit.json --idempotency-key backlog-edit-1
+mission-control --config-dir /private/config backlog launch BACKLOG_ID --project synthetic \
+  --revision 2 --idempotency-key backlog-launch-1
+# Alternatively archive a pending entry:
+mission-control --config-dir /private/config backlog archive OTHER_BACKLOG_ID --project synthetic \
+  --revision 1 --idempotency-key backlog-archive-1
+```
+
+HTTP uses `GET/POST /api/v1/backlog`, `GET/POST /api/v1/backlog/{id}` and
+`POST /api/v1/backlog/{id}/archive` or `/launch`. Reads require `projectId` in the
+query; writes require it in the JSON body. Archive and launch bodies contain only
+`projectId` and `revision`. Entries have stable IDs, timestamps, revisions and
+`backlog`, `archived` or `launched` status. Each update or status transition
+increments the revision. Archived and launched entries cannot be edited.
+
+Dependencies are existing backlog IDs in the same project. Unknown IDs,
+cross-project references, duplicates, self references and cycles are rejected.
+A dependency is satisfied only when it has launched and its linked goal is
+`completed`. Pending or archived work, and planning, running, paused, failed,
+cancelled or publishing goals do not satisfy it. Archiving a dependency does not
+release dependent work. Backlog dependencies are launch prerequisites, not goal
+task dependencies, and are never launched automatically.
+
+Explicit launch rechecks the pending revision, dependencies, currently applied
+trusted project configuration, project enabled state and installation authority.
+Input cannot supply provider settings or execution flags. Work text and acceptance
+criteria become the goal description; execution settings come from the project.
+Configuration refusal and unmet dependencies leave the entry pending. Goal
+creation, accounting, planning job and backlog goal link commit together.
+
+Launch returns the admitted goal and persists `goalId` and `launchedRevision` on
+the entry. Retrying the same launched revision returns that original goal, even
+after restart or a later configuration change, without new admission or spending.
+Use the original pending revision for replay, not the incremented entry revision.
+A different revision conflicts (409); archived entries cannot launch. Launch
+replay does not revalidate already admitted work. New launches always revalidate.

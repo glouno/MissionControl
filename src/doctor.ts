@@ -1,3 +1,4 @@
+import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { spawnSync } from "node:child_process";
 import { statfs } from "node:fs/promises";
 import type { LoadedConfiguration } from "./config.js";
@@ -177,10 +178,20 @@ export async function diagnose(
             "Wait for or recover the dedicated authentication writer",
           );
       }
-      fail(
-        "subscription_unqualified",
-        "Complete private login/refresh/restart/expiry and coding qualification; production admission is closed",
-      );
+      try {
+        if (!environment)
+          throw Error("Dedicated authentication is unavailable");
+        assertSubscriptionQualification(
+          config.settings.stateDir,
+          effectiveGoal(config, p.id, "Readiness inspection"),
+          environment,
+        );
+      } catch {
+        fail(
+          "subscription_unqualified",
+          "Complete private login/refresh/restart/expiry and controller qualification; admission remains closed without matching evidence",
+        );
+      }
     }
     return {
       id: p.id,

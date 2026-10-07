@@ -71,8 +71,7 @@ execution, mismatched native subscription harnesses and subscription dollar
 policies. Metered limits cannot widen the provider's policy. Authentication
 references name controller capabilities or dedicated environments, never contain
 credentials. Admitted contracts remain in immutable goal/attempt snapshots.
-The native subscription contract is prepared, but coding admission remains
-explicitly refused pending runtime integration and live qualification.
+Native subscription admission requires matching [private acceptance evidence](subscriptions.md). Missing or stale evidence keeps admission closed.
 
 Provider authentication must reference its own host runtime provider ID (metered)
 or a matching dedicated authentication environment (subscription). Configuration
@@ -117,3 +116,52 @@ paths are omitted; explicit example creation uses an external disposable project
 Run validation after editing references and apply changes deliberately. Revoking
 installation authority does not rewrite admitted goal history or grant a broader
 replacement configuration.
+
+## Synthetic project backlog and explicit launch
+
+Use `init --example` for a disposable credential-free project, or reference a
+private project JSON file in `config.json` under `files.projects`:
+
+```json
+{
+  "id": "synthetic",
+  "name": "Synthetic backlog",
+  "enabled": true,
+  "executionMode": "fake",
+  "config": {
+    "repoPath": "/absolute/private/synthetic-repository",
+    "repository": { "mode": "local", "branch": "main" },
+    "verificationCommands": ["test -f implement.txt"],
+    "maxWorkers": 1,
+    "maxAttempts": 2,
+    "policy": { "targetBranch": "main", "publish": false, "autoMerge": false }
+  }
+}
+```
+
+Initialize and commit the disposable Git repository first. Validate with
+`mission-control --config-dir /private/config config validate`, then apply with
+`config apply` against the running controller. Initial startup applies the first
+configuration; subsequent file edits require explicit application. Keep all
+configuration and state outside the checkout.
+
+Projects shows informational execution readiness; Work shows it alongside the
+selected project's backlog. Readiness does not authenticate a provider, reserve
+budget or admit work. The server checks current applied configuration at launch.
+Saving a record creates no goal, tasks, attempts or execution jobs. A launched
+goal inherits project execution, checks, limits and policy, rather than settings
+supplied by the caller. Disabled projects cannot launch.
+
+In Work, select a project and apply filters. Add or edit title, description,
+priority, dependency IDs and acceptance criteria; use one line per dependency or
+criterion. Save retains inert work. Archive retires a pending record. **Launch
+backlog record** is the separate admission action; inspect its linked goal for
+checks and attempts. Dependency records must belong to that project and their
+linked goals must complete before dependent launch. Refresh after a revision
+conflict, inspect the latest revision and reconcile your edit before retrying.
+See [API and CLI backlog commands](agents.md#durable-project-backlog).
+
+`npm test` includes disposable HTTP/CLI backlog launch acceptance through the
+real scheduler and fake provider. It needs no credentials or additional packages.
+`node scripts/backlog-acceptance.mjs` runs that fixture after a build. The optional
+browser fixture is `scripts/dashboard-acceptance.mjs`; Playwright remains external.

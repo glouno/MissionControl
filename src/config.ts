@@ -1,3 +1,4 @@
+import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { readFile, realpath, lstat, mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname, join, isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -527,7 +528,7 @@ export async function loadConfiguration(
     }
   }
   for (const project of projects)
-    effectiveGoal(loaded, project.id, "Configuration validation");
+    effectiveGoal(loaded, project.id, "Configuration validation", {}, false);
   for (const schedule of schedules)
     if (!projects.some((p) => p.id === schedule.projectId))
       throw new Error(`Unknown scheduled project ${schedule.projectId}`);
@@ -567,6 +568,7 @@ export function effectiveGoal(
   projectId: string,
   description: string,
   overrides: Partial<GoalInput> = {},
+  requireQualification = true,
 ): z.output<typeof goalSchema> {
   const p = config.projects.find((p) => p.id === projectId);
   if (!p) throw new Error(`Unknown project ${projectId}`);
@@ -633,9 +635,11 @@ export function effectiveGoal(
         throw Error(
           "Subscription requires a configured dedicated authentication environment",
         );
-      if (p.enabled && provider?.enabled)
-        throw Error(
-          "Subscription coding qualification is incomplete; admission remains disabled",
+      if (requireQualification && p.enabled && provider?.enabled)
+        assertSubscriptionQualification(
+          config.settings.stateDir,
+          baseline,
+          auth,
         );
     }
     if (
