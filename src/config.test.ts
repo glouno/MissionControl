@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -527,6 +527,8 @@ test("credential references enforce private files and state never defaults into 
     "synthetic-token",
   );
   await writeFile(join(f.secrets, "open"), "synthetic", { mode: 0o644 });
+  // Creation mode is filtered by umask; ensure this fixture is non-private.
+  await chmod(join(f.secrets, "open"), 0o644);
   await assert.rejects(
     readSecret({ kind: "file", path: "open" }, f.secrets),
     /private/,
