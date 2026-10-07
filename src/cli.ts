@@ -97,7 +97,7 @@ const HELP = `mission-control — MissionControl v1
   goal create --project ID --input FILE
   goal list|inspect|pause|resume|cancel ID
   schedule list
-  question list|answer ID --option ID
+  question list|answer ID --option ID [--explanation TEXT]
   state usage | state reconcile-usage ATTEMPT_ID --input FILE
   mcp
 Configuration, credentials and state live outside the source checkout.
@@ -868,6 +868,7 @@ export async function main(args = process.argv.slice(2)) {
       await client.request(`/questions/${id}/answer`, "POST", {
         option: flags.option,
         revision: q.revision,
+        ...(flags.explanation ? { explanation: flags.explanation } : {}),
       }),
     );
     return;

@@ -140,6 +140,7 @@ export function dashboardSnapshot(
       "SELECT id,task_id,commit_sha,kind,passed,generation,created_at FROM control_evidence ORDER BY created_at DESC LIMIT 2000",
     ),
     attempts: store.attempts(undefined, 500),
+    ownership: store.ownership(500),
     deliveries: store.db.query(
       "SELECT connector_id,status,count(*) AS count,MIN(due_at) AS oldest_due_at FROM connector_deliveries GROUP BY connector_id,status",
     ),
@@ -151,21 +152,27 @@ export function dashboardSnapshot(
         id: worker.id,
         lastSeen: worker.last_seen,
         capabilities: JSON.parse(worker.capabilities),
-        leases: store.db.query<{
-          taskId: string;
-          goalId: string;
-          generation: number;
-          leaseUntil: number;
-          status: string;
-        }>(
-          `SELECT id taskId,goal_id goalId,generation,lease_until leaseUntil,status FROM control_tasks WHERE worker_id=${sql(worker.id)} AND lease_until IS NOT NULL ORDER BY lease_until DESC LIMIT 100`,
-        ),
+        leases: store.db
+          .query<{
+            taskId: string;
+            goalId: string;
+            generation: number;
+            leaseUntil: number;
+            status: string;
+          }>(
+            `SELECT id taskId,goal_id goalId,generation,lease_until leaseUntil,status FROM control_tasks WHERE worker_id=${sql(worker.id)} AND lease_until IS NOT NULL ORDER BY lease_until DESC LIMIT 100`,
+          )
+          .map((lease) => ({
+            ...lease,
+            authority: lease.leaseUntil > store.clock() ? "live" : "expired",
+          })),
       })),
     connectors: connectorHealth(store, connectors),
     health: {
       configuration: store.setting("configuration"),
       storage: store.setting("storage-maintenance-preview"),
       maintenance: store.setting("instance-maintenance") ?? false,
+      startupRecoveryFault: store.setting("startup-recovery-fault") ?? null,
       qualification: "alpha_unqualified",
     },
   };

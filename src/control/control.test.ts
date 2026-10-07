@@ -132,6 +132,15 @@ test("claims enforce dependencies, global slots, resources and stale generations
     /lease/,
   );
   f.store.reconcileExpired(c.task.id, c.generation);
+  assert.equal(f.store.claimNextTask("new-owner"), null);
+  const question = f.store.questions()[0];
+  f.store.answer(
+    question.id,
+    "inspect",
+    question.revision,
+    "operator",
+    "Confirmed synthetic worker and resource stopped",
+  );
   const recovered = f.store.claimNextTask("new-owner")!;
   assert.equal(recovered.generation, c.generation + 1);
   assert.throws(

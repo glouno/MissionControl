@@ -218,3 +218,26 @@ test("backlog revision errors and expired or revoked sessions are visible; loadi
   await assert.rejects(pending, /Synthetic loading error/);
   assert.equal(loading.elements.view.attributes["aria-busy"], "false");
 });
+
+test("interrupted ownership answers require evidence and send it with the exact decision revision", async () => {
+  const h = harness();
+  h.evaluate(
+    `decisions(el('view'),[{id:'recovery',goalId:'goal',revision:3,request:{question:'Inspect stopped work',reason:'Interrupted execution',recoveryAttemptId:'task:2',options:[{id:'inspect',label:'Resolve ownership'},{id:'defer',label:'Keep pending'}]}}])`,
+  );
+  await click(h, "Resolve ownership");
+  assert.equal(h.requests.length, 0);
+  assert.match(h.elements.error.textContent, /confirmed stopped/);
+  const evidence = descendants(h.elements.view).find(
+    (e) => e.tag === "textarea",
+  )!;
+  evidence.value = "Owned runtime stopped; retained effects inspected";
+  await click(h, "Resolve ownership");
+  const answer = h.requests.find(
+    (r) => r.path === "/api/v1/questions/recovery/answer",
+  )!;
+  assert.deepEqual(JSON.parse(String(answer.options.body)), {
+    option: "inspect",
+    revision: 3,
+    explanation: evidence.value,
+  });
+});

@@ -195,6 +195,56 @@ test("controller subscription attempts are fenced and recovered without a budget
     (e: any) => e.code === "subscription_unqualified",
   );
 });
+test("paused subscription ownership resolution retains identity fencing and unknown token usage across restart", async (t) => {
+  const { store, goal, db } = await fixture(t, 3, 100);
+  const claim = store.claimNextTask("worker")!;
+  store.transition(claim.task.id, claim.workerId, claim.generation, "running");
+  store.checkpoint(claim.task.id, claim.workerId, claim.generation, {
+    summary: "Synthetic partial",
+    usage: { kind: "subscription", status: "reported", inputTokens: 2 },
+  });
+  store.setGoalState(
+    goal.id,
+    "paused",
+    store.getGoal(goal.id).revision,
+    "operator",
+  );
+  const revision = store.getGoal(goal.id).revision;
+  store.fenceStartup();
+  assert.equal(store.subscriptionCapacity(goal.id)?.activeIdentityWriter, true);
+  assert.throws(() => store.reserveOperation(goal.id, "review"), /identity/);
+  const q = store.questions()[0];
+  store.answer(
+    q.id,
+    "inspect",
+    q.revision,
+    "operator",
+    "Confirmed synthetic identity writer and execution stopped",
+  );
+  const restartedDb = new SqliteStore(db.path),
+    restarted = new ControlStore(restartedDb);
+  t.after(() => restartedDb.close());
+  restarted.fenceStartup();
+  restarted.finishStartupRecovery();
+  restarted.fenceStartup();
+  restarted.finishStartupRecovery();
+  assert.equal(restarted.getGoal(goal.id).status, "paused");
+  assert.equal(restarted.getGoal(goal.id).revision, revision);
+  assert.equal(restarted.attempts(goal.id)[0].usage.status, "unknown");
+  assert.equal(restarted.attempts(goal.id)[0].checkpoint.usage.inputTokens, 2);
+  assert.equal(
+    restarted.subscriptionCapacity(goal.id)?.activeIdentityWriter,
+    false,
+  );
+  assert.equal(restarted.subscriptionCapacity(goal.id)?.unknownAttempts, 1);
+  assert.equal(
+    restarted.subscriptionCapacity(goal.id)?.admissionAllowed,
+    false,
+  );
+  assert.equal(db.one("SELECT id FROM control_budgets"), null);
+  assert.equal(restarted.claimNextTask("duplicate"), null);
+  assert.throws(() => restarted.reserveOperation(goal.id, "review"), /usage/);
+});
 test("subscription reported token totals stop new invocation admission at the cap", async (t) => {
   const { store, goal } = await fixture(t, 3, 5);
   const first = store.reserveOperation(goal.id, "plan");
