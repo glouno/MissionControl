@@ -32,7 +32,7 @@ const relayScript = fileURLToPath(
   new URL("../../environments/worker/subscription-egress.py", import.meta.url),
 );
 // Proxy capability travels over stdin, never in Docker CLI arguments/configuration.
-const runner = `import json,os,sys\nline=b''\nwhile not line.endswith(b'\\n'):line+=os.read(0,1)\nc=json.loads(line)\nos.umask(0o077)\nos.makedirs('/tmp/mc-home',mode=0o700,exist_ok=True)\ne={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':'/tmp/mc-home','LANG':'C.UTF-8','TERM':'dumb','HTTPS_PROXY':c['proxy'],'HTTP_PROXY':c['proxy'],'https_proxy':c['proxy'],'http_proxy':c['proxy'],'NO_PROXY':'','no_proxy':'','NODE_USE_ENV_PROXY':'1','DO_NOT_TRACK':'1','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'}\ne.update(c['environment'])\nif c.get('outputSchema'):\n with open('/tmp/mc-output-schema.json','w') as f:json.dump(c['outputSchema'],f)\nos.chdir(c.get('workingDirectory','/tmp/mc-home'))\nos.execvpe(c['argv'][0],c['argv'],e)\n`;
+const runner = `import json,os,sys\nline=b''\nwhile not line.endswith(b'\\n'):line+=os.read(0,1)\nc=json.loads(line)\nimport socket,time\nfrom urllib.parse import urlsplit\nproxy=urlsplit(c['proxy'])\ndeadline=time.monotonic()+10\nwhile True:\n try:\n  with socket.create_connection((proxy.hostname,proxy.port),timeout=.5):pass\n  break\n except OSError:\n  if time.monotonic()>=deadline:raise RuntimeError('Private egress proxy did not become ready') from None\n  time.sleep(.1)\nos.umask(0o077)\nos.makedirs('/tmp/mc-home',mode=0o700,exist_ok=True)\ne={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':'/tmp/mc-home','LANG':'C.UTF-8','TERM':'dumb','HTTPS_PROXY':c['proxy'],'HTTP_PROXY':c['proxy'],'https_proxy':c['proxy'],'http_proxy':c['proxy'],'NO_PROXY':'','no_proxy':'','NODE_USE_ENV_PROXY':'1','DO_NOT_TRACK':'1','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'}\ne.update(c['environment'])\nif c.get('outputSchema'):\n with open('/tmp/mc-output-schema.json','w') as f:json.dump(c['outputSchema'],f)\nos.chdir(c.get('workingDirectory','/tmp/mc-home'))\nos.execvpe(c['argv'][0],c['argv'],e)\n`;
 export function authInvocation(
   config: AuthEnvironment,
   action: "login" | "status",
@@ -303,6 +303,7 @@ export class AuthRuntime {
       }
       await this.docker([
         "create",
+        "--init",
         "--name",
         run.worker,
         ...Object.entries(this.labels(run)).flatMap(([k, v]) => [

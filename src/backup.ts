@@ -29,7 +29,7 @@ const manifestSchema = z
   .object({
     format: z.literal("missioncontrol-backup-v1"),
     applicationVersion: z.string(),
-    schemaVersion: z.number().int().min(1).max(6),
+    schemaVersion: z.number().int().min(1).max(7),
     instanceId: z.string(),
     createdAt: z.string(),
     complete: z.boolean(),

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -297,9 +297,34 @@ test("provider configuration resolves exact authentication/protocol and permits 
   );
   await writeFile(
     join(f.configDir, "projects/sample.json"),
-    JSON.stringify({ ...staged.projects[0], enabled: true }),
+    JSON.stringify({
+      ...staged.projects[0],
+      enabled: true,
+      config: {
+        ...staged.projects[0].config,
+        containerImage: "sha256:" + "a".repeat(64),
+      },
+    }),
   );
-  await assert.rejects(loadConfiguration(f.configDir), /qualification/);
+  await writeFile(
+    join(f.configDir, "config.json"),
+    JSON.stringify({
+      ...staged.settings,
+      authority: {
+        ...staged.settings.authority,
+        allowedProviders: ["cloud"],
+        allowedExecutionModes: ["isolated"],
+      },
+    }),
+  );
+  const recoverable = await loadConfiguration(f.configDir);
+  assert.throws(
+    () => effectiveGoal(recoverable, "sample", "Coding admission"),
+    /acceptance/,
+  );
+  assert.ok(
+    effectiveGoal(recoverable, "sample", "Maintenance inspection", {}, false),
+  );
 });
 
 test("execution limits reject absent real contracts, unsupported native providers and subscription widening", () => {
@@ -502,6 +527,8 @@ test("credential references enforce private files and state never defaults into 
     "synthetic-token",
   );
   await writeFile(join(f.secrets, "open"), "synthetic", { mode: 0o644 });
+  // Creation mode is filtered by umask; ensure this fixture is non-private.
+  await chmod(join(f.secrets, "open"), 0o644);
   await assert.rejects(
     readSecret({ kind: "file", path: "open" }, f.secrets),
     /private/,

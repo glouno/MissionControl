@@ -1,3 +1,4 @@
+import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { createHash, randomUUID } from "node:crypto";
 import { availableParallelism, totalmem } from "node:os";
 import { projectIdentity, overlapEvidence } from "./projectContext.js";
@@ -19,6 +20,10 @@ import {
 } from "./usage.js";
 import { enqueueDeliveries } from "./human.js";
 import {
+  backlogInputSchema,
+  backlogUpdateSchema,
+  backlogRevisionSchema,
+  type BacklogEntry,
   checkpointSchema,
   backendSchema,
   scheduleSchema,
@@ -38,6 +43,14 @@ import {
 
 const id = (kind: string) => `${kind}_${randomUUID().replaceAll("-", "")}`;
 interface Row extends Record<string, unknown> {}
+interface RecoveryTask {
+  taskId: string;
+  generation: number;
+}
+interface StartupRecovery {
+  tasks: (RecoveryTask | string)[];
+  operations: string[];
+}
 export interface Principal {
   actor: string;
   role: "operator" | "worker" | "connector" | "automation";
@@ -54,6 +67,7 @@ export class ControlStore {
   constructor(
     readonly db: SqliteStore,
     readonly clock: () => number = Date.now,
+    readonly qualifySubscription?: (config: GoalInput) => void,
   ) {
     this.migrate();
   }
@@ -65,7 +79,7 @@ export class ControlStore {
     const tables = this.db.query<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     );
-    if (version > 6)
+    if (version > 7)
       throw new Error("Database schema is newer than this release");
     if (version === 0 && tables.length)
       throw new Error(
@@ -93,6 +107,7 @@ export class ControlStore {
       this.migrateStatePaths();
       this.migrateAttempts();
       this.migrateUsageReconciliation();
+      this.migrateBacklog();
       return;
     }
     this.db.transaction(() => {
@@ -132,6 +147,203 @@ export class ControlStore {
     this.migrateStatePaths();
     this.migrateAttempts();
     this.migrateUsageReconciliation();
+    this.migrateBacklog();
+  }
+  private migrateBacklog() {
+    if (
+      Number(
+        this.db.one<{ user_version: number }>("PRAGMA user_version")
+          ?.user_version,
+      ) >= 7
+    )
+      return;
+    this.db.transaction(() =>
+      this.db.exec(`
+      CREATE TABLE control_backlog(
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL CHECK(length(title)>0),
+        description TEXT NOT NULL CHECK(length(description)>0), priority INTEGER NOT NULL,
+        dependencies TEXT NOT NULL CHECK(json_valid(dependencies) AND json_type(dependencies)='array'),
+        acceptance_criteria TEXT NOT NULL CHECK(json_valid(acceptance_criteria) AND json_type(acceptance_criteria)='array'),
+        status TEXT NOT NULL CHECK(status IN ('backlog','archived','launched')),
+        revision INTEGER NOT NULL CHECK(revision>0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        goal_id TEXT UNIQUE REFERENCES control_goals(id), launched_revision INTEGER,
+        CHECK((status='launched' AND goal_id IS NOT NULL AND launched_revision IS NOT NULL AND launched_revision>0) OR
+              (status!='launched' AND goal_id IS NULL AND launched_revision IS NULL))
+      );
+      CREATE INDEX control_backlog_project ON control_backlog(project_id,status,priority,created_at,id);
+      INSERT INTO schema_migrations VALUES(7,strftime('%Y-%m-%dT%H:%M:%fZ','now')); PRAGMA user_version=7;
+    `),
+    );
+  }
+  getBacklog(entryId: string, projectId: string): BacklogEntry {
+    const r = this.db.one<Row>(
+      `SELECT * FROM control_backlog WHERE id=${sql(entryId)}`,
+    );
+    if (!r) throw new ControlError("not_found", "Backlog entry not found", 404);
+    if (r.project_id !== projectId)
+      throw new ControlError(
+        "forbidden",
+        "Backlog entry is outside project scope",
+        403,
+      );
+    return {
+      id: String(r.id),
+      projectId: String(r.project_id),
+      title: String(r.title),
+      description: String(r.description),
+      priority: Number(r.priority),
+      dependencies: JSON.parse(String(r.dependencies)),
+      acceptanceCriteria: JSON.parse(String(r.acceptance_criteria)),
+      status: r.status as BacklogEntry["status"],
+      revision: Number(r.revision),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at),
+      goalId: r.goal_id as string | null,
+      launchedRevision:
+        r.launched_revision === null ? null : Number(r.launched_revision),
+    };
+  }
+  listBacklog(projectId: string, status?: BacklogEntry["status"]) {
+    if (
+      !projectId ||
+      (status && !["backlog", "archived", "launched"].includes(status))
+    )
+      throw new ControlError("input", "Project and valid status required", 400);
+    return this.db
+      .query<Row>(
+        `SELECT id FROM control_backlog WHERE project_id=${sql(projectId)} ${status ? `AND status=${sql(status)}` : ""} ORDER BY priority DESC,created_at,id`,
+      )
+      .map((r) => this.getBacklog(String(r.id), projectId));
+  }
+  private validateBacklogDependencies(
+    entry: Pick<BacklogEntry, "projectId" | "dependencies">,
+    entryId?: string,
+  ) {
+    if (new Set(entry.dependencies).size !== entry.dependencies.length)
+      throw new ControlError("dependency", "Duplicate dependencies", 400);
+    const visit = (dependency: string, seen: Set<string>) => {
+      if (dependency === entryId)
+        throw new ControlError("dependency", "Dependency cycle", 409);
+      if (seen.has(dependency)) return;
+      seen.add(dependency);
+      const other = this.getBacklog(dependency, entry.projectId);
+      for (const next of other.dependencies) visit(next, seen);
+    };
+    for (const dependency of entry.dependencies) visit(dependency, new Set());
+  }
+  addBacklog(input: unknown) {
+    const entry = backlogInputSchema.parse(input);
+    return this.db.transaction(() => {
+      if (!this.projects().some((p) => p.id === entry.projectId))
+        throw new ControlError("project", "Unknown project", 409);
+      this.validateBacklogDependencies(entry);
+      const entryId = id("backlog"),
+        now = this.now();
+      this.db.exec(
+        `INSERT INTO control_backlog VALUES(${sql(entryId)},${sql(entry.projectId)},${sql(entry.title)},${sql(entry.description)},${sql(entry.priority)},${this.encode(entry.dependencies)},${this.encode(entry.acceptanceCriteria)},'backlog',1,${sql(now)},${sql(now)},NULL,NULL)`,
+      );
+      return this.getBacklog(entryId, entry.projectId);
+    });
+  }
+  updateBacklog(entryId: string, input: unknown) {
+    const patch = backlogUpdateSchema.parse(input);
+    return this.db.transaction(() => {
+      const previous = this.getBacklog(entryId, patch.projectId);
+      this.pendingBacklog(previous, patch.revision);
+      const {
+        id: _id,
+        status: _status,
+        revision: _revision,
+        createdAt: _created,
+        updatedAt: _updated,
+        goalId: _goal,
+        launchedRevision: _launch,
+        ...fields
+      } = previous;
+      const { revision: _requested, ...changes } = patch;
+      const entry = backlogInputSchema.parse({ ...fields, ...changes });
+      this.validateBacklogDependencies(entry, entryId);
+      this.db.exec(
+        `UPDATE control_backlog SET title=${sql(entry.title)},description=${sql(entry.description)},priority=${sql(entry.priority)},dependencies=${this.encode(entry.dependencies)},acceptance_criteria=${this.encode(entry.acceptanceCriteria)},revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entryId)}`,
+      );
+      return this.getBacklog(entryId, entry.projectId);
+    });
+  }
+  private pendingBacklog(entry: BacklogEntry, revision: number) {
+    if (entry.revision !== revision)
+      throw new ControlError("revision", "Backlog revision changed", 409);
+    if (entry.status !== "backlog")
+      throw new ControlError("status", "Backlog entry is not pending", 409);
+  }
+  archiveBacklog(entryId: string, input: unknown) {
+    const request = backlogRevisionSchema.parse(input);
+    return this.db.transaction(() => {
+      const entry = this.getBacklog(entryId, request.projectId);
+      this.pendingBacklog(entry, request.revision);
+      this.db.exec(
+        `UPDATE control_backlog SET status='archived',revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entryId)}`,
+      );
+      return this.getBacklog(entryId, request.projectId);
+    });
+  }
+  launchBacklog(
+    entryId: string,
+    input: unknown,
+    actor = "operator",
+    validate?: (input: GoalInput) => GoalInput,
+  ): Goal {
+    const request = backlogRevisionSchema.parse(input);
+    return this.db.transaction(() => {
+      const entry = this.getBacklog(entryId, request.projectId);
+      if (entry.status === "launched") {
+        if (entry.launchedRevision !== request.revision)
+          throw new ControlError("revision", "Launch revision differs", 409);
+        return this.getGoal(entry.goalId!);
+      }
+      this.pendingBacklog(entry, request.revision);
+      this.validateBacklogDependencies(entry, entry.id);
+      for (const dep of entry.dependencies) {
+        const other = this.getBacklog(dep, entry.projectId);
+        if (
+          !other.goalId ||
+          other.status !== "launched" ||
+          this.getGoal(other.goalId).status !== "completed"
+        )
+          throw new ControlError(
+            "dependency",
+            "Dependency goal is not completed",
+            409,
+          );
+      }
+      const snapshot = this.setting("configuration-snapshot") as
+        LoadedConfiguration | undefined;
+      if (!snapshot)
+        throw new ControlError(
+          "configuration",
+          "Trusted project configuration is unavailable",
+          409,
+        );
+      if (!snapshot.projects.some((p) => p.id === entry.projectId && p.enabled))
+        throw new ControlError(
+          "project",
+          "Project is disabled or unknown",
+          409,
+        );
+      const description = `${entry.title}\n\n${entry.description}${entry.acceptanceCriteria.length ? "\n\nAcceptance criteria:\n" + entry.acceptanceCriteria.map((c) => "- " + c).join("\n") : ""}`;
+      let config: ReturnType<typeof effectiveGoal>;
+      try {
+        config = effectiveGoal(snapshot, entry.projectId, description);
+        if (validate) config = this.validateGoalConfiguration(validate(config));
+      } catch (error) {
+        if (error instanceof ControlError) throw error;
+        throw new ControlError("configuration", (error as Error).message, 409);
+      }
+      const goal = this.createGoal(config, actor);
+      this.db.exec(
+        `UPDATE control_backlog SET status='launched',goal_id=${sql(goal.id)},launched_revision=${sql(entry.revision)},revision=revision+1,updated_at=${sql(this.now())} WHERE id=${sql(entry.id)}`,
+      );
+      return goal;
+    });
   }
   private migrateUsageReconciliation() {
     if (
@@ -703,11 +915,16 @@ export class ControlStore {
         config.backend,
         config.executionContract,
       );
-      if (contract.usagePolicy.kind === "subscription")
+      if (
+        contract.usagePolicy.kind === "subscription" &&
+        !this.qualifySubscription
+      )
         throw new ControlError(
           "subscription_unqualified",
           "Subscription coding admission requires qualified isolated execution",
         );
+      if (contract.usagePolicy.kind === "subscription")
+        this.qualifySubscription!(config);
       if (
         contract.usagePolicy.kind === "metered" &&
         (config.maxCostUsd > contract.usagePolicy.maxCostUsd ||
@@ -727,6 +944,7 @@ export class ControlStore {
         "Automatic merge requires publication and explicit production exclusion",
       );
     if (
+      config.executionContract?.usagePolicy.kind !== "subscription" &&
       ["azure", "bedrock", "claude-code"].includes(config.backend.kind) &&
       (config.maxCostUsd <= 0 || config.estimatePerRunUsd <= 0)
     )
@@ -963,6 +1181,16 @@ export class ControlStore {
       for (const row of candidates) {
         const task = this.getTask(String(row.id)),
           goal = this.getGoal(task.goalId);
+        if (
+          task.workerId ||
+          this.db.one(
+            `SELECT id FROM control_attempts WHERE task_id=${sql(task.id)} AND outcome IN ('active','recovering') LIMIT 1`,
+          ) ||
+          this.db.one(
+            `SELECT id FROM control_questions WHERE task_id=${sql(task.id)} AND status='pending' AND json_extract(request,'$.recoveryAttemptId') IS NOT NULL LIMIT 1`,
+          )
+        )
+          continue;
         if (!this.coordinate(goal)) continue;
         if (
           occupied.reduce((n, t) => n + t.spec.cpuUnits, 0) +
@@ -1200,34 +1428,130 @@ export class ControlStore {
       usage ?? executionUsage({ costUsd: known }, goal.config),
     );
   }
+  private recoveryTasks(prior?: StartupRecovery): RecoveryTask[] {
+    return (prior?.tasks ?? []).map((entry) => {
+      if (typeof entry !== "string") return entry;
+      // Legacy startup wrote intent after marking admissions recovering. An
+      // active admission could be a newer claim and cannot identify that intent.
+      const attempt = this.db.one<{ generation: number }>(
+        `SELECT generation FROM control_attempts WHERE task_id=${sql(entry)} AND outcome='recovering' ORDER BY generation LIMIT 1`,
+      );
+      if (!attempt)
+        throw new ControlError(
+          "stale_recovery",
+          "Legacy recovery requires ownership inspection",
+          409,
+        );
+      return { taskId: entry, generation: attempt.generation };
+    });
+  }
+  private fenceInterruptedTask(task: Task, actor: string) {
+    const attemptId = `${task.id}:${task.generation}`;
+    const attempt = this.db.one<{ outcome: string }>(
+      `SELECT outcome FROM control_attempts WHERE id=${sql(attemptId)}`,
+    );
+    if (!attempt || !["active", "recovering"].includes(attempt.outcome))
+      throw new ControlError(
+        "stale_recovery",
+        "Task has no open interrupted admission",
+        409,
+      );
+    if (attempt.outcome === "active") {
+      const config = this.getGoal(task.goalId).config;
+      const unknown =
+        ["claimed", "running"].includes(task.status) &&
+        config.backend.kind !== "fake";
+      this.db.exec(
+        `UPDATE control_attempts SET outcome='recovering'${unknown ? `,usage=${this.encode(executionUsage({}, config))}` : ""} WHERE id=${sql(attemptId)}`,
+      );
+      this.event(
+        "OWNERSHIP_FENCED",
+        actor,
+        { generation: task.generation, attemptId },
+        task.goalId,
+        task.id,
+      );
+    }
+    if (["accepted", "cancelled", "superseded"].includes(task.status)) return;
+    if (task.status !== "waiting_human")
+      this.db.exec(
+        `UPDATE control_tasks SET status='waiting_human',retry_at=NULL,revision=revision+1 WHERE id=${sql(task.id)}`,
+      );
+    if (
+      this.db.one(
+        `SELECT id FROM control_questions WHERE task_id=${sql(task.id)} AND json_extract(request,'$.recoveryAttemptId')=${sql(attemptId)} LIMIT 1`,
+      )
+    )
+      return;
+    this.requestTaskRecovery(task, attemptId, actor);
+  }
+  private requestTaskRecovery(task: Task, attemptId: string, actor: string) {
+    const qid = id("question"),
+      request = questionSchema.parse({
+        question: "Inspect interrupted work before a fresh attempt?",
+        reason:
+          "Execution authority expired or was fenced. Resource ownership is retained until cleanup is confirmed. Inspect source/checkpoints, ambiguous tool effects and unreported usage. If ownership is still retained, explain how execution and owned resources were stopped before authorizing a fresh attempt. The goal remains paused if already paused.",
+        category: "policy",
+        recoveryAttemptId: attemptId,
+        options: [
+          { id: "inspect", label: "Inspected; authorize a fresh attempt" },
+          { id: "defer", label: "Keep pending" },
+        ],
+      });
+    this.db.exec(
+      `INSERT INTO control_questions VALUES(${sql(qid)},${sql(task.goalId)},${sql(task.id)},'pending',${this.encode(request)},NULL,1,${sql(this.now())})`,
+    );
+    this.outbox("question", {
+      questionId: qid,
+      revision: 1,
+      goalId: task.goalId,
+      request,
+    });
+    this.event(
+      "INTERRUPTED_OWNERSHIP_REVIEW",
+      actor,
+      { attemptId, questionId: qid },
+      task.goalId,
+      task.id,
+    );
+  }
+  /** Exclusive controller startup only. Fencing does not prove resource cleanup. */
   fenceStartup() {
     return this.db.transaction(() => {
       const prior = this.setting("startup-recovery") as
-        { tasks: string[]; operations: string[] } | undefined;
-      const tasks = new Set(prior?.tasks ?? []),
+        StartupRecovery | undefined;
+      const tasks = new Map(
+          this.recoveryTasks(prior).map((t) => [
+            `${t.taskId}:${t.generation}`,
+            t,
+          ]),
+        ),
         operations = new Set(prior?.operations ?? []);
-      for (const r of this.db.query<Row>(
-        "SELECT id FROM control_tasks WHERE worker_id IS NOT NULL",
+      for (const r of this.db.query<{ id: string; generation: number }>(
+        "SELECT id,generation FROM control_tasks WHERE worker_id IS NOT NULL OR EXISTS (SELECT 1 FROM control_attempts a WHERE a.task_id=control_tasks.id AND a.generation=control_tasks.generation AND a.outcome IN ('active','recovering'))",
       ))
-        tasks.add(String(r.id));
+        tasks.set(`${r.id}:${r.generation}`, {
+          taskId: r.id,
+          generation: r.generation,
+        });
       for (const r of this.db.query<Row>(
         "SELECT id FROM control_attempts WHERE task_id IS NULL AND outcome IN ('active','recovering')",
       ))
         operations.add(String(r.id));
       this.db.exec(
-        `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE worker_id IS NOT NULL; DELETE FROM control_tokens WHERE role='worker'; UPDATE control_attempts SET outcome='recovering' WHERE outcome='active';`,
+        `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE worker_id IS NOT NULL; DELETE FROM control_tokens WHERE role='worker'; UPDATE control_attempts SET outcome='recovering' WHERE outcome='active' AND task_id IS NULL;`,
       );
       // Running inference may have advanced since a partial checkpoint. Preserve
       // its reservation until operator reconciliation rather than settle a prefix.
-      for (const taskId of tasks) {
-        const task = this.getTask(taskId);
-        if (
-          ["claimed", "running"].includes(task.status) &&
-          this.getGoal(task.goalId).config.backend.kind !== "fake"
-        )
-          this.db.exec(
-            `UPDATE control_attempts SET usage=${this.encode(executionUsage({}, this.getGoal(task.goalId).config))} WHERE task_id=${sql(taskId)} AND generation=${task.generation} AND outcome='recovering'`,
+      for (const entry of tasks.values()) {
+        const task = this.getTask(entry.taskId);
+        if (task.generation !== entry.generation)
+          throw new ControlError(
+            "stale_recovery",
+            "Recovery generation changed",
+            409,
           );
+        this.fenceInterruptedTask(task, "controller");
       }
       for (const r of this.db.query<{ hash: string; record: string }>(
         "SELECT hash,record FROM inference_capabilities",
@@ -1236,7 +1560,7 @@ export class ControlStore {
           `UPDATE inference_capabilities SET record=${this.encode({ ...JSON.parse(r.record), revoked: true })} WHERE hash=${sql(r.hash)}`,
         );
       this.setting("startup-recovery", {
-        tasks: [...tasks],
+        tasks: [...tasks.values()],
         operations: [...operations],
       });
     });
@@ -1244,50 +1568,35 @@ export class ControlStore {
   finishStartupRecovery() {
     return this.db.transaction(() => {
       const prior = this.setting("startup-recovery") as
-        { tasks: string[]; operations: string[] } | undefined;
-      for (const taskId of prior?.tasks ?? []) {
-        const task = this.getTask(taskId),
+        StartupRecovery | undefined;
+      for (const entry of this.recoveryTasks(prior)) {
+        const task = this.getTask(entry.taskId),
           attemptId = `${task.id}:${task.generation}`;
-        this.free(task, undefined, "interrupted");
-        this.db.exec(
-          `UPDATE control_tasks SET status='waiting_human',retry_at=NULL,revision=revision+1 WHERE id=${sql(task.id)} AND status NOT IN ('accepted','cancelled','superseded')`,
+        if (task.generation !== entry.generation)
+          throw new ControlError(
+            "stale_recovery",
+            "Recovery generation changed",
+            409,
+          );
+        const attempt = this.db.one<{ outcome: string }>(
+          `SELECT outcome FROM control_attempts WHERE id=${sql(attemptId)}`,
         );
-        if (this.getTask(task.id).status !== "waiting_human") continue;
-        const qid = id("question"),
-          request = questionSchema.parse({
-            question: "Inspect interrupted work before a fresh attempt?",
-            reason:
-              "The prior controller stopped. Execution was fenced and owned containers stopped; source/checkpoints are retained. Tool effects and unreported usage may be uncertain. Inspect retained evidence before continuing.",
-            category: "policy",
-            recoveryAttemptId: attemptId,
-            options: [
-              { id: "inspect", label: "Inspected; authorize a fresh attempt" },
-              { id: "defer", label: "Keep pending" },
-            ],
-          });
-        if (
-          !this.questions().some(
-            (q) =>
-              q.taskId === task.id && q.request.recoveryAttemptId === attemptId,
-          )
-        ) {
-          this.db.exec(
-            `INSERT INTO control_questions VALUES(${sql(qid)},${sql(task.goalId)},${sql(task.id)},'pending',${this.encode(request)},NULL,1,${sql(this.now())})`,
+        if (attempt?.outcome === "interrupted" && !task.workerId) continue;
+        if (attempt?.outcome !== "recovering")
+          throw new ControlError(
+            "stale_recovery",
+            "Recovery admission changed",
+            409,
           );
-          this.outbox("question", {
-            questionId: qid,
-            revision: 1,
-            goalId: task.goalId,
-            request,
-          });
-          this.event(
-            "RUNTIME_RECOVERED",
-            "controller",
-            { attemptId, questionId: qid },
-            task.goalId,
-            task.id,
-          );
-        }
+        this.assertInterruptedResourcesStopped(task);
+        this.free(task, undefined, "interrupted");
+        this.event(
+          "RUNTIME_RECOVERED",
+          "controller",
+          { attemptId },
+          task.goalId,
+          task.id,
+        );
       }
       for (const attemptId of prior?.operations ?? []) {
         this.settleOperation(attemptId, undefined, undefined, "interrupted");
@@ -1296,7 +1605,11 @@ export class ControlStore {
         );
         if (r) {
           const goal = this.getGoal(String(r.goal_id));
-          if (!["completed", "cancelled", "failed"].includes(goal.status))
+          if (
+            !["completed", "cancelled", "failed", "paused"].includes(
+              goal.status,
+            )
+          )
             this.db.exec(
               `UPDATE control_goals SET status='paused',revision=revision+1 WHERE id=${sql(goal.id)}`,
             );
@@ -1305,6 +1618,7 @@ export class ControlStore {
               "Inspect interrupted controller operation before resuming?",
             reason: `Operation ${attemptId} may have incomplete effects or unreported usage. Inspect preserved execution evidence; resume explicitly after review.`,
             category: "policy",
+            recoveryAttemptId: attemptId,
             options: [
               { id: "inspect", label: "Inspect recovery evidence" },
               { id: "defer", label: "Keep paused" },
@@ -1319,7 +1633,7 @@ export class ControlStore {
   expired() {
     return this.db
       .query<Row>(
-        `SELECT id FROM control_tasks WHERE worker_id IS NOT NULL AND lease_until<=${this.clock()}`,
+        `SELECT id FROM control_tasks WHERE worker_id IS NOT NULL AND status!='waiting_human' AND lease_until<=${this.clock()}`,
       )
       .map((r) => this.getTask(String(r.id)));
   }
@@ -1328,16 +1642,87 @@ export class ControlStore {
       const t = this.getTask(taskId);
       if (
         t.generation !== generation ||
-        !t.leaseUntil ||
+        !t.workerId ||
+        t.leaseUntil === null ||
         t.leaseUntil > this.clock()
       )
         throw new ControlError("stale_recovery", "Lease is not expired", 409);
-      this.free(t, undefined, "interrupted");
-      this.db.exec(
-        `UPDATE control_tasks SET status='retry_wait',retry_at=${this.clock()},revision=revision+1 WHERE id=${sql(t.id)}`,
-      );
-      this.event("LEASE_RECOVERED", actor, { generation }, t.goalId, t.id);
+      // Expiry fences authority, not the process or its resource effects.
+      this.fenceInterruptedTask(t, actor);
     });
+  }
+  private assertInterruptedResourcesStopped(task: Task) {
+    const sessions = `SELECT id,record FROM sessions WHERE task_id=${sql(task.id)} AND generation=${task.generation} UNION ALL SELECT id,record FROM execution_invocations WHERE (task_id=${sql(task.id)} AND generation=${task.generation}) OR (json_extract(record,'$.spec.taskId')=${sql(task.id)} AND json_extract(record,'$.spec.authorityGeneration')=${task.generation})`;
+    if (
+      this.db.one(
+        `SELECT id FROM (${sessions}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared') LIMIT 1`,
+      ) ||
+      this.db.one(
+        `SELECT session_id FROM gateway_networks WHERE session_id IN (SELECT id FROM (${sessions})) AND COALESCE(json_extract(record,'$.status'),'unknown')!='stopped' LIMIT 1`,
+      )
+    )
+      throw new ControlError(
+        "active_resources",
+        "Recorded execution resources require controller cleanup before ownership can be released",
+        409,
+      );
+  }
+  /** Bounded projection only: elapsed time never releases ownership. */
+  ownership(limit = 100, after = "") {
+    if (
+      after &&
+      !this.db.one(`SELECT id FROM control_tasks WHERE id=${sql(after)}`)
+    )
+      throw new ControlError(
+        "invalid_cursor",
+        "Ownership cursor does not belong to this instance",
+        400,
+      );
+    const rows = this.db.query<{ id: string }>(
+      `SELECT id FROM control_tasks WHERE id>${sql(after)} AND (worker_id IS NOT NULL OR EXISTS (SELECT 1 FROM control_attempts a WHERE a.task_id=control_tasks.id AND a.outcome IN ('active','recovering')) OR EXISTS (SELECT 1 FROM control_questions q WHERE q.task_id=control_tasks.id AND q.status='pending' AND json_extract(q.request,'$.recoveryAttemptId') IS NOT NULL)) ORDER BY id LIMIT ${boundedLimit(limit) + 1}`,
+    );
+    return {
+      tasks: rows.slice(0, limit).map(({ id: taskId }) => {
+        const task = this.getTask(taskId);
+        const attempts = this.db.query<{
+          id: string;
+          generation: number;
+          outcome: string;
+        }>(
+          `SELECT id,generation,outcome FROM control_attempts WHERE task_id=${sql(taskId)} AND outcome IN ('active','recovering') ORDER BY generation`,
+        );
+        const fenced = attempts.some((a) => a.outcome === "recovering");
+        return {
+          taskId,
+          goalId: task.goalId,
+          goalStatus: this.getGoal(task.goalId).status,
+          generation: task.generation,
+          workerId: task.workerId,
+          leaseUntil: task.leaseUntil,
+          authority: fenced
+            ? "fenced"
+            : task.workerId &&
+                task.leaseUntil !== null &&
+                task.leaseUntil > this.clock()
+              ? "live"
+              : task.workerId
+                ? "expired"
+                : attempts.length
+                  ? "orphaned"
+                  : "awaiting_operator",
+          attempts,
+          resources: this.db.query<{ name: string; generation: number }>(
+            `SELECT name,generation FROM control_resources WHERE task_id=${sql(taskId)} ORDER BY name`,
+          ),
+          requiresOperator:
+            fenced ||
+            !task.workerId ||
+            task.leaseUntil === null ||
+            task.leaseUntil <= this.clock(),
+        };
+      }),
+      nextCursor: rows.length > limit ? rows[limit - 1]!.id : null,
+    };
   }
   evidence(
     taskId: string,
@@ -1659,6 +2044,64 @@ export class ControlStore {
       if (!q.request.options.some((o: { id: string }) => o.id === option))
         throw new ControlError("invalid_answer", "Unknown answer option");
       if (q.request.recoveryAttemptId && option === "defer") return q;
+      if (q.taskId && q.request.recoveryAttemptId) {
+        const task = this.getTask(q.taskId);
+        const attempt = this.db.one<{ outcome: string }>(
+          `SELECT outcome FROM control_attempts WHERE id=${sql(q.request.recoveryAttemptId)}`,
+        );
+        if (
+          q.request.recoveryAttemptId !== `${task.id}:${task.generation}` ||
+          task.status !== "waiting_human" ||
+          !attempt ||
+          !["recovering", "interrupted"].includes(attempt.outcome)
+        )
+          throw new ControlError(
+            "stale_recovery",
+            "Recovery no longer owns this task generation",
+            409,
+          );
+        if (attempt.outcome === "recovering") {
+          if (task.leaseUntil !== null && task.leaseUntil > this.clock())
+            throw new ControlError(
+              "stale_recovery",
+              "Lease is not expired",
+              409,
+            );
+          if (!explanation?.trim())
+            throw new ControlError(
+              "ownership_confirmation",
+              "Explain how execution and owned resources were confirmed stopped",
+              409,
+            );
+          this.assertInterruptedResourcesStopped(task);
+          this.free(task, undefined, "interrupted");
+          this.event(
+            "OWNERSHIP_RESOLVED",
+            actor,
+            {
+              generation: task.generation,
+              attemptId: q.request.recoveryAttemptId,
+              explanation,
+            },
+            task.goalId,
+            task.id,
+          );
+        }
+        // Resolution and retirement of this generation's startup intent must
+        // commit together, including when startup cleanup has not yet finished.
+        const prior = this.setting("startup-recovery") as
+          StartupRecovery | undefined;
+        if (prior)
+          this.setting("startup-recovery", {
+            ...prior,
+            tasks: prior.tasks.filter((entry) =>
+              typeof entry === "string"
+                ? entry !== task.id
+                : entry.taskId !== task.id ||
+                  entry.generation !== task.generation,
+            ),
+          });
+      }
       const answer = { option, explanation, actor };
       this.db.exec(
         `UPDATE control_questions SET status='answered',answer=${this.encode(answer)},revision=revision+1 WHERE id=${sql(qid)}`,
@@ -1819,7 +2262,16 @@ export class ControlStore {
         for (const t of this.tasks(goalId).filter(
           (t) => !["accepted", "superseded"].includes(t.status),
         )) {
-          if (t.workerId) this.free(t, undefined, "cancelled");
+          // Expiry revokes authority without proving that execution has stopped.
+          if (t.workerId && t.leaseUntil !== null && t.leaseUntil <= this.clock())
+            this.fenceInterruptedTask(t, actor);
+          if (
+            t.workerId &&
+            !this.db.one(
+              `SELECT id FROM control_attempts WHERE task_id=${sql(t.id)} AND generation=${t.generation} AND outcome='recovering'`,
+            )
+          )
+            this.free(t, undefined, "cancelled");
           this.db.exec(
             `UPDATE control_tasks SET status='cancelled',revision=revision+1 WHERE id=${sql(t.id)}`,
           );

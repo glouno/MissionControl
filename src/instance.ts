@@ -70,7 +70,7 @@ export async function inspectState(root: string) {
     const schemaVersion = Number(
       db.one<{ user_version: number }>("PRAGMA user_version")?.user_version,
     );
-    if (![1, 2, 3, 4, 5, 6].includes(schemaVersion))
+    if (![1, 2, 3, 4, 5, 6, 7].includes(schemaVersion))
       throw new Error("Unsupported database schema");
     const ledger = db
       .query<{ version: number }>(

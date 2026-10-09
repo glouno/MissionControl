@@ -182,6 +182,54 @@ try {
     await page.getByRole("heading", { name: view, exact: true }).waitFor();
   }
   checks.push("six_views", "private_browser_session");
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page.getByLabel("Project", { exact: true }).selectOption("synthetic");
+  await page
+    .getByRole("button", { name: "Apply filters", exact: true })
+    .click();
+  await page
+    .getByText("No backlog records for this project.", { exact: true })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Add backlog record", exact: true })
+    .click();
+  const hostileBacklog =
+    "Synthetic backlog <img src=x onerror=window.untrusted=true>";
+  await page.getByLabel("Backlog title", { exact: true }).fill(hostileBacklog);
+  await page
+    .getByLabel("Backlog description", { exact: true })
+    .fill("Inert synthetic work");
+  await page.getByLabel("Backlog priority", { exact: true }).fill("9");
+  await page
+    .getByLabel("Acceptance criteria (one per line)", { exact: true })
+    .fill("First criterion\nSecond criterion");
+  await page
+    .getByRole("button", { name: "Save backlog record", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: hostileBacklog, exact: true })
+    .waitFor();
+  assert.equal((await api("/goals")).length, 0);
+  assert.equal(await page.evaluate(() => window.untrusted), undefined);
+  await page
+    .getByRole("button", { name: "Edit backlog record", exact: true })
+    .click();
+  await page
+    .getByLabel("Backlog title", { exact: true })
+    .fill("Edited synthetic backlog");
+  await page
+    .getByRole("button", { name: "Save backlog record", exact: true })
+    .click();
+  await page
+    .getByRole("heading", { name: "Edited synthetic backlog", exact: true })
+    .waitFor();
+  await page
+    .getByRole("button", { name: "Archive backlog record", exact: true })
+    .click();
+  await page.getByText("archived · revision 3", { exact: true }).waitFor();
+  assert.equal((await api("/goals")).length, 0);
+  checks.push("inert_project_backlog_crud", "hostile_backlog_text");
+
   // Qualified build/install must ship the matching corresponding source.
   const sourceLink = page.getByRole("link", {
     name: "Download exact application source",
@@ -223,6 +271,7 @@ try {
   assert.equal(foreignOrigin.status(), 403);
   assert.equal((await fetch(base + "/api/v1/dashboard")).status, 401);
   checks.push("browser_csrf_origin_read_auth");
+  await page.getByRole("button", { name: "New work", exact: true }).click();
   let releaseValidation;
   const staged = new Promise((resolve) => (releaseValidation = resolve));
   const validationResponse = page.waitForResponse(
