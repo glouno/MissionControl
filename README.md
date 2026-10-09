@@ -6,7 +6,7 @@ when work needs a human decision. One controller owns the SQLite application
 database. Humans and other agents use its authenticated HTTP API, CLI, MCP and
 six-view dashboard.
 
-This is a **v1 preview candidate**. The initial supported target is Linux/WSL,
+This is a **preview candidate**. The initial supported target is Linux/WSL,
 with Azure Foundry API execution. Consult the exact release's acceptance report
 before enabling real work. macOS, subscription coding, Bedrock and chat connectors
 are optional or experimental; their presence in source is not qualification.
@@ -65,3 +65,31 @@ For a concise read-only overview across configured local and remote installation
 [`missioncontrol status` companion](docs/status-cli.md) with
 `./scripts/install-status.sh`. It supports v1 goals and legacy missions without
 starting workers or changing state.
+
+Work also maintains a project backlog independently of admitted goals. Saving or
+archiving backlog does not start execution. Explicit launch uses the applied
+project configuration after dependency and admission checks; see the
+[compute-ready backlog workflow](docs/configuration.md#synthetic-project-backlog-and-explicit-launch).
+
+## Development direction
+
+Use this repository as the canonical source for engine, dashboard, connectors,
+installation and release tooling. Develop changes on named branches and temporary
+linked worktrees; version numbers belong in releases, not checkout names. Keep
+private installation configuration in its own repository, and keep installed
+releases, mutable state, credentials and recovery archives outside source.
+
+The product direction is one goal-based controller and one authoritative
+application database, shared by CLI, API, MCP, dashboard and encrypted human
+connectors. Work can be saved in a durable project backlog without execution;
+explicit launch applies project policy, dependency checks and execution admission.
+Results require exact-candidate checks and independent review. Interrupted work
+retains ownership and uncertain usage until evidence-backed recovery.
+
+The initial release target remains Linux/WSL with isolated Azure execution.
+Subscription execution requires private acceptance bound to the exact installed
+implementation, image, model and authentication policy. Matrix, macOS and other
+providers retain their implementations and tests; release support requires actual
+platform/provider acceptance. Component tests do not qualify a changed release.
+See [consolidated capabilities and validation](docs/development.md) and
+[interrupted ownership recovery](docs/interrupted-ownership.md).

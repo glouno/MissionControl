@@ -32,6 +32,14 @@ export class SubscriptionBackend implements AgentBackend {
     validateBackendContract(config.backend, contract);
     validateExecutionLimits(config);
     if (
+      contract.usagePolicy.kind === "subscription" &&
+      Math.min(config.timeoutMs, contract.usagePolicy.timeoutMs) >
+        this.runtime.config.egress.timeoutMs
+    )
+      throw Error(
+        "Subscription coding deadline exceeds its admitted egress lifetime; review the dedicated auth policy before admission",
+      );
+    if (
       contract.usagePolicy.kind !== "subscription" ||
       contract.authentication.kind !== "session" ||
       contract.authentication.reference !== this.runtime.config.id ||

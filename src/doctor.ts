@@ -1,3 +1,4 @@
+import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { spawnSync } from "node:child_process";
 import { statfs } from "node:fs/promises";
 import type { LoadedConfiguration } from "./config.js";
@@ -120,6 +121,7 @@ export async function diagnose(
       contract?.usagePolicy.kind ??
       (goal?.backend.kind === "fake" ? "synthetic" : "unknown");
     const image = runtime?.projects[p.id]?.imageDigest;
+    let liveQualified = false;
     if (p.executionMode === "isolated") {
       if (!daemon)
         fail(
@@ -177,10 +179,28 @@ export async function diagnose(
             "Wait for or recover the dedicated authentication writer",
           );
       }
-      fail(
-        "subscription_unqualified",
-        "Complete private login/refresh/restart/expiry and coding qualification; production admission is closed",
-      );
+      try {
+        if (!environment)
+          throw Error("Dedicated authentication is unavailable");
+        assertSubscriptionQualification(
+          config.settings.stateDir,
+          effectiveGoal(config, p.id, "Readiness inspection"),
+          environment,
+        );
+        // Receipt qualification survives a busy identity; faults still gate admission.
+        liveQualified = true;
+        if (inspection) {
+          inspection.liveQualified = true;
+          if (inspection.prepared && !inspection.writerActive)
+            inspection.action =
+              "Private subscription qualification is valid; native login was not inspected";
+        }
+      } catch {
+        fail(
+          "subscription_unqualified",
+          "Complete private login/refresh/restart/expiry and controller qualification; admission remains closed without matching evidence",
+        );
+      }
     }
     return {
       id: p.id,
@@ -198,7 +218,7 @@ export async function diagnose(
       reason: faults[0]?.action,
       faults,
       nativeLoginInspected: false,
-      liveQualified: false,
+      liveQualified,
     };
   });
   const connectors = [];

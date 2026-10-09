@@ -1,6 +1,6 @@
 # Subscription isolation qualification
 
-Subscription execution is not enabled in this candidate. The authenticated
+Subscription execution requires the private evidence gate described below. Public defaults remain disabled. The authenticated
 native runtime must own only its dedicated login/session directory and run within
 an isolated Linux container. It must never inherit the user's general CLI home,
 ambient hooks/MCP configuration, provider keys, connector secrets or controller
@@ -200,3 +200,54 @@ faults. It inspects local image metadata and private store identity only, never
 starts native tools, pulls images, authenticates or provisions accounts. An
 unlocked prepared store does not prove login validity; use isolated native status
 and the private live acceptance workflow explicitly.
+
+## Dedicated subscription acceptance
+
+Subscription coding is optional. Public defaults enable no paid or subscription
+provider. API providers and native subscription authentication are separate modes.
+There is no host-execution fallback.
+
+Dedicated login, isolated coding, independent verification and review are supported
+by the runtime. Normal controller admission requires operator-reviewed acceptance
+for the exact installed implementation, native image, authentication policy,
+provider/model and platform. A `qualified: true` configuration flag is rejected.
+
+Private evidence lives in the application state root at
+`qualification/subscriptions/<auth-id>/`. The controller checks `receipt.json`
+and hashes of its bounded evidence files at configuration validation, admission
+and runtime dispatch. Evidence is private, owned, canonical regular files. Secrets
+and native session material stay in the separate secret store. Receipt creation
+is offline operator maintenance; connectors, workers and goal overrides cannot
+write qualification through the API.
+
+Required gates:
+
+- `login-restart`: dedicated supported login and authentication after restart.
+- `refresh-expiry`: supported refresh and expired/revoked login refusal.
+- `network-denial`: unapproved public, host, private and metadata destinations denied.
+- `native-policy`: ambient instructions/configuration, hooks, unrelated MCP and
+  alternate authentication settings disabled in the pinned native tool.
+- `bounded-coding`: coding stops at the admitted deadline with single session writer.
+- `independent-check-review`: session-free verification and separate exact-candidate review.
+- `controller-lifecycle`: ordinary controller planning, coding, checks, review,
+  shutdown/restart and recovery exercised together.
+
+The receipt uses schema version1 and records `authId`, `providerId`, `model`,
+`imageDigest`, `authenticationPolicyHash`, `implementationHash`, `platform`,
+`architecture`, `expiresAt`, and `gates`. Each gate records `id`, `passed: true`,
+`evidenceFile` (a simple filename) and `sha256`. All seven gates must appear exactly
+once. The installed `subscriptionImplementationHash()` function computes the
+implementation binding; `authPolicyHash()` computes the authentication binding.
+Changed source, policy, image, platform, model, missing evidence or expiry (at most30 days) closes
+admission again. Requalify rather than editing an old receipt's binding.
+
+A receipt is a local operator attestation with integrity checks, not a vendor
+certification or a signature protecting against the host owner. Never construct a
+passing receipt from synthetic tests or from unrelated live results. Missing
+refresh, expiry or lifecycle acceptance remains a blocking gap for subscriptions.
+Native status and auth recovery remain available without a qualification receipt.
+
+Subscriptions record reported/unknown tokens, elapsed time and invocation limits,
+not invented dollar spending. Verification runs without the authentication store.
+An authenticated harness can access its own subscription session; isolation protects
+the host and unrelated credentials rather than hiding that session from its owner.

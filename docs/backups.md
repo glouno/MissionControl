@@ -11,7 +11,7 @@ on any recovery bundle. Store age identities separately from backup destinations
 The installation `config.json` contains an optional strict `backup` object:
 
 ```json
-{"enabled":false,"hourUtc":3}
+{ "enabled": false, "hourUtc": 3 }
 ```
 
 Set `destinationDir` and `recipientFile` relative to `config.json`, or use explicit
@@ -81,3 +81,11 @@ Each applied deletion writes and syncs a private deletion intent before removing
 registered files. An interrupted intent blocks further pruning until the recorded
 replacement and remaining files have been inspected. Retention never deletes a
 separate Matrix, subscription, configuration, or homeserver backup.
+
+Schema 7 backups include the durable project backlog in the authoritative SQLite
+snapshot, including revisions, dependency IDs, statuses and linked goal IDs.
+Backup manifests and recovery inspection support database schemas 1 through 7;
+ledger and foreign-key checks still apply. Restoring a launched entry preserves
+its original launch revision: matching replay returns its original goal without
+creating another admission. Pending backlog remains inert after recovery and
+requires explicit launch against the current trusted project configuration.

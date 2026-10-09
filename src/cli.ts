@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { mkdir, readFile, writeFile, realpath, lstat } from "node:fs/promises";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -88,10 +89,15 @@ const HELP = `mission-control — MissionControl v1
   --token-file PATH selects a scoped API credential
   task inspect ID | goal attempts|evidence ID
   events --goal ID [--after CURSOR]
+  backlog list --project ID [--status backlog|archived|launched]
+  backlog add --project ID --input JSON_FILE
+  backlog show ID --project ID
+  backlog update ID --project ID --revision N --input JSON_FILE
+  backlog archive|launch ID --project ID --revision N
   goal create --project ID --input FILE
   goal list|inspect|pause|resume|cancel ID
   schedule list
-  question list|answer ID --option ID
+  question list|answer ID --option ID [--explanation TEXT]
   state usage | state reconcile-usage ATTEMPT_ID --input FILE
   mcp
 Configuration, credentials and state live outside the source checkout.
@@ -507,7 +513,13 @@ export async function main(args = process.argv.slice(2)) {
         { mustExist: true },
       );
     try {
-      output(applyConfiguration(new ControlStore(db), config, true));
+      output(
+        applyConfiguration(
+          configuredStore(db, () => config),
+          config,
+          true,
+        ),
+      );
     } finally {
       db.close();
       await unlock();
@@ -729,6 +741,58 @@ export async function main(args = process.argv.slice(2)) {
     output(await client.request("/projects"));
     return;
   }
+  if (command === "backlog") {
+    if (!flags.project) throw new Error("Backlog requires --project ID");
+    const projectId = flags.project;
+    const entry = `/backlog/${encodeURIComponent(id ?? "")}`;
+    if (action === "list")
+      output(
+        await client.request(
+          `/backlog?projectId=${encodeURIComponent(projectId)}${flags.status ? `&status=${encodeURIComponent(flags.status)}` : ""}`,
+        ),
+      );
+    else if (action === "show") {
+      if (!id) throw new Error("Backlog show requires entry ID");
+      output(
+        await client.request(
+          `${entry}?projectId=${encodeURIComponent(projectId)}`,
+        ),
+      );
+    } else if (["add", "update", "archive", "launch"].includes(action)) {
+      if (action !== "add" && (!id || !flags.revision))
+        throw new Error("Backlog mutation requires entry ID and --revision N");
+      if (["add", "update"].includes(action) && !flags.input)
+        throw new Error("Backlog add/update requires --input JSON_FILE");
+      const fields =
+        flags.input && ["add", "update"].includes(action)
+          ? JSON.parse(
+              flags.input === "-"
+                ? await stdin()
+                : await readFile(resolve(flags.input), "utf8"),
+            )
+          : {};
+      output(
+        await client.request(
+          action === "add"
+            ? "/backlog"
+            : action === "update"
+              ? entry
+              : `${entry}/${action}`,
+          "POST",
+          {
+            ...fields,
+            projectId,
+            ...(action !== "add" ? { revision: Number(flags.revision) } : {}),
+          },
+          flags["idempotency-key"],
+        ),
+      );
+    } else
+      throw new Error(
+        "Unknown backlog action; use list/add/show/update/archive/launch",
+      );
+    return;
+  }
   if (command === "goal") {
     if (["create", "draft"].includes(action)) {
       if (!flags.project || !flags.input)
@@ -804,6 +868,7 @@ export async function main(args = process.argv.slice(2)) {
       await client.request(`/questions/${id}/answer`, "POST", {
         option: flags.option,
         revision: q.revision,
+        ...(flags.explanation ? { explanation: flags.explanation } : {}),
       }),
     );
     return;
@@ -820,7 +885,7 @@ async function serve(config: LoadedConfiguration) {
   let runtime: Awaited<ReturnType<typeof createIsolatedRuntime>> | undefined;
   let scheduler: Scheduler | undefined;
   try {
-    const store = new ControlStore(db);
+    const store = configuredStore(db, () => config);
     config = startupConfiguration(store, config);
     store.fenceStartup();
     for (const auth of config.auth) {
@@ -1118,3 +1183,17 @@ if (isEntrypoint(import.meta.url))
     );
     process.exitCode = 1;
   });
+
+function configuredStore(db: SqliteStore, current: () => LoadedConfiguration) {
+  return new ControlStore(db, Date.now, (input) => {
+    const config = current(),
+      reference = input.executionContract?.authentication;
+    const auth =
+      reference?.kind === "session"
+        ? config.auth.find((a) => a.id === reference.reference)
+        : undefined;
+    if (!auth)
+      throw Error("Dedicated subscription authentication is unavailable");
+    assertSubscriptionQualification(config.settings.stateDir, input, auth);
+  });
+}

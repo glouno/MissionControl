@@ -206,7 +206,7 @@ test("migration failure preserves its prior ledger/schema and retries transactio
   t.after(() => db.close());
   new ControlStore(db);
   db.exec(
-    "DELETE FROM schema_migrations WHERE version>=4; DROP TABLE usage_reconciliations; DROP TABLE control_attempts; PRAGMA user_version=3; CREATE TRIGGER inject_migration_failure BEFORE INSERT ON schema_migrations WHEN NEW.version=4 BEGIN SELECT RAISE(ABORT,'injected migration failure'); END;",
+    "DELETE FROM schema_migrations WHERE version>=4; DROP TABLE control_backlog; DROP TABLE usage_reconciliations; DROP TABLE control_attempts; PRAGMA user_version=3; CREATE TRIGGER inject_migration_failure BEFORE INSERT ON schema_migrations WHEN NEW.version=4 BEGIN SELECT RAISE(ABORT,'injected migration failure'); END;",
   );
   assert.throws(() => new ControlStore(db), /injected migration/);
   assert.equal(
@@ -225,7 +225,7 @@ test("migration failure preserves its prior ledger/schema and retries transactio
   new ControlStore(db);
   assert.equal(
     db.one<{ user_version: number }>("PRAGMA user_version")!.user_version,
-    6,
+    7,
   );
   assert.equal(db.integrityCheck()[0], "ok");
 });

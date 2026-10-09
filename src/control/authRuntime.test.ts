@@ -143,6 +143,10 @@ test("native authentication status uses only a private session mount and scoped 
   const worker = f.calls.find(
     (a) => a[0] === "create" && a.includes("--log-driver"),
   )!;
+  assert.ok(
+    worker.includes("--init"),
+    "Auth workers must reap orphaned harness children",
+  );
   assert.equal(worker.filter((a) => a === "--mount").length, 1);
   assert.ok(
     worker.includes(
@@ -300,6 +304,27 @@ async function codingFixture(t: any) {
   };
   return { ...f, source, registry, environment, context, checkpoints };
 }
+test("coding refuses a deadline longer than admitted egress before allocating resources", async (t) => {
+  const f = await codingFixture(t);
+  f.context.claim.goal.config.timeoutMs = 1800000;
+  f.context.claim.goal.config.executionContract.usagePolicy.timeoutMs = 1800000;
+  const backend = new SubscriptionBackend(
+    f.runtime,
+    f.environment,
+    f.registry,
+    () => {},
+  );
+  await assert.rejects(
+    backend.run(f.context),
+    /deadline exceeds its admitted egress/,
+  );
+  assert.equal(f.registry.all().length, 0);
+  assert.equal(f.objects.size, 0);
+  assert.equal(
+    (await inspectAuthEnvironment(f.config, join(f.root, "private"))).writer,
+    undefined,
+  );
+});
 test("coding status and source share session ownership, stopped import and immutable image policy", async (t) => {
   const f = await codingFixture(t);
   const backend = new SubscriptionBackend(

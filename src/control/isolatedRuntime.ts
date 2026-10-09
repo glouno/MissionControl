@@ -1,3 +1,4 @@
+import { assertSubscriptionQualification } from "./subscriptionQualification.js";
 import { reconcileRuntime } from "./runtimeRecovery.js";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -459,13 +460,7 @@ export async function createIsolatedRuntime(
           authEnvironments,
           runtimeHash,
         );
-        // Config cannot claim qualification. Live receipts and a reviewed release gate are still required.
-        if (!binding.auth.qualified)
-          throw new ControlError(
-            "subscription_unqualified",
-            "Subscription live qualification is incomplete; coding admission remains disabled",
-            409,
-          );
+        assertSubscriptionQualification(root, goal.config, binding.auth);
         return new SubscriptionBackend(
           new AuthRuntime(store, root, secretsDir!, binding.auth),
           environment,
