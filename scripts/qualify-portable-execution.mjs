@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Real isolated tool-loop lifecycle with synthetic controller-side inference.
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

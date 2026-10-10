@@ -42,6 +42,41 @@ export interface EnvironmentBuildRecord {
   lastUsedAt?: number;
 }
 export async function processIdentity(pid: number) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff)
+    return undefined;
+  if (process.platform === "darwin") {
+    // PROC_PIDTBSDINFO includes microsecond start time, unlike ps lstart.
+    // Pair it with the boot UUID to fence PID reuse and previous boot owners.
+    const script = `import ctypes,errno,json,struct,sys
+lib=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+lib.proc_pidinfo.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_int]
+lib.proc_pidinfo.restype=ctypes.c_int
+buf=ctypes.create_string_buffer(136)
+n=lib.proc_pidinfo(int(sys.argv[1]),3,0,buf,136)
+if n==0 and ctypes.get_errno()==errno.ESRCH: sys.exit(0)
+if n!=136: sys.exit(1)
+seconds,micros=struct.unpack_from('=QQ',buf.raw,120)
+if not seconds or micros>=1000000: sys.exit(1)
+print(json.dumps([seconds,micros]))
+`;
+    const [boot, start] = await Promise.all([
+      exec("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], {
+        timeout: 5000,
+      }),
+      exec("python3", ["-I", "-c", script, String(pid)], {
+        timeout: 5000,
+        env: { PATH: process.env.PATH },
+      }),
+    ]);
+    const bootId = boot.stdout.trim();
+    if (!/^[a-f0-9-]{36}$/i.test(bootId))
+      throw new Error("Build boot identity unavailable");
+    if (!start.stdout.trim()) return undefined;
+    const [seconds, micros] = JSON.parse(start.stdout) as number[];
+    return { bootId, startTicks: `${seconds}:${micros}` };
+  }
+  if (process.platform !== "linux")
+    throw new Error("Build process identity unsupported on this platform");
   try {
     const [bootId, stat] = await Promise.all([
       readFile("/proc/sys/kernel/random/boot_id", "utf8"),

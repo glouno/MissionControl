@@ -24,7 +24,12 @@ export async function diagnose(
         env: { PATH: process.env.PATH },
         encoding: "utf8",
       }));
-  const tools = ["git", "docker", "age"].map((name) => {
+  const tools = [
+    "git",
+    "docker",
+    "age",
+    ...(process.platform === "darwin" ? ["python3"] : []),
+  ].map((name) => {
     const result = command(name, ["--version"]);
     return {
       name,

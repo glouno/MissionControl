@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 /** Optional real-browser acceptance. Install Playwright separately; core does not depend on it.
  * PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/dashboard-acceptance.mjs
  * PLAYWRIGHT_CHROMIUM_EXECUTABLE may select an already installed qualified browser.

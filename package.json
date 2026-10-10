@@ -28,7 +28,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/*.test.js dist/control/*.test.js",
+    "test": "npm run build && node --import ./scripts/canonical-temp.mjs --test dist/*.test.js dist/control/*.test.js",
     "privacy": "node scripts/publication-audit.mjs",
     "release": "node scripts/release.mjs"
   },

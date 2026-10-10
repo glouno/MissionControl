@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Synthetic TLS/network proof. Does not log in, read sessions or call inference.
 import {mkdtemp,rm,readFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {promisify} from 'node:util';import {execFile} from 'node:child_process';import {randomBytes,randomUUID} from 'node:crypto';import assert from 'node:assert/strict';

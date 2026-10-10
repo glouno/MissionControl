@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Offline invented SDK identity only; no homeserver login or sync.
 import {
   mkdtemp,

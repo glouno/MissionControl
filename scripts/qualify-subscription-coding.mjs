@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Real Linux Docker mechanics with synthetic native tools, no vendor login/inference.
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -110,7 +111,7 @@ try {
       requiredFlagsPresent: true,
     });
   }
-  const stub = `#!/usr/local/bin/python3
+  const stub = `#!/usr/bin/env python3
 import json,os,sys,socket,urllib.request
 from pathlib import Path
 h='codex' if Path(sys.argv[0]).name=='codex' else 'claude-code'

@@ -185,7 +185,9 @@ test("time, output and unavailable/exceeded token limits fail closed", async (t)
     t,
     "codex",
     [],
-    "process.stdout.write('x'.repeat(9*1024*1024))",
+    // Keep the owned group alive until the adapter enforces the output limit.
+    // Immediate exit races buffered output against process-group teardown on macOS.
+    "process.stdout.write('x'.repeat(8*1024*1024+1));setInterval(()=>{},1000)",
   );
   await assert.rejects(
     new SubscriptionNativeBackend().run(output.context),

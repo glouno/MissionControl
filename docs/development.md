@@ -39,3 +39,29 @@ Matrix Rust tests use the locked companion dependencies. A deployable release mu
 also pass its applicable platform, provider, isolation and recovery gates against
 its exact fingerprints. Do not reuse an older live acceptance receipt after code
 changes, or call a source consolidation a production upgrade.
+
+## macOS parity checks
+
+Use Node 24 (check `node --version`; newer majors are outside the supported
+engine), Git, Python 3 and `age`/`age-keygen` on PATH. The test preloader and
+standalone acceptance scripts resolve the temporary parent automatically because
+macOS `/var` paths alias `/private/var`. Runtime canonical-path and intentional
+symlink rejection checks remain unchanged. Run the same checks above on macOS;
+the separate macOS CI job retains the existing Linux required-check names.
+
+Image-build ownership uses the boot-session UUID and microsecond process start
+time from macOS libproc through isolated Python 3. Linux retains its `/proc`
+identity. The regression test checks a real child's stable identity and verifies
+it disappears after exit. Missing host APIs fail closed; PID alone is never
+sufficient evidence of ownership. The output-limit fixture keeps its synthetic
+child alive until termination so buffered output does not race an immediate exit
+and a subsequent signal to an exited process group; production termination
+authority remains unchanged.
+
+Run `node scripts/backlog-acceptance.mjs` for the disposable API/CLI and recurring
+scheduler workflow, and the documented browser acceptance with a separately
+installed Playwright. Docker Desktop must be running for the six-stage
+`qualify-platform.mjs darwin` proof with a reviewed, locally installed immutable
+worker image. This proof does not qualify real subscriptions, inference,
+launchd activation or optional Matrix devices. Linux-in-Docker regression results
+also do not establish WSL service behavior.
