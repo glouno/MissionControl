@@ -6,7 +6,7 @@ import {
   lstat,
   realpath,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -38,15 +38,26 @@ function unitArg(value: string) {
     '"'
   );
 }
+export function serviceToolPath(
+  value = process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+) {
+  validPath(value);
+  if (value.split(":").some((entry) => !isAbsolute(entry)))
+    throw Error(
+      "Service tool PATH must contain only explicit absolute directories",
+    );
+  return value;
+}
 export function serviceDefinition(
   configDir: string,
   platform: string = process.platform,
   node = process.execPath,
   cli = fileURLToPath(new URL("./cli.js", import.meta.url)),
+  toolPath?: string,
 ) {
   const args = [node, cli, "--config-dir", resolve(configDir), "serve"];
   if (platform === "darwin")
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${macName}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>Umask</key><integer>63</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n`;
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${macName}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array><key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(serviceToolPath(toolPath))}</string></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>Umask</key><integer>63</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n`;
   if (platform !== "linux")
     throw Error("User services require Linux/WSL or macOS");
   return `[Unit]\nDescription=MissionControl v1 private controller\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=${args.map(unitArg).join(" ")}\nUMask=0077\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=120\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n`;
@@ -57,6 +68,7 @@ export type ServiceOptions = {
   xdgConfig?: string;
   node?: string;
   cli?: string;
+  toolPath?: string;
   execute?: (file: string, args: string[]) => Promise<{ stdout: string }>;
 };
 /** No activation on install. All lifecycle operations require exact local and loaded ownership. */
@@ -77,7 +89,13 @@ export async function serviceCommand(
     home = options.home ?? homedir(),
     node = options.node ?? process.execPath,
     cli = options.cli ?? fileURLToPath(new URL("./cli.js", import.meta.url)),
-    content = serviceDefinition(configDir, platform, node, cli),
+    content = serviceDefinition(
+      configDir,
+      platform,
+      node,
+      cli,
+      options.toolPath,
+    ),
     parent = resolve(
       platform === "darwin"
         ? join(home, "Library/LaunchAgents")
@@ -253,7 +271,16 @@ export async function serviceCommand(
       );
     await execute("systemctl", ["--user", action, name]);
   } else if (action === "stop") {
-    if (current.loaded) await execute("launchctl", ["bootout", label]);
+    if (current.loaded) {
+      await execute("launchctl", ["bootout", label]);
+      // bootout returns before termination/unload has necessarily completed.
+      const deadline = Date.now() + 30000;
+      while ((await manager()).loaded) {
+        if (Date.now() >= deadline)
+          throw Error("launchd job did not unload; retain its definition");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
   } else if (action === "start") {
     if (current.loaded)
       throw Error("Controller is loaded; use restart explicitly");
@@ -262,6 +289,8 @@ export async function serviceCommand(
       `gui/${process.getuid?.()}`,
       path,
     ]);
+    // Bootstrap loads an inactive RunAtLoad=false definition; explicit start runs it.
+    await execute("launchctl", ["kickstart", label]);
   } else {
     if (!current.loaded)
       throw Error("Controller is not loaded; use start explicitly");

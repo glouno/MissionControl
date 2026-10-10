@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { serviceDefinition } from "./service.js";
+import { serviceDefinition, serviceToolPath } from "./service.js";
 test("service definitions quote paths, use separate v1 identity and require explicit activation", () => {
   const linux = serviceDefinition(
     '/private/config with "quotes" % $HOME',
@@ -56,7 +56,9 @@ async function fixture(
     active = false,
     fragment = path,
     dropins = "",
-    failure: Error | undefined;
+    failure: Error | undefined,
+    unloadPolls = 0,
+    stopping = false;
   const options = {
     home,
     xdgConfig: join(home, ".config"),
@@ -71,6 +73,10 @@ async function fixture(
           stdout: `LoadState=${loaded ? "loaded" : "not-found"}\nActiveState=${active ? "active" : "inactive"}\nSubState=${active ? "running" : "dead"}\nUnitFileState=disabled\nFragmentPath=${loaded ? fragment : ""}\nDropInPaths=${dropins}\nNeedDaemonReload=no\n`,
         };
       if (args[0] === "print") {
+        if (stopping && unloadPolls-- <= 0) {
+          loaded = false;
+          stopping = false;
+        }
         if (!loaded)
           throw Object.assign(Error("missing"), {
             code: 113,
@@ -97,7 +103,11 @@ async function fixture(
       if (args.includes("stop")) active = false;
       if (args[0] === "bootout") {
         active = false;
-        loaded = false;
+        stopping = true;
+        if (!unloadPolls) {
+          loaded = false;
+          stopping = false;
+        }
       }
       return { stdout: "" };
     },
@@ -114,12 +124,14 @@ async function fixture(
       fragment?: string;
       dropins?: string;
       failure?: Error;
+      unloadPolls?: number;
     }) => {
       loaded = state.loaded ?? loaded;
       active = state.active ?? active;
       fragment = state.fragment ?? fragment;
       dropins = state.dropins ?? dropins;
       failure = state.failure;
+      unloadPolls = state.unloadPolls ?? unloadPolls;
     },
   };
 }
@@ -261,5 +273,49 @@ test("launchd lifecycle bootstraps explicitly and distinguishes unloaded from fa
   await serviceCommand("stop", f.config, f.options);
   await serviceCommand("uninstall", f.config, f.options);
   assert.ok(f.calls.some((c) => c.includes("bootstrap")));
+  const boot = f.calls.findIndex((c) => c.includes("bootstrap"));
+  assert.deepEqual(f.calls[boot + 1], [
+    "launchctl",
+    "kickstart",
+    `gui/${process.getuid?.()}/org.missioncontrol.v1`,
+  ]);
   assert.ok(f.calls.some((c) => c.includes("bootout")));
+});
+
+test("launchd definitions pin a reviewed absolute tool PATH for non-system dependencies", () => {
+  const mac = serviceDefinition(
+    "/config",
+    "darwin",
+    "/node",
+    "/cli",
+    "/private/tools:/usr/bin:/bin",
+  );
+  assert.match(
+    mac,
+    /<key>EnvironmentVariables<\/key><dict><key>PATH<\/key><string>\/private\/tools:\/usr\/bin:\/bin<\/string>/,
+  );
+  assert.throws(() => serviceToolPath("/usr/bin:.:/bin"), /absolute/);
+  assert.throws(() => serviceToolPath("/usr/bin::/bin"), /absolute/);
+  assert.throws(() => serviceToolPath("/usr/bin\n/bin"), /control characters/);
+});
+
+test("launchd tool PATH validation does not change Linux unit generation", () => {
+  assert.equal(
+    serviceDefinition("/config", "linux", "/node", "/cli", "."),
+    serviceDefinition("/config", "linux", "/node", "/cli", "/usr/bin"),
+  );
+});
+
+test("launchd stop waits for delayed unload before allowing uninstall", async (t) => {
+  const f = await fixture(t, "darwin");
+  await serviceCommand("install", f.config, f.options);
+  await serviceCommand("start", f.config, f.options);
+  f.set({ unloadPolls: 2 });
+  await serviceCommand("stop", f.config, f.options);
+  const stop = f.calls.findIndex((c) => c[1] === "bootout");
+  assert.equal(
+    f.calls.slice(stop + 1).filter((c) => c[1] === "print").length,
+    3,
+  );
+  await serviceCommand("uninstall", f.config, f.options);
 });

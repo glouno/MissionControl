@@ -76,7 +76,7 @@ const HELP = `mission-control — MissionControl v1
   service install|status|start|stop|restart|uninstall
   connector list|health|provision|run ID
   connector prepare ID --destination PATH
-  connector install|status|stop|restart|uninstall ID
+  connector install|status|start|stop|restart|uninstall ID
   connector backup|restore --companion-config PATH --binary PATH --destination PATH
   auth list|prepare|inspect|status|login ID
   auth recover ID --nonce NONCE
@@ -438,14 +438,17 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (
     command === "connector" &&
-    ["install", "status", "stop", "restart", "uninstall"].includes(action)
+    ["install", "status", "start", "stop", "restart", "uninstall"].includes(
+      action,
+    )
   ) {
     if (!id) throw Error("Select connector ID");
     output(
       await connectorServiceCommand(
         config,
         id,
-        action as "install" | "status" | "stop" | "restart" | "uninstall",
+        action as
+          "install" | "status" | "start" | "stop" | "restart" | "uninstall",
       ),
     );
     return;
