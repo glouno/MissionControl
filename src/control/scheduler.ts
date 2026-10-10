@@ -11,7 +11,13 @@ import {
   HumanWait,
   type AgentBackend,
 } from "./backends.js";
-import { ControlError, validatePlan, type Claim, type Goal, planSchema } from "./schema.js";
+import {
+  ControlError,
+  validatePlan,
+  type Claim,
+  type Goal,
+  planSchema,
+} from "./schema.js";
 import { instructionManifest } from "./projectContext.js";
 import {
   git,
@@ -134,6 +140,10 @@ export class Scheduler {
       this.store.assertLease(claim.task.id, workerId, claim.generation);
       return claim;
     }
+    // Complete backups close admission before draining the current tick.
+    // Do not claim work that would then be unable to transition or release.
+    if (this.maintenanceRequested || this.store.setting("instance-maintenance"))
+      return null;
     dispatch.requestedGoalId = goalId;
     dispatch.pending = (async () => {
       const claim = this.store.claimNextTask(workerId, { goalId });

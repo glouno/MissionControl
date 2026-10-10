@@ -1025,18 +1025,24 @@ async function serve(config: LoadedConfiguration) {
           throw new Error("Maintenance is already active");
         store.setting("instance-maintenance", {
           kind: "backup",
+          phase: "draining",
           startedAt: store.now(),
         });
         try {
-          return await scheduler!.maintenance(() =>
-            createBackup(
+          return await scheduler!.maintenance(() => {
+            store.setting("instance-maintenance", {
+              kind: "backup",
+              phase: "snapshot",
+              startedAt: store.now(),
+            });
+            return createBackup(
               db,
               config.settings.stateDir,
               destination,
               recipientFile,
               true,
-            ),
-          );
+            );
+          });
         } finally {
           store.setting("instance-maintenance", false);
         }
