@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Real Docker gateway proof with a caller-selected immutable, reviewed image.
 // Never uses provider credentials, production state or global Docker cleanup.
 import { mkdtemp, rm, readFile } from "node:fs/promises";

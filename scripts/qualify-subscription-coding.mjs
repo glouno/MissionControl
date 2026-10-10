@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Real Linux Docker mechanics with synthetic native tools, no vendor login/inference.
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

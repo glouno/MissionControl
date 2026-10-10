@@ -4,7 +4,10 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { EnvironmentImageBuilder } from "./environmentBuild.js";
+import {
+  EnvironmentImageBuilder,
+  processIdentity,
+} from "./environmentBuild.js";
 import { environmentManifestSchema } from "./environmentManifest.js";
 import { git } from "./git.js";
 const digest = `sha256:${"a".repeat(64)}`,
@@ -222,4 +225,27 @@ test("reconciliation fences reused PIDs and records invalid provenance as retrya
     base,
   );
   assert.equal(rebuilt.status, "built");
+});
+
+// This probes the real host API, including Darwin libproc, without Docker mocks.
+test("process identity is stable for a live child and absent after it exits", async () => {
+  const { spawn } = await import("node:child_process");
+  const { once } = await import("node:events");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  await once(child, "spawn");
+  try {
+    const first = await processIdentity(child.pid!);
+    assert.ok(first?.bootId);
+    assert.ok(first.startTicks);
+    assert.deepEqual(await processIdentity(child.pid!), first);
+  } finally {
+    const exited = once(child, "exit");
+    child.kill("SIGTERM");
+    await exited;
+  }
+  assert.equal(await processIdentity(child.pid!), undefined);
+  assert.equal(await processIdentity(-1), undefined);
+  assert.equal(await processIdentity(0x100000001), undefined);
 });

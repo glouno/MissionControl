@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Run on the real target machine. No login, paid inference or service activation.
 import { mkdir, writeFile, readFile, lstat, realpath } from "node:fs/promises";
 import { resolve, relative, join } from "node:path";

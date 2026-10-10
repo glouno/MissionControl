@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Native status only: no browser/device login, credential import or inference.
 import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

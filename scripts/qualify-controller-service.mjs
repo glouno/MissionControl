@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // Real disposable controller lifecycle. Never replaces an installed v1 definition.
 import { mkdtemp, writeFile, readFile, rm, lstat } from "node:fs/promises";
 import { join, resolve } from "node:path";

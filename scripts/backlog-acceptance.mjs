@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 /** Disposable synthetic API/CLI acceptance; no provider credentials or dependencies. */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";

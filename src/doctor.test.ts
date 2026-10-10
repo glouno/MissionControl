@@ -158,7 +158,12 @@ test("doctor exposes subscription image/policy/writer qualification faults witho
   assert.ok(
     calls.every(
       ([file, ...args]) =>
-        ["git", "docker", "age"].includes(file) &&
+        [
+          "git",
+          "docker",
+          "age",
+          ...(process.platform === "darwin" ? ["python3"] : []),
+        ].includes(file) &&
         !args.some((a) =>
           ["run", "exec", "pull", "build", "login"].includes(a),
         ),
@@ -298,7 +303,12 @@ for (const scenario of [
       assert.ok(
         calls.every(
           ([file, ...args]) =>
-            ["git", "docker", "age"].includes(file) &&
+            [
+              "git",
+              "docker",
+              "age",
+              ...(process.platform === "darwin" ? ["python3"] : []),
+            ].includes(file) &&
             !args.some((a) =>
               ["run", "exec", "pull", "build", "login"].includes(a),
             ),

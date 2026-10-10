@@ -2,7 +2,8 @@
 
 This repository is a v1 preview candidate. Core builds require Node 24 LTS
 and Git. Real execution requires a qualified Docker Engine/Desktop installation.
-Encrypted backup requires age. Matrix is optional and does not make Rust a core
+Encrypted backup requires age. macOS image-build ownership additionally requires
+Python 3 on PATH for the native process start-time probe. Matrix is optional and does not make Rust a core
 installation dependency.
 
 ```sh

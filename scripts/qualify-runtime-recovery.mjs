@@ -1,3 +1,4 @@
+import "./canonical-temp.mjs";
 // A real disposable active-container crash proof. Never touches installed state.
 import {
   mkdtemp,
