@@ -28,7 +28,7 @@ const run = (command, args, timeout = 120000) =>
     cwd: source,
     timeout,
     maxBuffer: 8 * 1024 * 1024,
-    env: { PATH: process.env.PATH },
+    env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR },
   });
 const commit = (await run("git", ["rev-parse", "HEAD"])).stdout.trim();
 if ((await run("git", ["status", "--porcelain"])).stdout.trim())
