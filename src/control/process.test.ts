@@ -429,6 +429,73 @@ test("trusted isolated dispatch uses API lifecycle and independent review withou
   assert.equal((scheduler as any).isolated.size, 0);
 });
 
+test("controller dispatch cannot claim a task while complete backup drains", async (t) => {
+  const f = await fixture();
+  t.after(() => f.store.db.close());
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+  });
+  scheduler.authorizeControllerWorker("backup-race");
+  const before = f.store.tasks(f.g.id).map((task) => ({
+    id: task.id,
+    status: task.status,
+    generation: task.generation,
+  }));
+  f.store.setting("instance-maintenance", { kind: "backup" });
+  assert.equal(await scheduler.claimControllerWorker("backup-race"), null);
+  assert.deepEqual(
+    f.store.tasks(f.g.id).map((task) => ({
+      id: task.id,
+      status: task.status,
+      generation: task.generation,
+    })),
+    before,
+  );
+  f.store.setting("instance-maintenance", false);
+  await scheduler.maintenance(async () => {
+    assert.equal(await scheduler.claimControllerWorker("backup-race"), null);
+    assert.deepEqual(
+      f.store.tasks(f.g.id).map((task) => ({
+        id: task.id,
+        status: task.status,
+        generation: task.generation,
+      })),
+      before,
+    );
+  });
+  assert.ok(await scheduler.claimControllerWorker("backup-race"));
+});
+
+test("backup drain lets leased workers finish but snapshot blocks mutations", async (t) => {
+  const f = await fixture();
+  const live = await server(f);
+  t.after(() => {
+    live.s.close();
+    f.store.db.close();
+  });
+  const claim = f.store.claimNextTask("draining-worker")!;
+  const token = f.store.createToken(
+    "draining-worker",
+    "worker",
+    "draining-worker",
+  );
+  const worker = new ControlClient(live.url, token);
+  f.store.setting("instance-maintenance", {
+    kind: "backup",
+    phase: "draining",
+  });
+  await worker.transition(claim, "running");
+  assert.equal(f.store.getTask(claim.task.id).status, "running");
+  f.store.setting("instance-maintenance", {
+    kind: "backup",
+    phase: "snapshot",
+  });
+  await assert.rejects(worker.heartbeat(claim), /Mutations paused/);
+  assert.equal(f.store.getTask(claim.task.id).status, "running");
+  f.store.setting("instance-maintenance", false);
+  await worker.heartbeat(claim);
+});
+
 test("maintenance refuses running filesystem work, blocks ticks and recovers after failure", async (t) => {
   const f = await fixture();
   t.after(() => f.store.db.close());

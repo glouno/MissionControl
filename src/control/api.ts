@@ -550,7 +550,15 @@ export function createControlServer(
         return send(res, 200, revokeAutomation(store, identityRevoke[1]));
       }
       const mutation = () => {
-        if (method === "POST" && store.setting("instance-maintenance"))
+        const maintenance = store.setting("instance-maintenance") as
+          { phase?: string } | undefined;
+        // Existing leased workers must finish while backup drains. Once the
+        // scheduler is quiescent, snapshot phase blocks every mutation.
+        if (
+          method === "POST" &&
+          maintenance &&
+          !(principal.role === "worker" && maintenance.phase === "draining")
+        )
           throw new ControlError(
             "maintenance",
             "Mutations paused during complete backup",
