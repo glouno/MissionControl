@@ -557,7 +557,11 @@ export function createControlServer(
         if (
           method === "POST" &&
           maintenance &&
-          !(principal.role === "worker" && maintenance.phase === "draining")
+          !(
+            principal.role === "worker" &&
+            maintenance.phase === "draining" &&
+            path !== "/claims"
+          )
         )
           throw new ControlError(
             "maintenance",

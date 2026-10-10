@@ -484,6 +484,7 @@ test("backup drain lets leased workers finish but snapshot blocks mutations", as
     kind: "backup",
     phase: "draining",
   });
+  await assert.rejects(worker.claim("draining-worker"), /Mutations paused/);
   await worker.transition(claim, "running");
   assert.equal(f.store.getTask(claim.task.id).status, "running");
   f.store.setting("instance-maintenance", {
