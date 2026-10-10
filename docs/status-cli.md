@@ -92,3 +92,20 @@ Legacy and current controllers can retain incompatible databases and active work
 renaming folders or selecting a command is not a state migration. Compatibility
 aliases may remain until existing consumers are migrated. Platform qualification
 belongs to the exact installed release, not to the command name.
+
+## Source and installation layout
+
+Keep one canonical checkout of `glouno/MissionControl`; the directory can simply
+be named `MissionControl`. Put installation configuration, credentials, state,
+immutable releases and acceptance receipts outside that checkout. Temporary PR
+worktrees share the repository history and should be retired after merge.
+
+Before retiring an older checkout, preserve local-only branches with a verified
+Git bundle, stop only its exact owned services after inspecting active work, and
+back up its database consistently. Retain blocked/paused legacy missions as
+recoverable history; their database is not a v1 configuration or goal database.
+Archive legacy code and data together with a recovery manifest instead of
+silently treating a directory rename as a state migration. Audit launch agents,
+CLI routing, tool catalogs and terminal/dashboard shortcuts before changing the
+canonical source path. A source update on another host does not upgrade its
+installed controller or qualify its existing runtime automatically.

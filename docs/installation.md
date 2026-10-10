@@ -39,6 +39,13 @@ or start it. Run `service start` explicitly after configuration review and
 `service uninstall` requires a stopped controller (unloaded on macOS). Operations
 refuse altered definitions, foreign paths and Linux drop-in overrides; use the
 configuration directory and executable release that installed the service.
+On macOS, controller and connector starts explicitly kickstart an inactive
+bootstrapped job, and stop waits for confirmed unload before uninstall. Launchd
+definitions pin the installation-time tool PATH (absolute directories only) so
+Git, Docker, Python and age remain available outside an interactive shell. Use
+the same reviewed PATH for lifecycle operations; changed definitions, loaded
+arguments, redirected files and ambiguous manager failures are rejected.
+
 Service output is suppressed by default to keep private diagnostics out of
 shared system journals. Builds and installs do
 not start services, log in, or consume inference.
@@ -117,3 +124,17 @@ then open Work and select its project. Saving backlog is inert. Launch explicitl
 when dependencies have completed and the applied project is ready; inspect the
 linked goal for scheduler outcomes and recorded attempts. The same workflow is
 available through the [API and CLI](agents.md#durable-project-backlog).
+
+## Actual macOS service acceptance
+
+After building a clean committed checkout, run
+`node scripts/qualify-launchd.mjs /private/new-launchd-receipt.json` with a new
+file in an existing owner-only canonical directory outside source. Node 24,
+Git, Python 3 and age/age-keygen must be on PATH. The proof refuses an existing
+v1 controller, creates fresh external synthetic state on an unused loopback
+port, verifies authenticated access, goal completion, restart persistence and
+encrypted backup/restore, and removes only its own controller definition.
+It also proves explicit start/restart/stop/uninstall for a synthetic connector
+process; it never contacts Telegram or Matrix or authenticates a provider.
+Live connector transport, subscription inference and production release
+qualification remain separate gates. Failed proof state is retained privately.
