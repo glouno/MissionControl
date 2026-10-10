@@ -138,12 +138,45 @@ test("connector service lifecycle checks exact ownership and never addresses leg
     false,
   );
   config.connectors[0].enabled = true;
-  const macOptions = { ...options, platform: "darwin" };
+  let macLoaded = false;
+  const macPath = join(
+    root,
+    "Library/LaunchAgents/org.missioncontrol.v1.connector.synthetic.plist",
+  );
+  const macOptions = {
+    ...options,
+    platform: "darwin",
+    execute: async (file: string, args: string[]) => {
+      calls.push({ file, args });
+      if (args[0] === "print") {
+        if (!macLoaded)
+          throw Object.assign(Error("missing"), {
+            code: 113,
+            stderr: "Could not find service",
+          });
+        return {
+          stdout: `path = ${macPath}\narguments = {\n/installed/node\n/installed/cli.js\n--config-dir\n${config.root}\nconnector\nrun\nsynthetic\n}\n`,
+        };
+      }
+      if (args[0] === "bootstrap") macLoaded = true;
+      if (args[0] === "bootout") macLoaded = false;
+      return { stdout: "" };
+    },
+  };
   const mac = await connectorServiceCommand(
     config,
     "synthetic",
     "install",
     macOptions,
+  );
+  await assert.rejects(
+    connectorServiceCommand(config, "synthetic", "restart", macOptions),
+    /not loaded/,
+  );
+  await connectorServiceCommand(config, "synthetic", "start", macOptions);
+  await assert.rejects(
+    connectorServiceCommand(config, "synthetic", "install", macOptions),
+    /already loaded/,
   );
   await connectorServiceCommand(config, "synthetic", "restart", macOptions);
   assert.ok(calls.at(-1)!.args.includes("kickstart"));
@@ -151,5 +184,79 @@ test("connector service lifecycle checks exact ownership and never addresses leg
   await symlink(installed.path!, mac.path!);
   await assert.rejects(
     connectorServiceCommand(config, "synthetic", "stop", macOptions),
+  );
+});
+
+test("launchd connector ownership and manager failures block destructive actions", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mc-connector-ownership-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config: any = {
+    root: join(root, "config"),
+    connectors: [
+      {
+        id: "synthetic",
+        enabled: true,
+        kind: "telegram",
+        credential: { kind: "file", path: "fake" },
+        bindings: [{ enabled: true }],
+      },
+    ],
+  };
+  let loaded = false,
+    foreign = false,
+    failure = false;
+  const path = join(
+    root,
+    "Library/LaunchAgents/org.missioncontrol.v1.connector.synthetic.plist",
+  );
+  const calls: string[][] = [];
+  const options = {
+    home: root,
+    platform: "darwin",
+    node: "/node",
+    cli: "/cli",
+    execute: async (_file: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "print") {
+        if (failure)
+          throw Object.assign(Error("denied"), {
+            code: 1,
+            stderr: "Operation not permitted",
+          });
+        if (!loaded)
+          throw Object.assign(Error("missing"), {
+            code: 113,
+            stderr: "Could not find service",
+          });
+        return {
+          stdout: `path = ${foreign ? "/other.plist" : path}\narguments = {\n/node\n/cli\n--config-dir\n${config.root}\nconnector\nrun\nsynthetic\n}\n`,
+        };
+      }
+      if (args[0] === "bootstrap") loaded = true;
+      if (args[0] === "bootout") loaded = false;
+      return { stdout: "" };
+    },
+  };
+  await connectorServiceCommand(config, "synthetic", "install", options);
+  failure = true;
+  for (const action of ["status", "stop", "restart", "uninstall"] as const)
+    await assert.rejects(
+      connectorServiceCommand(config, "synthetic", action, options),
+      /denied/,
+    );
+  failure = false;
+  await connectorServiceCommand(config, "synthetic", "start", options);
+  foreign = true;
+  for (const action of ["status", "stop", "restart", "uninstall"] as const)
+    await assert.rejects(
+      connectorServiceCommand(config, "synthetic", action, options),
+      /ownership/,
+    );
+  assert.equal(calls.filter((a) => a[0] === "bootout").length, 0);
+  foreign = false;
+  await unlink(path);
+  await assert.rejects(
+    connectorServiceCommand(config, "synthetic", "status", options),
+    /without its owned/,
   );
 });
