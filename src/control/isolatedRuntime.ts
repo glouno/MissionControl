@@ -1,3 +1,4 @@
+import { inferenceHttpFetch } from "./inferenceHttp.js";
 import { assertSubscriptionQualification } from "./subscriptionQualification.js";
 import { reconcileRuntime } from "./runtimeRecovery.js";
 import { join } from "node:path";
@@ -279,7 +280,7 @@ export async function createIsolatedRuntime(
           throw new Error(
             "Azure requires fixed credential-free HTTPS endpoint",
           );
-        portableProviders[name] = new AzureProvider(b, fetch, headers);
+        portableProviders[name] = new AzureProvider(b, inferenceHttpFetch, headers);
       } else if (b.kind === "bedrock") {
         if (!secretsDir || p.authentication.kind !== "aws-session")
           throw new Error(

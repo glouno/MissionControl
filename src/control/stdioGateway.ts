@@ -1,3 +1,4 @@
+import { inferenceHttpFetch } from "./inferenceHttp.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { once } from "node:events";
@@ -27,7 +28,7 @@ async function send(child:ChildProcessWithoutNullStreams,value:unknown){
 /** Docker exec is the only relay channel. It grants no host/private-network path. */
 export class StdioGateway {
  private channels=new Map<string,{child:ChildProcessWithoutNullStreams;done:Promise<void>;closed:Promise<unknown>;abort:AbortController}>();
- constructor(readonly gateway:InferenceGateway,readonly url:string,readonly launch:typeof spawn=spawn,readonly fetcher:typeof fetch=fetch) {
+ constructor(readonly gateway:InferenceGateway,readonly url:string,readonly launch:typeof spawn=spawn,readonly fetcher:typeof fetch=inferenceHttpFetch) {
   const parsed=new URL(url);if(parsed.protocol!=="http:"||parsed.hostname!=="127.0.0.1"||parsed.username||parsed.password||parsed.search||parsed.hash)throw new Error("Gateway bridge requires fixed loopback HTTP");
  }
  async start(sessionId:string,container:string,relayScript:string){
