@@ -602,13 +602,18 @@ export class CodexBackend implements AgentBackend {
           outputTokens = u?.outputTokens ?? outputTokens;
         }
         if (m.method === "error") {
+          // The native server owns retries within this reserved invocation.
+          // A recoverable stream notification is not a terminal turn result.
+          if (m.params?.willRetry === true) return;
           const message = m.params?.error?.message ?? "Codex inference failed";
           fail(new Error(message));
         }
         if (m.method === "turn/completed") {
-          if (m.params?.turn?.status === "failed")
+          if (m.params?.turn?.status !== "completed")
             fail(
-              new Error(m.params.turn.error?.message ?? "Codex turn failed"),
+              new Error(
+                m.params?.turn?.error?.message ?? "Codex turn did not complete",
+              ),
             );
           else
             settle({

@@ -613,3 +613,100 @@ test("controller-reserved Claude repair cannot emit human or owner task handoffs
     /cannot issue task handoffs/,
   );
 });
+
+for (const status of [
+  "completed",
+  "failed",
+  "interrupted",
+  "inProgress",
+  "unknown",
+]) {
+  test(`Codex preserves native retries and requires terminal completed status: ${status}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "mc-codex-retry-"));
+    const command = join(root, "codex-stub");
+    await writeFile(
+      command,
+      `#!/usr/bin/env node
+import {createInterface} from 'node:readline';
+const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+for await (const line of createInterface({input:process.stdin})) {
+  const m=JSON.parse(line);
+  if (m.method==='initialize') send({id:m.id,result:{}});
+  if (m.method==='thread/start') send({id:m.id,result:{thread:{id:'fixture'}}});
+  if (m.method==='turn/start') {
+    send({id:m.id,result:{}});
+    send({method:'error',params:{threadId:'fixture',turnId:'turn',willRetry:true,error:{message:'Reconnecting... 1/5'}}});
+    await new Promise(resolve=>setTimeout(resolve,20));
+    send({method:'item/completed',params:{item:{type:'agentMessage',phase:'final_answer',text:'accepted result'}}});
+    send({method:'turn/completed',params:{turn:{status:${JSON.stringify(status)}}}});
+  }
+}
+`,
+      { mode: 0o755 },
+    );
+    const output = new CodexBackend({ kind: "codex", command: "codex" }).run({
+      claim: {
+        goal: {
+          config: goalSchema.parse({
+            title: "Synthetic",
+            description: "Synthetic",
+            repoPath: root,
+          }),
+        },
+      } as Claim,
+      workspace: root,
+      execution: fixtureExecution(root, command),
+      mode: "plan",
+      prompt: "Return a result",
+      signal: AbortSignal.timeout(5000),
+      onCheckpoint: async () => {},
+    });
+    if (status === "completed")
+      assert.equal((await output).text.trim(), "accepted result");
+    else await assert.rejects(output, /did not complete/);
+  });
+}
+
+test("Codex terminal error still fails after a recoverable notification", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mc-codex-error-"));
+  const command = join(root, "codex-stub");
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+import {createInterface} from 'node:readline';
+const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+for await (const line of createInterface({input:process.stdin})) {
+  const m=JSON.parse(line);
+  if (m.method==='initialize') send({id:m.id,result:{}});
+  if (m.method==='thread/start') send({id:m.id,result:{thread:{id:'fixture'}}});
+  if (m.method==='turn/start') {
+    send({id:m.id,result:{}});
+    send({method:'error',params:{willRetry:true,error:{message:'Reconnecting... 1/5'}}});
+    await new Promise(resolve=>setTimeout(resolve,20));
+    send({method:'error',params:{willRetry:false,error:{message:'Synthetic terminal failure'}}});
+  }
+}
+`,
+    { mode: 0o755 },
+  );
+  await assert.rejects(
+    new CodexBackend({ kind: "codex", command: "codex" }).run({
+      claim: {
+        goal: {
+          config: goalSchema.parse({
+            title: "Synthetic",
+            description: "Synthetic",
+            repoPath: root,
+          }),
+        },
+      } as Claim,
+      workspace: root,
+      execution: fixtureExecution(root, command),
+      mode: "plan",
+      prompt: "Return result",
+      signal: AbortSignal.timeout(5000),
+      onCheckpoint: async () => {},
+    }),
+    /Synthetic terminal failure/,
+  );
+});
