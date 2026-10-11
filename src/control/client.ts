@@ -8,11 +8,12 @@ import type {
   TaskState,
   OwnerOperationInput,
 } from "./schema.js";
+import { request, type Dispatcher } from "undici";
 export class ControlClient {
   constructor(
     readonly url: string,
     readonly token: string,
-    readonly fetcher: typeof fetch = fetch,
+    readonly fetcher?: typeof fetch,
   ) {}
   async request<T = unknown>(
     path: string,
@@ -21,7 +22,8 @@ export class ControlClient {
     key?: string,
     timeoutMs = 30000,
   ): Promise<T> {
-    const r = await this.fetcher(`${this.url}/api/v1${path}`, {
+    const url = `${this.url}/api/v1${path}`;
+    const options = {
       method,
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -30,7 +32,23 @@ export class ControlClient {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
-    });
+    };
+    // The result endpoint waits for isolated tests, review and integration.
+    // Fetch's separate 300-second headers timeout can expire before the admitted
+    // operation deadline, releasing a task whose review is still running.
+    // Set both HTTP timeouts explicitly and keep the original abort deadline.
+    const response = this.fetcher
+      ? await this.fetcher(url, options)
+      : await request(url, {
+          ...options,
+          method: method as Dispatcher.HttpMethod,
+          headersTimeout: timeoutMs,
+          bodyTimeout: timeoutMs,
+        });
+    const r = "statusCode" in response
+      ? { status: response.statusCode, ok: response.statusCode >= 200 && response.statusCode < 300,
+          json: () => response.body.json() }
+      : response;
     const data = (await r.json()) as any;
     if (!r.ok)
       throw Object.assign(

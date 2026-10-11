@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "qualification": "Declared package licenses; redistribution notices and corresponding-source review still required",
   "lockfiles": {
-    "npmSha256": "b61da9a7f506b5384a3ac0601e648a4f1da3cb5e16a837af00109a45686a5254",
+    "npmSha256": "4842f9450024fe55a0c8e2fb310b6d73637212777de077b989be261b09714f61",
     "rustSha256": "c9212ea119596cc48439619fd07413aa9525620cf9f32ced1dd450aaf0d3b65e"
   },
   "npm": [
@@ -1090,6 +1090,13 @@
       "license": "MIT",
       "integrity": "sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==",
       "source": "jshttp/type-is"
+    },
+    {
+      "name": "undici",
+      "version": "7.30.0",
+      "license": "MIT",
+      "integrity": "sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==",
+      "source": "git+https://github.com/nodejs/undici.git"
     },
     {
       "name": "unpipe",

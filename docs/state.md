@@ -91,6 +91,12 @@ matching configured identity. It stops only label-matched registered resources
 before releasing the writer. Live/foreign writers, unavailable Docker, missing
 configuration and ownership mismatches keep admission closed. Startup never logs in.
 
+Task result submission waits for independent verification, review and integration.
+The controller client binds HTTP header/body timeouts to the same explicit request
+deadline (up to three admitted task periods for this result path). It does not
+retry a timed-out POST automatically: a lost response may already have effects,
+so worker recovery still inspects the authoritative generation and result.
+
 Metered usage distinguishes reported, estimated and unknown billing. Unknown
 billing leaves its reservation unresolved and counted against available spending;
 it is never recorded as measured zero or settled at the reserved estimate.
