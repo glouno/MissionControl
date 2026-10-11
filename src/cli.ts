@@ -930,7 +930,13 @@ async function serve(config: LoadedConfiguration) {
         new URL("../environments/worker/gateway-relay.py", import.meta.url)
           .pathname,
         config.settings.secretsDir,
-        config.runtimeHash,
+        Object.fromEntries(
+          config.projects.map((project) => [
+            project.id,
+            effectiveGoal(config, project.id, "Runtime binding", {}, false)
+              .admission!.runtimeHash!,
+          ]),
+        ),
         config.auth,
       );
     if (!runtime) {

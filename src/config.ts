@@ -1,3 +1,4 @@
+import { executionRuntimeHash } from "./control/runtimeFingerprint.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { readFile, realpath, lstat, mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname, join, isAbsolute, relative } from "node:path";
@@ -586,7 +587,7 @@ export function effectiveGoal(
     authentication?.kind === "session"
       ? config.auth.find((a) => a.id === authentication.reference)
       : undefined;
-  const baseline = goalSchema.parse({
+  let baseline = goalSchema.parse({
     backend: { kind: "fake" },
     ...profile?.defaults,
     ...p.config,
@@ -599,7 +600,7 @@ export function effectiveGoal(
       : {}),
     admission: {
       configurationHash: config.hash,
-      runtimeHash: config.runtimeHash,
+      runtimeHashVersion: 2,
       executionImageDigest: config.hosts.find((h) => h.isolatedRuntime)
         ?.isolatedRuntime?.projects[p.id]?.imageDigest,
       authenticationPolicyHash: admittedAuth
@@ -616,6 +617,12 @@ export function effectiveGoal(
     title: description.slice(0, 100),
     description,
   });
+  baseline.admission!.runtimeHash = executionRuntimeHash(
+    baseline,
+    config.hosts.find((h) => h.isolatedRuntime)?.isolatedRuntime,
+    config.auth,
+  );
+  baseline = goalSchema.parse(baseline);
   if (baseline.executionContract) {
     const contract = validateBackendContract(
       baseline.backend,
