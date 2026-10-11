@@ -1,3 +1,4 @@
+import { assertRuntimeBinding } from "./runtimeFingerprint.js";
 import { inferenceHttpFetch } from "./inferenceHttp.js";
 import { assertSubscriptionQualification } from "./subscriptionQualification.js";
 import { reconcileRuntime } from "./runtimeRecovery.js";
@@ -120,16 +121,18 @@ export function subscriptionBinding(
   goal: Goal,
   config: IsolatedRuntimeConfig,
   environments: AuthEnvironment[],
-  runtimeHash?: string,
+  runtimeHash?: string | Record<string, string>,
 ) {
   const admitted = goal.config.admission,
     contract = goal.config.executionContract;
-  if (runtimeHash && admitted?.runtimeHash !== runtimeHash)
-    throw new ControlError(
-      "runtime_revision",
-      "Admitted runtime configuration changed",
-      409,
-    );
+  assertRuntimeBinding(
+    goal.config,
+    config,
+    environments,
+    typeof runtimeHash === "object"
+      ? runtimeHash[goal.config.projectId!]
+      : undefined,
+  );
   const definition = admitted?.providerId
     ? config.providers[admitted.providerId]
     : undefined;
@@ -220,7 +223,7 @@ export async function createIsolatedRuntime(
   input: IsolatedRuntimeConfig,
   relayScript: string,
   secretsDir?: string,
-  runtimeHash?: string,
+  runtimeHash?: string | Record<string, string>,
   authEnvironments: AuthEnvironment[] = [],
 ) {
   store.fenceStartup();
@@ -280,7 +283,11 @@ export async function createIsolatedRuntime(
           throw new Error(
             "Azure requires fixed credential-free HTTPS endpoint",
           );
-        portableProviders[name] = new AzureProvider(b, inferenceHttpFetch, headers);
+        portableProviders[name] = new AzureProvider(
+          b,
+          inferenceHttpFetch,
+          headers,
+        );
       } else if (b.kind === "bedrock") {
         if (!secretsDir || p.authentication.kind !== "aws-session")
           throw new Error(
@@ -448,12 +455,14 @@ export async function createIsolatedRuntime(
       return project.imageDigest;
     };
     const backend = (goal: Goal) => {
-      if (runtimeHash && goal.config.admission?.runtimeHash !== runtimeHash)
-        throw new ControlError(
-          "runtime_revision",
-          "Admitted runtime configuration changed; retain this goal and submit a new goal with reviewed configuration",
-          409,
-        );
+      assertRuntimeBinding(
+        goal.config,
+        config,
+        authEnvironments,
+        typeof runtimeHash === "object"
+          ? runtimeHash[goal.config.projectId!]
+          : undefined,
+      );
       if (goal.config.executionContract?.usagePolicy.kind === "subscription") {
         const binding = subscriptionBinding(
           goal,
@@ -556,6 +565,14 @@ export async function createIsolatedRuntime(
       environment,
       backend,
       verify: (claim: Claim, path: string) => {
+        assertRuntimeBinding(
+          claim.goal.config,
+          config,
+          authEnvironments,
+          typeof runtimeHash === "object"
+            ? runtimeHash[claim.goal.config.projectId!]
+            : undefined,
+        );
         // A separate container receives source only, never the authentication store.
         const digest =
           claim.goal.config.executionContract?.usagePolicy.kind ===

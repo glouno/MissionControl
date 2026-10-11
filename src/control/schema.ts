@@ -100,6 +100,7 @@ export const goalSchema = z
           .string()
           .regex(/^[a-f0-9]{64}$/)
           .optional(),
+        runtimeHashVersion: z.literal(2).optional(),
         runtimeHash: z
           .string()
           .regex(/^[a-f0-9]{64}$/)

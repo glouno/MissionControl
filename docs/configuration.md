@@ -165,3 +165,15 @@ See [API and CLI backlog commands](agents.md#durable-project-backlog).
 real scheduler and fake provider. It needs no credentials or additional packages.
 `node scripts/backlog-acceptance.mjs` runs that fixture after a build. The optional
 browser fixture is `scripts/dashboard-acceptance.mjs`; Playwright remains external.
+
+### Admitted runtime identity
+
+New goals record a version-2 runtime fingerprint scoped to their selected project
+and provider. It binds the execution harness, model, endpoint, authentication
+reference and policy, execution image, and independent verification image. Editing
+unrelated projects/providers or admission cost ceilings does not replace this
+identity. Goal budgets remain the immutable limits admitted when the goal was
+created; changing configuration does not increase an existing goal's allowance.
+Changing a selected execution identity requires a freshly reviewed goal. Legacy
+goals containing the former installation-wide runtime hash fail closed after this
+upgrade and must be retained as evidence, then replaced through fresh admission.
