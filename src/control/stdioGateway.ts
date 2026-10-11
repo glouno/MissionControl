@@ -26,7 +26,7 @@ async function send(child:ChildProcessWithoutNullStreams,value:unknown){
 }
 /** Docker exec is the only relay channel. It grants no host/private-network path. */
 export class StdioGateway {
- private channels=new Map<string,{child:ChildProcessWithoutNullStreams;done:Promise<void>;closed:Promise<unknown>}>();
+ private channels=new Map<string,{child:ChildProcessWithoutNullStreams;done:Promise<void>;closed:Promise<unknown>;abort:AbortController}>();
  constructor(readonly gateway:InferenceGateway,readonly url:string,readonly launch:typeof spawn=spawn,readonly fetcher:typeof fetch=fetch) {
   const parsed=new URL(url);if(parsed.protocol!=="http:"||parsed.hostname!=="127.0.0.1"||parsed.username||parsed.password||parsed.search||parsed.hash)throw new Error("Gateway bridge requires fixed loopback HTTP");
  }
@@ -36,12 +36,13 @@ export class StdioGateway {
   const child=this.launch("docker",["exec","-i",container,"python3","-u","-c",script],{stdio:["pipe","pipe","pipe"],env:{PATH:process.env.PATH}});
   child.stderr.resume();
   const closed=once(child,"close").catch(()=>undefined);
-  const done=this.pump(sessionId,child).catch(()=>{this.gateway.revoke(sessionId);child.kill("SIGTERM")});
-  this.channels.set(sessionId,{child,done,closed});
-  child.once("error",()=>this.gateway.revoke(sessionId));
-  child.once("exit",()=>{this.gateway.revoke(sessionId);this.channels.delete(sessionId)});
+  const abort=new AbortController();
+  const done=this.pump(sessionId,child,abort.signal).catch(()=>{this.gateway.revoke(sessionId);child.kill("SIGTERM")});
+  this.channels.set(sessionId,{child,done,closed,abort});
+  child.once("error",()=>{abort.abort();this.gateway.revoke(sessionId)});
+  child.once("exit",()=>{abort.abort();this.gateway.revoke(sessionId);this.channels.delete(sessionId)});
  }
- private async pump(sessionId:string,child:ChildProcessWithoutNullStreams){
+ private async pump(sessionId:string,child:ChildProcessWithoutNullStreams,signal:AbortSignal){
   for await(const raw of frames(child.stdout)){
    const frame=frameSchema.parse(raw);
    const token=frame.headers.authorization?.replace(/^Bearer /,"")??frame.headers["x-api-key"]??"";
@@ -51,16 +52,17 @@ export class StdioGateway {
     if(cap.sessionId!==sessionId)throw new Error("Inference relay session differs");
     const body=Buffer.from(frame.body,"base64");if(body.length<1||body.length>4*1024*1024)throw new Error("Inference relay request exceeded");
     const headers=Object.fromEntries(Object.entries(frame.headers).filter(([key])=>["authorization","x-api-key","content-type","anthropic-beta"].includes(key)));
-    const response=await this.fetcher(this.url+frame.path,{method:"POST",headers,body,redirect:"error",signal:AbortSignal.timeout(Math.min(3600000,Math.max(1,cap.expiresAt-Date.now())))});
+    const response=await this.fetcher(this.url+frame.path,{method:"POST",headers,body,redirect:"error",signal:AbortSignal.any([signal,AbortSignal.timeout(Math.min(3600000,Math.max(1,cap.expiresAt-Date.now())))])});
     await send(child,{kind:"start",status:response.status,contentType:response.headers.get("content-type")??"application/json"});started=true;
     if(response.body)for await(const chunk of response.body)await send(child,{kind:"data",data:Buffer.from(chunk).toString("base64")});
     await send(child,{kind:"end"});
    }catch{
+    if(signal.aborted)return;
     if(started)throw new Error("Inference stream failed after response headers");
     await send(child,{kind:"start",status:403,contentType:"application/json"});
     await send(child,{kind:"data",data:Buffer.from('{"error":"Inference capability denied"}').toString("base64")});await send(child,{kind:"end"});
    }
   }
  }
- async stop(sessionId:string){const channel=this.channels.get(sessionId);if(!channel)return;this.gateway.revoke(sessionId);channel.child.kill("SIGTERM");channel.child.stdin.destroy();channel.child.stdout.destroy();await channel.done;await channel.closed;this.channels.delete(sessionId)}
+ async stop(sessionId:string){const channel=this.channels.get(sessionId);if(!channel)return;channel.abort.abort();this.gateway.revoke(sessionId);channel.child.kill("SIGTERM");channel.child.stdin.destroy();channel.child.stdout.destroy();await channel.done;await channel.closed;this.channels.delete(sessionId)}
 }
