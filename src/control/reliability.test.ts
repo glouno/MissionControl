@@ -120,6 +120,107 @@ test("result phase has one shared envelope and preserves implementation evidence
     result.deadlineAt,
   );
 });
+test("cleanup deadline survives restart without renewing fenced ownership", async (t) => {
+  const f = await fixture(t);
+  f.advance(1001);
+  f.store.reconcileExpired(f.claim.task.id, 1);
+  const original = f.store.reliability.runtime(`${f.claim.task.id}:1`)!;
+  assert.equal(original.cleanupDeadlineAt, f.store.clock() + 60000);
+  f.advance(60001);
+  const restarted = new ControlStore(f.db, () => f.store.clock());
+  assert.equal(
+    restarted.reliability.cleanupSignal(original.attemptId).aborted,
+    true,
+  );
+  assert.equal(
+    restarted.reliability.runtime(original.attemptId)!.cleanupDeadlineAt,
+    original.cleanupDeadlineAt,
+  );
+  assert.equal(restarted.getTask(f.claim.task.id).workerId, "worker");
+  assert.equal(restarted.attempts(f.goal.id)[0].outcome, "recovering");
+});
+test("controller recovery refuses live resources and retains unknown usage after inspected stop", async (t) => {
+  const f = await fixture(t);
+  f.store.release(f.claim.task.id, "worker", 1, "blocked", "Synthetic stop");
+  const attemptId = f.store.reserveOperation(f.goal.id, "review");
+  f.db.exec(
+    `UPDATE control_attempts SET outcome='recovering' WHERE id='${attemptId}'`,
+  );
+  f.db.exec(
+    `INSERT INTO sessions VALUES('synthetic','controller',1,'${JSON.stringify({ status: "active", container: "synthetic", spec: { operationReservationId: attemptId } })}')`,
+  );
+  assert.throws(
+    () => f.store.finishOperationRecovery(attemptId),
+    /inspected cleanup/,
+  );
+  assert.equal(
+    f.store.attempts(f.goal.id).find((a) => a.id === attemptId)!.outcome,
+    "recovering",
+  );
+  f.db.exec(
+    `UPDATE sessions SET record='${JSON.stringify({ status: "stopped", spec: { operationReservationId: attemptId } })}'`,
+  );
+  f.store.finishOperationRecovery(attemptId);
+  assert.equal(
+    f.store.attempts(f.goal.id).find((a) => a.id === attemptId)!.outcome,
+    "interrupted",
+  );
+  assert.equal(f.store.reliability.runtime(attemptId)!.cleanupState, "stopped");
+});
+test("expired cleanup never invokes resource mutations", async () => {
+  let called = false;
+  await assert.rejects(
+    boundedCleanup(
+      async () => {
+        called = true;
+      },
+      60000,
+      AbortSignal.abort(),
+    ),
+  );
+  assert.equal(called, false);
+});
+test("plan installation rejects scope widening and impossible resource prerequisites", async (t) => {
+  const f = await fixture(t);
+  const goal = f.store.createGoal({
+    title: "Scope",
+    description: "Synthetic",
+    repoPath: f.root,
+    backend: { kind: "fake" },
+    policy: { approvedPaths: ["src/**"] },
+  });
+  const task = {
+    key: "one",
+    title: "One",
+    description: "Synthetic",
+    allowedPaths: ["**"],
+    acceptanceCriteria: ["Meaningful"],
+  };
+  assert.throws(
+    () => f.store.installPlan(goal.id, { tasks: [task] }, goal.revision),
+    /scope exceeds/,
+  );
+  f.store.setting("scheduler-limits", { cpu: 1, memoryMiB: 1024 });
+  assert.throws(
+    () =>
+      f.store.installPlan(
+        goal.id,
+        { tasks: [{ ...task, allowedPaths: ["src/**"], cpuUnits: 2 }] },
+        goal.revision,
+      ),
+    /host capacity/,
+  );
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        { ...task, allowedPaths: ["src/calc.py"], cpuUnits: 1, memoryMiB: 128 },
+      ],
+    },
+    goal.revision,
+  );
+  assert.equal(f.store.tasks(goal.id).length, 1);
+});
 test("provider refusal pauses once, survives restart and generic resume cannot bypass it", async (t) => {
   const f = await fixture(t);
   const fail = failureRecord("policy_refusal");

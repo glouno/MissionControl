@@ -53,6 +53,49 @@ async function until(predicate: () => boolean, limit = 3000) {
     await new Promise((r) => setTimeout(r, 10));
   assert.ok(predicate());
 }
+test("stopped controller operations reconcile without restart or replay", async (t) => {
+  const f = await fixture(t),
+    goal = await f.goal("recovery");
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "One",
+          description: "One",
+          allowedPaths: ["**"],
+          acceptanceCriteria: ["One"],
+        },
+      ],
+    },
+    goal.revision,
+  );
+  const attemptId = f.store.reserveOperation(goal.id, "review");
+  f.db.exec(
+    `UPDATE control_attempts SET outcome='recovering' WHERE id='${attemptId}'`,
+  );
+  f.store.reliability.beginCleanup(attemptId);
+  let inspected = 0;
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    asynchronousJobs: true,
+    spawnWorkers: false,
+    recoverOperation: async (id, signal) => {
+      assert.equal(id, attemptId);
+      signal.throwIfAborted();
+      inspected++;
+    },
+  });
+  t.after(() => scheduler.close());
+  await scheduler.tick();
+  await until(
+    () =>
+      f.store.attempts(goal.id).find((a) => a.id === attemptId)!.outcome ===
+      "interrupted",
+  );
+  await scheduler.tick();
+  assert.equal(inspected, 1);
+});
 
 test("asynchronous planning permits independent repositories and avoids duplicate dispatch", async (t) => {
   const f = await fixture(t),

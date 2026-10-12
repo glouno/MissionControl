@@ -70,6 +70,8 @@ export const attemptRuntimeSchema = z.object({
   lastProgressAt: timestampSchema,
   progressKind: z.string(),
   cleanupState: z.enum(["none", "stopping", "stopped", "blocked"]),
+  cleanupStartedAt: timestampSchema.optional(),
+  cleanupDeadlineAt: timestampSchema.optional(),
   retryCount: z.number().int().nonnegative(),
   nextRetryAt: timestampSchema.optional(),
   failure: failureSchema.optional(),
@@ -139,6 +141,8 @@ export interface AttemptRuntime {
   lastProgressAt: number;
   progressKind: string;
   cleanupState: "none" | "stopping" | "stopped" | "blocked";
+  cleanupStartedAt?: number;
+  cleanupDeadlineAt?: number;
   retryCount: number;
   nextRetryAt?: number;
   failure?: FailureRecord;
@@ -433,6 +437,24 @@ CREATE TABLE IF NOT EXISTS goal_lineage(goal_id TEXT PRIMARY KEY REFERENCES cont
     );
     return r;
   }
+  /** Cleanup belongs to the admitted attempt; restart cannot replenish its allowance. */
+  beginCleanup(attemptId: string) {
+    const runtime = this.runtime(attemptId);
+    if (!runtime) throw new Error("Cleanup requires an admitted attempt");
+    runtime.cleanupStartedAt ??= this.clock();
+    runtime.cleanupDeadlineAt ??= runtime.cleanupStartedAt + 60000;
+    if (runtime.cleanupState === "none") runtime.cleanupState = "stopping";
+    return this.saveRuntime(runtime);
+  }
+  cleanupSignal(attemptId: string) {
+    const runtime = this.beginCleanup(attemptId);
+    const remaining = runtime.cleanupDeadlineAt! - this.clock();
+    return remaining > 0
+      ? AbortSignal.timeout(remaining)
+      : AbortSignal.abort(
+          new ProviderFailure(failureRecord("cleanup_blocked")),
+        );
+  }
   start(attemptId: string, timeoutMs: number, phase: string) {
     const now = this.clock();
     return this.saveRuntime({
@@ -569,6 +591,7 @@ export async function boundedCleanup(
 ) {
   const signal = sharedSignal ?? AbortSignal.timeout(timeoutMs);
   try {
+    signal.throwIfAborted();
     await abortable(operation(signal), signal);
   } catch (error) {
     throw new ProviderFailure(failureRecord("cleanup_blocked"));

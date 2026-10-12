@@ -29,6 +29,7 @@ async function fixture(t: any) {
     },
     maxCostUsd: 10,
     estimatePerRunUsd: 1,
+    verificationCommands: ["test -d ."],
     executionContract: {
       harness: "tool-loop",
       provider: "azure",

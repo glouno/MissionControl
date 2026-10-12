@@ -111,6 +111,10 @@ export class Scheduler {
         generation: number,
         signal: AbortSignal,
       ) => Promise<void>;
+      recoverOperation?: (
+        attemptId: string,
+        signal: AbortSignal,
+      ) => Promise<void>;
       imageMaintenance?: (apply: boolean) => Promise<unknown>;
       storagePolicy?: import("./storage.js").StorageManager["policy"];
     } = {},
@@ -325,59 +329,116 @@ export class Scheduler {
           continue;
         const job = Promise.resolve()
           .then(() =>
-            boundedCleanup(async (cleanup) => {
-              const active = this.isolated.get(task.id);
-              active?.abort.abort(new Error("Attempt recovery"));
-              // The adapter must finish all import/checkpoint callbacks before ownership is released.
-              if (active) await abortable(active.done, cleanup);
-              if (this.options.recoverAttempt)
-                await abortable(
-                  this.options.recoverAttempt(
-                    task.id,
-                    task.generation,
+            boundedCleanup(
+              async (cleanup) => {
+                const active = this.isolated.get(task.id);
+                active?.abort.abort(new Error("Attempt recovery"));
+                // The adapter must finish all import/checkpoint callbacks before ownership is released.
+                if (active) await abortable(active.done, cleanup);
+                if (this.options.recoverAttempt)
+                  await abortable(
+                    this.options.recoverAttempt(
+                      task.id,
+                      task.generation,
+                      cleanup,
+                    ),
                     cleanup,
-                  ),
-                  cleanup,
-                );
-              else if (
-                !active &&
-                this.store.getGoal(task.goalId).config.backend.kind !== "fake"
-              )
-                throw new ControlError(
-                  "cleanup_blocked",
-                  "Runtime inspection is required",
-                  409,
-                );
-              let safe = false;
-              if (
-                task.checkpoint?.commit &&
-                !task.checkpoint.pendingTool &&
-                !this.store.setting(`result-request:${attempt.id}`)
-              ) {
-                try {
-                  const path = this.workspaces.taskPath(task);
-                  safe =
-                    (await git(path, ["rev-parse", "HEAD"])) ===
-                      task.checkpoint.commit &&
-                    !(await git(path, ["status", "--porcelain"]));
-                } catch {
-                  /* Retain the recovery decision if the checkpoint cannot be reproduced. */
+                  );
+                else if (
+                  !active &&
+                  this.store.getGoal(task.goalId).config.backend.kind !== "fake"
+                )
+                  throw new ControlError(
+                    "cleanup_blocked",
+                    "Runtime inspection is required",
+                    409,
+                  );
+                let safe = false;
+                if (
+                  task.checkpoint?.commit &&
+                  !task.checkpoint.pendingTool &&
+                  !this.store.setting(`result-request:${attempt.id}`)
+                ) {
+                  try {
+                    const path = this.workspaces.taskPath(task);
+                    safe =
+                      (await git(path, ["rev-parse", "HEAD"])) ===
+                        task.checkpoint.commit &&
+                      !(await git(path, ["status", "--porcelain"]));
+                  } catch {
+                    /* Retain the recovery decision if the checkpoint cannot be reproduced. */
+                  }
                 }
-              }
-              cleanup.throwIfAborted();
-              this.store.finishAttemptRecovery(task.id, task.generation, safe);
-            }),
+                cleanup.throwIfAborted();
+                this.store.finishAttemptRecovery(
+                  task.id,
+                  task.generation,
+                  safe,
+                );
+              },
+              60000,
+              this.store.reliability.cleanupSignal(attempt.id),
+            ),
           )
-          .catch((error) =>
+          .catch(() => {
+            const runtime = this.store.reliability.runtime(attempt.id)!;
+            runtime.cleanupState = "blocked";
+            this.store.reliability.saveRuntime(runtime);
             this.store.recordFailure(
               task.goalId,
               failureRecord("cleanup_blocked"),
               attempt.id,
-            ),
-          )
+            );
+          })
           .then(() => {})
           .finally(() => this.recovering.delete(attempt.id));
         this.recovering.set(attempt.id, job);
+      }
+      for (const attempt of this.store.db.query<{
+        id: string;
+        goal_id: string;
+      }>(
+        "SELECT id,goal_id FROM control_attempts WHERE outcome='recovering' AND task_id IS NULL",
+      )) {
+        if (
+          this.recovering.has(attempt.id) ||
+          this.operationAborts.has(attempt.id) ||
+          this.store.reliability.runtime(attempt.id)?.cleanupState === "blocked"
+        )
+          continue;
+        const done = Promise.resolve()
+          .then(async () => {
+            await boundedCleanup(
+              async (signal) => {
+                if (this.options.recoverOperation)
+                  await abortable(
+                    this.options.recoverOperation(attempt.id, signal),
+                    signal,
+                  );
+                else if (
+                  this.store.getGoal(attempt.goal_id).config.backend.kind !==
+                  "fake"
+                )
+                  throw new Error("Controller runtime inspection is required");
+                signal.throwIfAborted();
+                this.store.finishOperationRecovery(attempt.id);
+              },
+              60000,
+              this.store.reliability.cleanupSignal(attempt.id),
+            );
+          })
+          .catch(() => {
+            const runtime = this.store.reliability.runtime(attempt.id)!;
+            runtime.cleanupState = "blocked";
+            this.store.reliability.saveRuntime(runtime);
+            this.store.recordFailure(
+              attempt.goal_id,
+              failureRecord("cleanup_blocked"),
+              attempt.id,
+            );
+          })
+          .finally(() => this.recovering.delete(attempt.id));
+        this.recovering.set(attempt.id, done);
       }
       for (const active of this.isolated.values())
         if (
@@ -905,7 +966,8 @@ export class Scheduler {
         ]),
       );
       let cleanupSignal: AbortSignal | undefined;
-      const cleanup = () => (cleanupSignal ??= AbortSignal.timeout(60000));
+      const cleanup = () =>
+        (cleanupSignal ??= this.store.reliability.cleanupSignal(budget));
       const running = backend.run({
         ...context,
         cleanupSignal: cleanup,
@@ -1007,7 +1069,7 @@ export class Scheduler {
           outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
           signal: controller.signal,
           onCheckpoint: async () => {},
-          prompt: `Investigate this repository and decompose the goal into a bounded DAG. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
+          prompt: `Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
         },
         "planning",
       );
@@ -1085,7 +1147,7 @@ export class Scheduler {
         mode: "plan",
         signal: AbortSignal.timeout(g.config.timeoutMs),
         onCheckpoint: async () => {},
-        prompt: `Revise the goal plan after these events: ${JSON.stringify(this.store.events(0, g.id).slice(-20))}. Preserve these accepted contracts exactly: ${JSON.stringify(prior)}. Return JSON {tasks:[...]} with bounded tasks, dependencies, acceptanceCriteria, allowedPaths, verificationCommands. Goal: ${g.config.description}`,
+        prompt: `Revise the goal plan after these events: ${JSON.stringify(this.store.events(0, g.id).slice(-20))}. Preserve these accepted contracts exactly: ${JSON.stringify(prior)}. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Return JSON {tasks:[...]} with bounded tasks, dependencies, acceptanceCriteria, allowedPaths, verificationCommands. Goal: ${g.config.description}`,
       },
       "replanning",
     );

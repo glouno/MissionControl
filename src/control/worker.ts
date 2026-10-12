@@ -92,6 +92,7 @@ export async function executeClaim(
       `Candidate-bound operator observations (preserve unresolved failures and address them within scope): ${JSON.stringify(taskContext.observations ?? [])}`,
       "Establish the baseline and environment prerequisites before coding. Preserve required checks. Stop unchanged deterministic setup failures; report the first failure and request a bounded environment repair rather than spending more coding retries. Review invariants across related operations and hostile inputs.",
       `Operator context for this goal: ${JSON.stringify(taskContext.operatorContext ?? [])}`,
+      "Execution protocol: your responsibility is implementation and required checks. When the candidate is ready, return the implementation summary through the normal result protocol. MissionControl then runs a separate independent reviewer against the exact candidate commit and controls integration. Any task criteria requiring independent review or integration are fulfilled by those controller phases. Do not start subagents or request reviewer infrastructure; do not claim that independent review or integration has occurred. Preserve repository-required checks and report any remaining findings.",
     ].join("\n");
     const result = await withExecutionDeadline(
       claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs,

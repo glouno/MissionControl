@@ -15,24 +15,51 @@ export async function reconcileRuntime(
   revoke: (sessionId: string) => void,
 ) {
   store.fenceStartup();
+  const prior = store.setting("startup-cleanup");
+  const attempts = store.db
+    .query<{ record: string }>(
+      "SELECT r.record FROM attempt_runtime r JOIN control_attempts a ON a.id=r.attempt_id WHERE a.outcome='recovering'",
+    )
+    .map((r) => JSON.parse(r.record));
+  const intent = prior ?? {
+    version: 1,
+    startedAt: store.clock(),
+    deadlineAt: Math.min(
+      store.clock() + 60000,
+      ...attempts.map((r) => r.cleanupDeadlineAt ?? Infinity),
+    ),
+  };
+  store.setting("startup-cleanup", intent);
+  const remaining = intent.deadlineAt - store.clock();
+  const cleanup =
+    remaining > 0
+      ? AbortSignal.timeout(remaining)
+      : AbortSignal.abort(
+          new Error("Original startup cleanup deadline expired"),
+        );
   try {
-    await boundedCleanup(async (signal) => {
-      for (const record of networks.records()) revoke(record.sessionId);
-      for (const session of registry.all()) {
-        revoke(session.id);
-        if (session.status === "destroyed" && session.container)
-          throw Error(
-            "Destroyed execution still records a resource; explicit ownership inspection required",
-          );
-        if (
-          session.container ||
-          !["destroyed", "destroying"].includes(session.status)
-        )
-          await environment.reset(session.id, signal);
-      }
-      await networks.reconcile(signal);
-    });
+    await boundedCleanup(
+      async (signal) => {
+        for (const record of networks.records()) revoke(record.sessionId);
+        for (const session of registry.all()) {
+          revoke(session.id);
+          if (session.status === "destroyed" && session.container)
+            throw Error(
+              "Destroyed execution still records a resource; explicit ownership inspection required",
+            );
+          if (
+            session.container ||
+            !["destroyed", "destroying"].includes(session.status)
+          )
+            await environment.reset(session.id, signal);
+        }
+        await networks.reconcile(signal);
+      },
+      60000,
+      cleanup,
+    );
     store.finishStartupRecovery();
+    store.setting("startup-cleanup", null);
   } catch (error) {
     // Raw Docker/path diagnostics stay out of application evidence.
     store.setting("startup-recovery-fault", {

@@ -34,6 +34,7 @@ export interface IsolatedBackendOptions {
   portableProvider?: ModelProvider;
   transport?: typeof dockerNativeExecution;
   assertContext?: (context: RunContext) => void;
+  cleanupSignal?: (context: RunContext) => AbortSignal;
 }
 // The orchestrator constructs this adapter. Goal payloads cannot configure gateway
 // upstreams, mount paths or host executables. All host actions remain controller-side.
@@ -135,7 +136,9 @@ export class IsolatedBackend implements AgentBackend {
     let cleanupSignal: AbortSignal | undefined;
     const cleanup = () =>
       (cleanupSignal ??=
-        context.cleanupSignal?.() ?? AbortSignal.timeout(60000));
+        this.options.cleanupSignal?.(context) ??
+        context.cleanupSignal?.() ??
+        AbortSignal.timeout(60000));
     try {
       const contracts = context.claim.goal.config.siblingContracts.length
         ? await prepareContractSnapshot(

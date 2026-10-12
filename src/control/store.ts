@@ -1149,6 +1149,46 @@ export class ControlStore {
     const specs = validatePlan(input);
     return this.db.transaction(() => {
       const g = this.getGoal(goalId);
+      for (const spec of specs) {
+        if (
+          g.config.policy.approvedPaths.length &&
+          spec.allowedPaths.some(
+            (scope) =>
+              !g.config.policy.approvedPaths.some(
+                (approved) =>
+                  approved === "**" ||
+                  approved === scope ||
+                  (approved.endsWith("/**") &&
+                    scope.startsWith(approved.slice(0, -2))),
+              ),
+          )
+        )
+          throw new ControlError(
+            "invalid_plan",
+            "Task scope exceeds admitted repository paths",
+            409,
+          );
+        if (
+          g.config.backend.kind !== "fake" &&
+          !g.config.verificationCommands.length &&
+          !spec.verificationCommands.length
+        )
+          throw new ControlError(
+            "invalid_plan",
+            "Every task requires trusted verification",
+            409,
+          );
+        const limits = this.setting("scheduler-limits");
+        if (
+          limits &&
+          (spec.cpuUnits > limits.cpu || spec.memoryMiB > limits.memoryMiB)
+        )
+          throw new ControlError(
+            "invalid_plan",
+            "Task resource prerequisites exceed configured host capacity",
+            409,
+          );
+      }
       if (
         g.config.backend.kind !== "fake" &&
         specs.some((spec) =>
@@ -1641,6 +1681,14 @@ export class ControlStore {
     actor: string,
   ) {
     return this.db.transaction(() => {
+      if (this.getGoal(goalId).revision !== revision)
+        throw new ControlError("revision_conflict", "Goal changed", 409);
+      // Explicit recovery can settle controller ownership only from stopped
+      // resource evidence. Unknown inference usage remains an unresolved hold.
+      for (const attempt of this.db.query<{ id: string }>(
+        `SELECT id FROM control_attempts WHERE goal_id=${sql(goalId)} AND task_id IS NULL AND outcome='recovering'`,
+      ))
+        this.finishOperationRecovery(attempt.id);
       const preview = this.recoveryPreview(goalId);
       if (preview.revision !== revision)
         throw new ControlError("revision_conflict", "Goal changed", 409);
@@ -1726,6 +1774,46 @@ export class ControlStore {
         goalId,
       );
       return this.setGoalState(goalId, "running", revision, actor);
+    });
+  }
+  finishOperationRecovery(attemptId: string) {
+    return this.db.transaction(() => {
+      const attempt = this.db.one<{
+        task_id: string | null;
+        outcome: string;
+        goal_id: string;
+      }>(
+        `SELECT task_id,outcome,goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
+      );
+      if (!attempt || attempt.task_id !== null)
+        throw new ControlError(
+          "stale_recovery",
+          "Controller operation ownership changed",
+          409,
+        );
+      if (attempt.outcome !== "recovering") return;
+      const sessions = `SELECT id,record FROM sessions UNION ALL SELECT id,record FROM execution_invocations`;
+      const owned = `SELECT id,record FROM (${sessions}) WHERE json_extract(record,'$.spec.operationReservationId')=${sql(attemptId)}`;
+      if (
+        this.db.one(
+          `SELECT id FROM (${owned}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared') LIMIT 1`,
+        ) ||
+        this.db.one(
+          `SELECT session_id FROM gateway_networks WHERE session_id IN (SELECT id FROM (${owned})) AND COALESCE(json_extract(record,'$.status'),'unknown')!='stopped' LIMIT 1`,
+        )
+      )
+        throw new ControlError(
+          "active_resources",
+          "Controller resources require inspected cleanup",
+          409,
+        );
+      this.settleOperation(attemptId, undefined, undefined, "interrupted");
+      this.event(
+        "CONTROLLER_RESOURCES_RECONCILED",
+        "controller",
+        { attemptId },
+        attempt.goal_id,
+      );
     });
   }
   recordFailure(
@@ -1942,6 +2030,7 @@ export class ControlStore {
         task.id,
       );
     }
+    this.reliability.beginCleanup(attemptId);
     if (["accepted", "cancelled", "superseded"].includes(task.status)) return;
     if (task.status !== "waiting_human")
       this.db.exec(
@@ -2008,6 +2097,8 @@ export class ControlStore {
         "SELECT id FROM control_attempts WHERE task_id IS NULL AND outcome IN ('active','recovering')",
       ))
         operations.add(String(r.id));
+      for (const attemptId of operations)
+        this.reliability.beginCleanup(attemptId);
       this.db.exec(
         `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE worker_id IS NOT NULL; DELETE FROM control_tokens WHERE role='worker'; UPDATE control_attempts SET outcome='recovering' WHERE outcome='active' AND task_id IS NULL;`,
       );

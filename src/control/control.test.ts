@@ -572,9 +572,15 @@ test("isolated planning failure settles its reservation without host fallback", 
   }
 });
 
-test("independent review failure creates repair continuation and blocks acceptance", async (t) => {
+test("worker returns candidates for controller review; failed review preserves repair evidence", async (t) => {
   const f = await fixture();
-  const g = await planned(f, [spec("one")]);
+  const g = await planned(f, [
+    {
+      ...spec("one"),
+      description:
+        "Implement one, then obtain separate independent source review before integration",
+    },
+  ]);
   let reviews = 0;
   const fake = new FakeBackend();
   const backend: AgentBackend = {
@@ -606,7 +612,21 @@ test("independent review failure creates repair continuation and blocks acceptan
   t.after(() => s.server.close());
   let c = f.store.claimNextTask("builder")!;
   await scheduler.workspaces.prepareTask(g, c.task);
-  await executeClaim(s.client, c, f.root);
+  const worker: AgentBackend = {
+    run: async (context) => {
+      assert.equal(context.mode, "implement");
+      assert.match(
+        context.prompt,
+        /MissionControl then runs a separate independent reviewer/,
+      );
+      assert.match(
+        context.prompt,
+        /Do not start subagents or request reviewer infrastructure/,
+      );
+      return fake.run(context);
+    },
+  };
+  await executeClaim(s.client, c, f.root, worker);
   assert.equal(f.store.getTask(c.task.id).status, "retry_wait");
   assert.match(
     f.store.getTask(c.task.id).checkpoint!.summary,
@@ -614,8 +634,10 @@ test("independent review failure creates repair continuation and blocks acceptan
   );
   f.advance(30000);
   c = f.store.claimNextTask("repair")!;
-  await executeClaim(s.client, c, f.root);
+  await executeClaim(s.client, c, f.root, worker);
   assert.equal(f.store.getTask(c.task.id).status, "accepted");
+  assert.equal(reviews, 2);
+  assert.equal(f.store.operations().length, 0);
 });
 test("conflicting branches retain a conflict finding and never overwrite accepted work", async (t) => {
   const f = await fixture();

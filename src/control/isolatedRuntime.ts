@@ -548,6 +548,11 @@ export async function createIsolatedRuntime(
         socketDirectory,
         relayScript,
         assertLease: () => {}, // Context authority supplies owner identity and operation reservation.
+        cleanupSignal: (context) =>
+          store.reliability.cleanupSignal(
+            context.operationReservationId ??
+              `${context.claim.task.id}:${context.claim.generation}`,
+          ),
         assertContext: (context: RunContext) => {
           const generation = Math.max(1, context.claim.generation);
           assertSessionAuthority(store, {
@@ -628,6 +633,20 @@ export async function createIsolatedRuntime(
           60000,
           cleanup,
         );
+      },
+      recoverOperation: async (attemptId: string, signal: AbortSignal) => {
+        for (const session of registry
+          .all()
+          .filter((s) => s.spec.operationReservationId === attemptId)) {
+          gateway.revoke(session.id);
+          await environment.reset(session.id, signal);
+          if (
+            networks
+              .records()
+              .some((r) => r.sessionId === session.id && r.status !== "stopped")
+          )
+            await networks.stop(session.id, signal);
+        }
       },
       close: async () => {
         try {

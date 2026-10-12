@@ -6,6 +6,10 @@ heartbeats cannot renew its deadline. Result processing shares one envelope of
 Owned cleanup has a separate shared 60-second allowance. Failure to prove that
 resources stopped retains ownership and unknown usage. Shutdown is bounded to
 90 seconds; the next start reconciles the same fenced ownership.
+Cleanup start and deadline are persisted before teardown. Restart uses the original
+remaining allowance; expiry blocks cleanup without invoking resource mutations.
+Stopped controller inference resources can be reconciled without restarting;
+ambiguous effects still require an explicit inspection before resume.
 
 Provider diagnostics record request boundaries, serving provider/model, sanitized
 endpoint, HTTP status, provider code, request IDs, elapsed time and execution IDs.
@@ -31,6 +35,9 @@ installation cumulative admission does not refund predecessor authority.
 Generated checks must belong to configured required commands or the explicit
 `trustedAdditionalVerificationCommands` allowlist. Mandatory repository checks
 always run. Mutating verification commands and traversal scopes are rejected.
+Plans cannot widen admitted repository paths or require resources beyond configured
+host capacity. Workers return candidates after implementation and checks; the
+controller owns separate independent review and integration.
 
 `mission-control support preview GOAL --attempt-id ATTEMPT` previews metadata.
 Export requires --attempt-id, --destination, --manifest-sha256 from the reviewed

@@ -1084,6 +1084,8 @@ async function serve(config: LoadedConfiguration) {
               executionMaintenance: () => runtime!.maintenance(false),
               recoverAttempt: (taskId, generation, signal) =>
                 runtime!.recoverAttempt(taskId, generation, signal),
+              recoverOperation: (attemptId, signal) =>
+                runtime!.recoverOperation(attemptId, signal),
               imageMaintenance: runtime.imageMaintenance,
             }
           : {}),

@@ -122,6 +122,7 @@ async function fixture(t: any, metered = false, clock = Date.now) {
     repoPath: root,
     maxCostUsd: 10,
     estimatePerRunUsd: 1,
+    verificationCommands: ["test -d ."],
     ...(metered
       ? {
           executionContract: {
