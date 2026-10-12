@@ -137,3 +137,20 @@ test("resolution requires reviewer acknowledgment and tests in the same task gen
   closeObservation(store,goal.id,observation.id,head,"independent-reviewer");
   assert.doesNotThrow(() => assertObservationsClosed(store,goal.id));
 });
+
+test("a retried task cannot close an observation using its retired generation's evidence", async t => {
+  const {store,goal} = await fixture(t);
+  store.installPlan(goal.id,{tasks:[{key:"one",title:"One",description:"Synthetic",dependencies:[],acceptanceCriteria:["Synthetic passes"],allowedPaths:["**"],verificationCommands:["true"]}]},goal.revision);
+  const claim = store.claimNextTask("synthetic-worker",{goalId:goal.id})!;
+  store.transition(claim.task.id,"synthetic-worker",claim.task.generation,"running");
+  store.transition(claim.task.id,"synthetic-worker",claim.task.generation,"verifying");
+  const head="a".repeat(40);
+  const observation=recordObservation(store,goal.id,{candidateSha:head,taskId:claim.task.id,summary:"Retry needs fresh evidence",evidence:"Synthetic proof"},"operator");
+  store.evidence(claim.task.id,"synthetic-worker",claim.task.generation,head,"tests",true,{passed:true});
+  store.evidence(claim.task.id,"synthetic-worker",claim.task.generation,head,"review",true,{verdict:"pass",observations:[observation.id]});
+  // Simulate a later claim in this disposable synthetic store. Production recovery
+  // must use the owning runtime and supported API, never this fixture shortcut.
+  store.db.exec(`UPDATE control_tasks SET generation=generation+1 WHERE id='${claim.task.id}'`);
+  assert.throws(() => closeObservation(store,goal.id,observation.id,head,"operator"),/passing tests/);
+  assert.throws(() => assertObservationsClosed(store,goal.id),/Unresolved/);
+});

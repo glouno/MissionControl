@@ -94,7 +94,10 @@ export function closeObservation(
     )
     .filter((e) =>
       tasks.some(
-        (t) => t.id === e.task_id && (!prior.taskId || prior.taskId === t.id),
+        (t) =>
+          t.id === e.task_id &&
+          t.generation === e.generation &&
+          (!prior.taskId || prior.taskId === t.id),
       ),
     );
   const reviewed = evidence.find(
