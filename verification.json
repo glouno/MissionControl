@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "runtime": "missioncontrol-owned-linux",
+  "node": "24.21.0",
+  "rust": "1.96.0",
+  "workingDirectory": ".",
+  "dependencies": {},
+  "timeoutSeconds": 1800,
+  "checks": [
+    {"name": "typecheck"},
+    {"name": "core"},
+    {"name": "status"},
+    {"name": "privacy"},
+    {"name": "package"},
+    {"name": "dependency-audit"},
+    {"name": "history"},
+    {"name": "matrix"}
+  ]
+}

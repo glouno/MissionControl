@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One required verification entry point for owned Linux and owner-run Mac lanes."""
 import argparse
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -14,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--lane', choices=['linux', 'macos'], default='linux')
     parser.add_argument('--logs', required=True, type=pathlib.Path)
+    parser.add_argument('--dependency-audit-receipt', type=pathlib.Path,
+                        help='Owned offline audit result bound to the exact package lock')
     args = parser.parse_args()
     logs = args.logs.resolve()
     if logs.is_relative_to(ROOT):
@@ -30,8 +33,19 @@ def main():
         ('package', ['node', 'scripts/check-package.mjs']),
     ]
     if args.lane == 'linux':
+        audit = ['npm', 'audit', '--omit=dev']
+        if args.dependency_audit_receipt:
+            receipt = args.dependency_audit_receipt.resolve()
+            if receipt.is_relative_to(ROOT):
+                parser.error('Owned audit receipt must stay outside source')
+            proof = json.loads(receipt.read_text())
+            if (proof.get('lockSha256') != hashlib.sha256((ROOT / 'package-lock.json').read_bytes()).hexdigest()
+                    or proof.get('exitCode') != 0
+                    or proof.get('audit', {}).get('metadata', {}).get('vulnerabilities', {}).get('total') != 0):
+                parser.error('Exact-lock zero-vulnerability audit evidence is required')
+            audit = [sys.executable, '-c', 'print("Owned exact-lock dependency audit passed")']
         commands.extend([
-            ('dependency-audit', ['npm', 'audit', '--omit=dev']),
+            ('dependency-audit', audit),
             ('history', ['node', 'scripts/history-audit.mjs']),
             ('matrix', ['cargo', '+1.96.0', 'test', '--locked', '--manifest-path', 'connectors/matrix/Cargo.toml']),
         ])
