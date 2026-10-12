@@ -1,3 +1,4 @@
+import { observations, assertObservationsClosed, closeObservation, deliveryIncident } from "./delivery.js";
 import { z } from "zod";
 import { executionUsage } from "./usage.js";
 import { matchesGlob, join } from "node:path";
@@ -306,6 +307,11 @@ export class Scheduler {
             );
             continue;
           }
+          if (job.kind === "publish" && e instanceof ControlError &&
+              ["checks_pending", "checks_failed", "stale_base", "freshness_policy", "blocking_observation"].includes(e.code)) {
+            const candidate = this.store.setting(`publication:${goal.id}`) as any;
+            deliveryIncident(this.store, goal.id, candidate?.commit ?? "unknown", candidate?.targetSha ?? "unknown", e.code, e.message);
+          }
           if (e instanceof HumanWait) {
             this.store.requestGoalHuman(goal.id, e.request);
             this.store.deferJob(String(job.id));
@@ -326,6 +332,8 @@ export class Scheduler {
             e instanceof ControlError &&
             [
               "checks_pending",
+              "checks_failed",
+              "blocking_observation",
               "active_work",
               "merge_pending",
               "fetch_pending",
@@ -800,7 +808,7 @@ export class Scheduler {
           mode: "review",
           signal: AbortSignal.timeout(goal.config.timeoutMs),
           onCheckpoint: async () => {},
-          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nDiff:\n${diff}`,
+          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Explicitly list resolved observation ids in resolvedObservations only after reproducing and verifying their resolution. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nOperator observations: ${JSON.stringify(observations(this.store, goal.id))}\nDiff:\n${diff}`,
         },
         "review",
       );
@@ -825,10 +833,16 @@ export class Scheduler {
         reviewPassed,
         {
           ...review,
+          observations: review.resolvedObservations,
           environmentDigest: reviewed.environmentDigest,
           executionSessionId: reviewed.executionSessionId,
         },
       );
+      if (reviewPassed) {
+        for (const observationId of review.resolvedObservations ?? []) {
+          closeObservation(this.store, goal.id, observationId, commit, "independent-reviewer");
+        }
+      }
       for (const finding of review.findings)
         this.store.finding(goal.id, taskId, { ...finding, commit }, "reviewer");
       const cost = (result as any)?.costUsd;
@@ -985,6 +999,7 @@ export class Scheduler {
           "rev-parse",
           "HEAD",
         ]);
+        assertObservationsClosed(this.store, goal.id);
         const sha = await this.workspaces.advance(goal, candidate);
         try {
           return this.store.accept(
@@ -1366,7 +1381,7 @@ export class Scheduler {
           mode: "review",
           signal: AbortSignal.timeout(g.config.timeoutMs),
           onCheckpoint: async () => {},
-          prompt: `Independently review the complete goal against current development ${candidate.targetSha}. Return JSON {"commit":"${candidate.commit}","verdict":"pass" or "fail","findings":[{"summary":"...","blocking":true,"evidence":"..."}]}. Goal: ${g.config.description}\nDiff:\n${diff}`,
+          prompt: `Independently review the complete goal against current development ${candidate.targetSha}. Return JSON {"commit":"${candidate.commit}","verdict":"pass" or "fail","findings":[{"summary":"...","blocking":true,"evidence":"..."}]}. Goal: ${g.config.description}\nOperator observations: ${JSON.stringify(observations(this.store, g.id))}\nDiff:\n${diff}`,
         },
         "review",
       );
@@ -1450,6 +1465,7 @@ export class Scheduler {
           );
         }
       }
+      assertObservationsClosed(this.store, g.id);
       await this.workspaces.advance(g, candidate);
       this.store.setting(`publication:${g.id}`, candidate);
       const result = await host.publish(
@@ -1462,6 +1478,7 @@ export class Scheduler {
       if (g.config.policy.autoMerge && !result.merged)
         throw new ControlError("merge_pending", "PR has not merged", 409);
     }
+    assertObservationsClosed(this.store, g.id);
     this.store.setGoalState(g.id, "completed", g.revision, "scheduler", {
       publication,
       report: `goals/${g.id}/report.json`,

@@ -56,6 +56,7 @@ export async function executeClaim(
     await client.transition(claim, "running");
     const taskContext = await client.request<{
       operatorContext?: unknown;
+      observations?: unknown;
       projectContext?: unknown;
       dependencyArtifacts?: unknown;
     }>(`/tasks/${claim.task.id}`);
@@ -81,6 +82,8 @@ export async function executeClaim(
         (c) =>
           `Selected private context ${c.path} (sha256 ${c.hash}):\n${c.content}`,
       ),
+      `Candidate-bound operator observations (preserve unresolved failures and address them within scope): ${JSON.stringify(taskContext.observations ?? [])}`,
+      "Establish the baseline and environment prerequisites before coding. Preserve required checks. Stop unchanged deterministic setup failures; report the first failure and request a bounded environment repair rather than spending more coding retries. Review invariants across related operations and hostile inputs.",
       `Operator context for this goal: ${JSON.stringify(taskContext.operatorContext ?? [])}`,
     ].join("\n");
     const result = await backend.run({

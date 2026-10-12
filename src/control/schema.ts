@@ -219,6 +219,7 @@ export const planSchema = z.object({
   tasks: z.array(taskSchema).min(1).max(100),
 });
 export const reviewSchema = z.object({
+  resolvedObservations: z.array(z.string()).optional(),
   commit: z.string().min(1),
   verdict: z.enum(["pass", "fail"]),
   findings: z.array(

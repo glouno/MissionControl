@@ -686,6 +686,7 @@ export function parseReview(text: string, commit: string): Review {
     .replace(/\s*```$/, "");
   const schema = z.object({
     commit: z.literal(commit),
+    resolvedObservations: z.array(z.string()).optional(),
     verdict: z.enum(["pass", "fail"]),
     findings: z.array(
       z.object({
