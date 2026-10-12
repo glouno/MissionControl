@@ -1,3 +1,4 @@
+import { nativePrompt } from "./nativePrompt.js";
 import { ProviderFailure, classifyFailure } from "./reliability.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -673,7 +674,7 @@ export class CodexBackend implements AgentBackend {
       sessionId = thread.thread.id;
       await request("turn/start", {
         threadId: sessionId,
-        input: [{ type: "text", text: c.prompt }],
+        input: [{ type: "text", text: nativePrompt(c) }],
         ...(c.outputSchema ? { outputSchema: c.outputSchema } : {}),
         sandboxPolicy: c.execution
           ? { type: "dangerFullAccess" }

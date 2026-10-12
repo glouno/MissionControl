@@ -1,3 +1,4 @@
+import { nativePrompt } from "./nativePrompt.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -330,4 +331,23 @@ test("inspected recovery retires interrupted job intent without rewriting its de
   assert.equal(record.status, "inspected");
   assert.equal(record.deadlineAt, 123);
   assert.ok(record.recoveryDecisionId);
+});
+
+test("native handoff maps controller repository paths to the mounted execution workspace", () => {
+  const context: any = {
+    workspace: "/synthetic/controller/task",
+    claim: { goal: { config: { repoPath: "/synthetic/repository" } } },
+    execution: { workspace: "/workspace" },
+    prompt:
+      "Inspect /synthetic/controller/task/calc.py and /synthetic/repository/README.md. Keep calc.py.",
+  };
+  const prompt = nativePrompt(context);
+  assert.ok(!prompt.includes("/synthetic/controller/task"));
+  assert.ok(!prompt.includes("/synthetic/repository"));
+  assert.ok(prompt.includes("/workspace/calc.py"));
+  assert.ok(prompt.includes("/workspace/README.md"));
+  assert.equal(
+    nativePrompt({ ...context, execution: undefined }),
+    context.prompt,
+  );
 });
