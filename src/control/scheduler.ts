@@ -325,9 +325,8 @@ export class Scheduler {
               "blocking_observation",
             ].includes(e.code)
           ) {
-            const candidate = this.store.setting(
-              `publication:${goal.id}`,
-            ) as any;
+            const candidate = (this.store.setting(`publication:${goal.id}`) ??
+              this.store.setting(`local-delivery:${goal.id}`)) as any;
             deliveryIncident(
               this.store,
               goal.id,
@@ -1529,6 +1528,10 @@ export class Scheduler {
         "rev-parse",
         targetBranch,
       ]);
+      this.store.setting(`local-delivery:${g.id}`, {
+        commit: candidateSha,
+        targetSha,
+      });
       await this.options.localDeliveryGate({
         goalId: g.id,
         workspace,
