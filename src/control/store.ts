@@ -1,3 +1,4 @@
+import { assertObservationsClosed } from "./delivery.js";
 import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { createHash, randomUUID } from "node:crypto";
 import { availableParallelism, totalmem } from "node:os";
@@ -1765,6 +1766,7 @@ export class ControlStore {
           "Task is not integrating",
           409,
         );
+      assertObservationsClosed(this, t.goalId);
       for (const [kind, sha] of [
         ["tests", commit],
         ["review", commit],
@@ -2253,6 +2255,7 @@ export class ControlStore {
       const g = this.getGoal(goalId);
       if (g.revision !== revision)
         throw new ControlError("revision_conflict", "Goal changed", 409);
+      if (status === "completed") assertObservationsClosed(this, goalId);
       if (["completed", "cancelled"].includes(g.status))
         throw new ControlError("invalid_transition", "Goal is terminal", 409);
       this.db.exec(

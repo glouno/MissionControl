@@ -6,6 +6,7 @@ export const reviewOutputSchema = z.toJSONSchema(
     .object({
       commit: z.string(),
       verdict: z.enum(["pass", "fail"]),
+      resolvedObservations: z.array(z.string()).optional(),
       findings: z.array(
         z
           .object({

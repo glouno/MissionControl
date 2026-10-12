@@ -47,12 +47,11 @@ export class GithubHost implements GitHost {
     };
     const verifiedHead = await git(workspace, ["rev-parse", "HEAD"]);
     if (
-      policy.autoMerge &&
       (!evidence || evidence.candidateSha !== verifiedHead)
     )
       throw new ControlError(
         "freshness_policy",
-        "Automatic merging requires current-target verification evidence",
+        "Publication requires current-target verification evidence",
         409,
       );
     await git(workspace, ["push", "-u", "origin", branch]);
@@ -154,7 +153,7 @@ export class GithubHost implements GitHost {
         "Goal PR was closed; human decision needed",
         409,
       );
-    if (policy.autoMerge) {
+    {
       const head = await git(workspace, ["rev-parse", "HEAD"]);
       const info = JSON.parse(
         await gh([
@@ -183,6 +182,7 @@ export class GithubHost implements GitHost {
           "Development advanced after candidate verification",
           409,
         );
+      if (policy.autoMerge) {
       let protection: any;
       try {
         protection = JSON.parse(
@@ -214,7 +214,7 @@ export class GithubHost implements GitHost {
           "Strict enforced up-to-date CI checks are required for automatic merging",
           409,
         );
-      if (info.isDraft) await gh(["pr", "ready", String(pr.number)]);
+      }
       const checks = info.statusCheckRollup ?? [];
       for (const name of policy.requiredChecks) {
         const check = checks.find((c: any) => (c.name ?? c.context) === name);
@@ -223,8 +223,8 @@ export class GithubHost implements GitHost {
           !(check.conclusion === "SUCCESS" || check.state === "SUCCESS")
         )
           throw new ControlError(
-            "checks_pending",
-            `Required check ${name} is not passing`,
+            check && ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"].includes(check.conclusion ?? check.state) ? "checks_failed" : "checks_pending",
+            `Required check ${name}: ${check?.conclusion ?? check?.state ?? "missing"}; candidate ${head}, base ${evidence!.targetSha}`,
             409,
           );
       }
@@ -247,6 +247,8 @@ export class GithubHost implements GitHost {
           "GitHub checks are pending or failing",
           409,
         );
+      if (!policy.autoMerge) return { url: pr.url, merged: false };
+      if (info.isDraft) await gh(["pr", "ready", String(pr.number)]);
       await gh([
         "pr",
         "merge",

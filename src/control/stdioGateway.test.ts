@@ -31,3 +31,41 @@ test("Python stdio relay streams authenticated inference, denies foreign session
  assert.equal((await request("invalid")).status,403);assert.equal(calls,1);
  await bridge.stop("local");assert.throws(()=>gateway.authenticate(token),/revoked/);
 });
+
+for (const waitingFor of ["headers", "body"] as const) test(`Stopping a relay cancels an in-flight ${waitingFor} wait before capability expiry`, {timeout:10000}, async t => {
+ const root=await mkdtemp(join(tmpdir(),"mc-stdio-stop-")),db=new SqliteStore(join(root,"test.db"));
+ const gateway=new InferenceGateway(db,{synthetic:{protocol:"responses",endpoint:"https://example.invalid/v1",headers:async()=>({})}},()=>{});
+ const probe=createServer();probe.listen(0,"127.0.0.1");await once(probe,"listening");const port=(probe.address() as {port:number}).port;await new Promise<void>(r=>probe.close(()=>r()));
+ const script=fileURLToPath(new URL("../../environments/worker/gateway-relay.py",import.meta.url));
+ let child:ReturnType<typeof spawn>|undefined;
+ const launcher:typeof spawn=((_cmd:string,args:string[])=>child=spawn("python3",["-u","-c",args.at(-1)!.replace("('0.0.0.0', 8080)",`('127.0.0.1', ${port})`)],{stdio:["pipe","pipe","pipe"],env:{PATH:process.env.PATH}})) as typeof spawn;
+ let observed:AbortSignal|undefined,started!:()=>void;
+ const requestStarted=new Promise<void>(resolve=>started=resolve);
+ const fetcher:typeof fetch=((_url:unknown,options:RequestInit)=>{
+  observed=options.signal as AbortSignal;started();
+  if(waitingFor==="headers")return new Promise((_resolve,reject)=>{
+   observed!.addEventListener("abort",()=>reject(observed!.reason),{once:true});
+  });
+  return Promise.resolve(new Response(new ReadableStream({start(controller){
+   observed!.addEventListener("abort",()=>controller.error(observed!.reason),{once:true});
+  }}),{headers:{"content-type":"text/event-stream"}}));
+ }) as typeof fetch;
+ const bridge=new StdioGateway(gateway,"http://127.0.0.1:43201",launcher,fetcher);
+ t.after(async()=>{child?.kill("SIGKILL");db.close();await rm(root,{recursive:true,force:true})});
+ await bridge.start("stopping","synthetic",script);
+ const token=gateway.issue({sessionId:"stopping",goalId:"synthetic",taskId:"test",generation:1,provider:"synthetic",protocol:"responses",model:"fake",expiresAt:Date.now()+60000});
+ let response:Promise<Response>|undefined;
+ for(let i=0;i<50;i++){
+  response=fetch(`http://127.0.0.1:${port}/v1/responses`,{method:"POST",headers:{Authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({model:"fake",input:"synthetic",stream:true}),signal:AbortSignal.timeout(5000)});
+  const connected=await Promise.race([requestStarted.then(()=>true),response.then(()=>true,()=>false)]);
+  if(connected)break;
+  await new Promise(resolve=>setTimeout(resolve,20));
+ }
+ response?.catch(()=>{});
+ await requestStarted;
+ const stopped=bridge.stop("stopping");
+ const timely=await Promise.race([stopped.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),250))]);
+ assert.equal(timely,true,"relay stop must finish without waiting for the 60-second inference capability");
+ assert.equal(observed?.aborted,true);
+ assert.throws(()=>gateway.authenticate(token),/revoked/);
+});

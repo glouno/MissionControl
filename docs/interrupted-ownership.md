@@ -83,3 +83,15 @@ admissions fail closed and require separate inspection. These synthetic tests
 do not establish live crash-container, provider billing or authenticated
 subscription qualification. No live databases or existing subscription test
 records are needed for reproduction.
+
+## HTTP inference deadline
+
+Native inference crosses both the stdio bridge's loopback HTTP request and the
+controller's HTTPS upstream request. Each uses the admitted abort signal; fetch's
+separate default 300-second header/body timeout must not end an otherwise admitted
+long response. The pinned transport overrides those HTTP timeouts to one hour
+without changing unrelated requests. The original deadline, session revocation
+and stopped-child cancellation still abort the operation. Redirects are refused
+and mutation POSTs are never retried by this transport. Native retries remain
+inside the original reserved invocation, and incomplete streams retain unknown
+usage rather than receiving fabricated zero-cost settlement.

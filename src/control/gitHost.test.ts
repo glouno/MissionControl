@@ -168,3 +168,20 @@ test("merged PR recovery verifies immutable parents and tree even after developm
     false,
   );
 });
+test("draft publication also waits for required checks and rejects failed or stale candidates", async t => {
+  const f = await fixture(t);
+  f.goal.config.policy.autoMerge = false;
+  for (const overrides of [{checks: []}, {checks: [{name: "quality", conclusion: "FAILURE"}]},
+    {head: "a".repeat(40)}, {base: "b".repeat(40)}]) {
+    const fake = command(f, overrides);
+    await assert.rejects(new GithubHost(fake.run).publish(f.goal, f.repo, f.branch, f.evidence));
+    assert.equal(fake.calls.some(c => c[1] === "merge"), false);
+  }
+  const fake = command(f);
+  assert.equal((await new GithubHost(fake.run).publish(f.goal, f.repo, f.branch, f.evidence)).merged, false);
+});
+test("draft publication requires verifier head evidence before pushing", async t => {
+  const f = await fixture(t); f.goal.config.policy.autoMerge = false;
+  await assert.rejects(new GithubHost(command(f).run).publish(f.goal, f.repo, f.branch), /verification evidence/);
+  await assert.rejects(git(f.repo, ["ls-remote", "--exit-code", "origin", f.branch]));
+});

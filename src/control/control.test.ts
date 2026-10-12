@@ -884,3 +884,62 @@ test("publication retention records recover after completion without resetting t
       .every((w) => w.acceptedAt === acceptedAt),
   );
 });
+test("local delivery with required checks cannot complete without a trusted exact-source gate", async (t) => {
+  const f = await fixture();
+  const goal = f.store.createGoal({
+    title: "Local delivery",
+    description: "Synthetic local delivery",
+    repoPath: f.repo,
+    repository: { mode: "local", branch: "development" },
+    backend: { kind: "fake" },
+    policy: { requiredChecks: ["owned-local"] },
+  });
+  f.store.installPlan(goal.id, { tasks: [spec("one")] }, goal.revision);
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+  });
+  const s = await serve(f, scheduler);
+  t.after(() => s.server.close());
+  const claim = f.store.claimNextTask("synthetic")!;
+  await scheduler.workspaces.prepareTask(claim.goal, claim.task);
+  await executeClaim(s.client, claim, f.root);
+  await assert.rejects(
+    () => scheduler.publish(goal.id),
+    /trusted configured delivery verifier/,
+  );
+  assert.notEqual(f.store.getGoal(goal.id).status, "completed");
+  const changed = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+    localDeliveryGate: async (input) => {
+      await writeFile(join(input.workspace, "unexpected"), "mutation");
+    },
+  });
+  await assert.rejects(
+    () => changed.publish(goal.id),
+    /advanced after delivery verification/,
+  );
+  const workspace = changed.workspaces.goalPath(f.store.getGoal(goal.id));
+  await import("node:fs/promises").then((fs) =>
+    fs.unlink(join(workspace, "unexpected")),
+  );
+  let bound: any;
+  const qualified = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+    localDeliveryGate: async (input) => {
+      bound = input;
+    },
+  });
+  await qualified.publish(goal.id);
+  assert.equal(
+    bound.candidateSha,
+    await git(qualified.workspaces.goalPath(f.store.getGoal(goal.id)), [
+      "rev-parse",
+      "HEAD",
+    ]),
+  );
+  assert.equal(
+    bound.targetSha,
+    await git(f.repo, ["rev-parse", "development"]),
+  );
+  assert.equal(f.store.getGoal(goal.id).status, "completed");
+});

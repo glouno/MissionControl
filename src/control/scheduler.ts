@@ -1,3 +1,10 @@
+import {
+  observations,
+  assertObservationsClosed,
+  closeObservation,
+  deliveryIncident,
+} from "./delivery.js";
+import type { LocalDeliveryInput } from "./localDelivery.js";
 import { z } from "zod";
 import { executionUsage } from "./usage.js";
 import { matchesGlob, join } from "node:path";
@@ -66,6 +73,7 @@ export class Scheduler {
     readonly options: {
       backend?: (g: Goal) => AgentBackend;
       gitHost?: GitHost;
+      localDeliveryGate?: (input: LocalDeliveryInput) => Promise<void>;
       spawnWorkers?: boolean;
       /** Registered controller dispatches claim via the same authenticated API. */
       claimThroughApi?: boolean;
@@ -306,6 +314,28 @@ export class Scheduler {
             );
             continue;
           }
+          if (
+            job.kind === "publish" &&
+            e instanceof ControlError &&
+            [
+              "checks_pending",
+              "checks_failed",
+              "stale_base",
+              "freshness_policy",
+              "blocking_observation",
+            ].includes(e.code)
+          ) {
+            const candidate = (this.store.setting(`publication:${goal.id}`) ??
+              this.store.setting(`local-delivery:${goal.id}`)) as any;
+            deliveryIncident(
+              this.store,
+              goal.id,
+              candidate?.commit ?? "unknown",
+              candidate?.targetSha ?? "unknown",
+              e.code,
+              e.message,
+            );
+          }
           if (e instanceof HumanWait) {
             this.store.requestGoalHuman(goal.id, e.request);
             this.store.deferJob(String(job.id));
@@ -326,6 +356,8 @@ export class Scheduler {
             e instanceof ControlError &&
             [
               "checks_pending",
+              "checks_failed",
+              "blocking_observation",
               "active_work",
               "merge_pending",
               "fetch_pending",
@@ -800,7 +832,7 @@ export class Scheduler {
           mode: "review",
           signal: AbortSignal.timeout(goal.config.timeoutMs),
           onCheckpoint: async () => {},
-          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nDiff:\n${diff}`,
+          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Explicitly list resolved observation ids in resolvedObservations only after reproducing and verifying their resolution. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nOperator observations: ${JSON.stringify(observations(this.store, goal.id))}\nDiff:\n${diff}`,
         },
         "review",
       );
@@ -825,10 +857,22 @@ export class Scheduler {
         reviewPassed,
         {
           ...review,
+          observations: review.resolvedObservations,
           environmentDigest: reviewed.environmentDigest,
           executionSessionId: reviewed.executionSessionId,
         },
       );
+      if (reviewPassed) {
+        for (const observationId of review.resolvedObservations ?? []) {
+          closeObservation(
+            this.store,
+            goal.id,
+            observationId,
+            commit,
+            "independent-reviewer",
+          );
+        }
+      }
       for (const finding of review.findings)
         this.store.finding(goal.id, taskId, { ...finding, commit }, "reviewer");
       const cost = (result as any)?.costUsd;
@@ -985,6 +1029,7 @@ export class Scheduler {
           "rev-parse",
           "HEAD",
         ]);
+        assertObservationsClosed(this.store, goal.id);
         const sha = await this.workspaces.advance(goal, candidate);
         try {
           return this.store.accept(
@@ -1366,7 +1411,7 @@ export class Scheduler {
           mode: "review",
           signal: AbortSignal.timeout(g.config.timeoutMs),
           onCheckpoint: async () => {},
-          prompt: `Independently review the complete goal against current development ${candidate.targetSha}. Return JSON {"commit":"${candidate.commit}","verdict":"pass" or "fail","findings":[{"summary":"...","blocking":true,"evidence":"..."}]}. Goal: ${g.config.description}\nDiff:\n${diff}`,
+          prompt: `Independently review the complete goal against current development ${candidate.targetSha}. Return JSON {"commit":"${candidate.commit}","verdict":"pass" or "fail","findings":[{"summary":"...","blocking":true,"evidence":"..."}]}. Goal: ${g.config.description}\nOperator observations: ${JSON.stringify(observations(this.store, g.id))}\nDiff:\n${diff}`,
         },
         "review",
       );
@@ -1450,6 +1495,7 @@ export class Scheduler {
           );
         }
       }
+      assertObservationsClosed(this.store, g.id);
       await this.workspaces.advance(g, candidate);
       this.store.setting(`publication:${g.id}`, candidate);
       const result = await host.publish(
@@ -1462,6 +1508,51 @@ export class Scheduler {
       if (g.config.policy.autoMerge && !result.merged)
         throw new ControlError("merge_pending", "PR has not merged", 409);
     }
+    if (!g.config.policy.publish && g.config.policy.requiredChecks.length) {
+      if (!this.options.localDeliveryGate)
+        throw new ControlError(
+          "checks_pending",
+          "Local delivery requires a trusted configured delivery verifier",
+          409,
+        );
+      if (g.config.repository?.mode !== "local")
+        throw new ControlError(
+          "checks_pending",
+          "Non-publishing required checks need an explicit local repository target",
+          409,
+        );
+      const targetBranch = g.config.repository.branch;
+      const workspace = this.workspaces.goalPath(g);
+      const candidateSha = await git(workspace, ["rev-parse", "HEAD"]);
+      const targetSha = await git(g.config.repoPath, [
+        "rev-parse",
+        targetBranch,
+      ]);
+      this.store.setting(`local-delivery:${g.id}`, {
+        commit: candidateSha,
+        targetSha,
+      });
+      await this.options.localDeliveryGate({
+        goalId: g.id,
+        workspace,
+        repoPath: g.config.repoPath,
+        candidateSha,
+        targetSha,
+        requiredChecks: g.config.policy.requiredChecks,
+      });
+      if (
+        (await git(workspace, ["status", "--porcelain"])) ||
+        (await git(workspace, ["rev-parse", "HEAD"])) !== candidateSha ||
+        (await git(g.config.repoPath, ["rev-parse", targetBranch])) !==
+          targetSha
+      )
+        throw new ControlError(
+          "stale_base",
+          "Local source or target advanced after delivery verification",
+          409,
+        );
+    }
+    assertObservationsClosed(this.store, g.id);
     this.store.setGoalState(g.id, "completed", g.revision, "scheduler", {
       publication,
       report: `goals/${g.id}/report.json`,

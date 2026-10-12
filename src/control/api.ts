@@ -20,6 +20,7 @@ import {
   scheduleSchema,
   projectSchema,
 } from "./schema.js";
+import { recordObservation, observations, closeObservation } from "./delivery.js";
 import { CONTROL_HTML } from "./ui.js";
 import { dashboardSnapshot } from "./dashboard.js";
 import {
@@ -549,6 +550,12 @@ export function createControlServer(
         operator();
         return send(res, 200, revokeAutomation(store, identityRevoke[1]));
       }
+      const observationClose = /^\/goals\/([^/]+)\/observations\/([^/]+)\/close$/.exec(path);
+      if (observationClose && method === "POST") {
+        operator();
+        const value = z.object({candidateSha: z.string().regex(/^[a-f0-9]{40}$/)}).strict().parse(body);
+        return send(res, 200, closeObservation(store, observationClose[1], observationClose[2], value.candidateSha, principal.actor));
+      }
       const mutation = () => {
         const maintenance = store.setting("instance-maintenance") as
           { phase?: string } | undefined;
@@ -792,7 +799,7 @@ export function createControlServer(
           return store.claimNextTask(v.workerId, { goalId: v.goalId });
         }
         const gm =
-          /^\/goals\/([^/]+)(?:\/(tasks|attempts|plan|state|policy|artifacts|findings|evidence|backend))?$/.exec(
+          /^\/goals\/([^/]+)(?:\/(tasks|attempts|plan|state|policy|artifacts|findings|evidence|backend|observations))?$/.exec(
             path,
           );
         if (gm) {
@@ -807,6 +814,7 @@ export function createControlServer(
               403,
             );
           if (method === "GET") {
+            if (gm[2] === "observations") return observations(store, gid);
             if (gm[2] === "attempts") {
               scopedRead();
               store.getGoal(gid);
@@ -842,6 +850,10 @@ export function createControlServer(
             return store.getGoal(gid);
           }
           if (principal.role !== "automation") operator();
+          if (gm[2] === "observations") {
+            operator();
+            return recordObservation(store, gid, body, principal.actor);
+          }
           if (gm[2] === "backend") {
             const v = backendSwitchSchema.parse(body);
             if (options.validateGoal)
@@ -884,6 +896,7 @@ export function createControlServer(
             return {
               ...task,
               operatorContext: store.memory("", task.goalId),
+              observations: observations(store, task.goalId),
               projectContext: store.projectContext(task.goalId),
               dependencyArtifacts: store
                 .tasks(task.goalId)
@@ -1324,6 +1337,8 @@ export function openApi() {
     "/goals/{id}/state",
     "/goals/{id}/backend",
     "/goals/{id}/policy",
+    "/goals/{id}/observations",
+    "/goals/{id}/observations/{observationId}/close",
     "/claims",
     "/tasks/{id}",
     "/tasks/{id}/heartbeat",
@@ -1347,6 +1362,8 @@ export function openApi() {
       "/goals/{id}/tasks",
       "/goals/{id}/attempts",
       "/goals/{id}/policy",
+    "/goals/{id}/observations",
+    "/goals/{id}/observations/{observationId}/close",
       "/tasks/{id}",
       "/questions",
       "/events",

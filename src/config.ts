@@ -1,3 +1,4 @@
+import { localDeliveryVerifierSchema } from "./control/localDelivery.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { readFile, realpath, lstat, mkdir, writeFile } from "node:fs/promises";
 import { resolve, dirname, join, isAbsolute, relative } from "node:path";
@@ -29,6 +30,7 @@ export const installationSchema = z
     stateDir: z.string().min(1),
     secretsDir: z.string().min(1),
     backup: backupPolicySchema.prefault({}),
+    localDeliveryVerifier: localDeliveryVerifierSchema.optional(),
     server: z
       .object({
         port: z
@@ -413,7 +415,14 @@ export async function loadConfiguration(
       "Configure exactly one installation isolated runtime host; multiple runtimes are not supported",
     );
   const runtimeHash = createHash("sha256")
-    .update(JSON.stringify({ hosts, providers, auth }))
+    .update(
+      JSON.stringify({
+        hosts,
+        providers,
+        auth,
+        localDeliveryVerifier: settings.localDeliveryVerifier,
+      }),
+    )
     .digest("hex");
   const loaded = {
     root,

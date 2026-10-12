@@ -1,3 +1,4 @@
+import { inferenceHttpFetch } from "./inferenceHttp.js";
 import {
   createServer,
   type IncomingMessage,
@@ -31,7 +32,7 @@ export class InferenceGateway {
     readonly db: SqliteStore,
     readonly upstreams: Record<string, TrustedUpstream>,
     readonly assertLease: (capability: InferenceCapability) => void,
-    readonly fetcher: typeof fetch = fetch,
+    readonly fetcher: typeof fetch = inferenceHttpFetch,
     readonly clock = Date.now,
   ) {
     db.exec(

@@ -1,3 +1,4 @@
+import { inferenceHttpFetch } from "./inferenceHttp.js";
 import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
@@ -41,7 +42,7 @@ export class ProviderUnavailable extends Error {}
 export class AzureProvider implements ModelProvider {
   constructor(
     readonly config: Extract<BackendConfig, { kind: "azure" }>,
-    readonly fetcher: typeof fetch = fetch,
+    readonly fetcher: typeof fetch = inferenceHttpFetch,
     readonly authentication: () => Promise<
       Record<string, string>
     > = async () => {

@@ -23,6 +23,7 @@
     "SECURITY.md",
     "CONTRIBUTING.md",
     "publication.json",
+    "verification.json",
     "THIRD_PARTY_NOTICES.md",
     "scripts/missioncontrol",
     "scripts/install-status.sh"
