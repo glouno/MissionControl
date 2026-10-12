@@ -23,6 +23,7 @@ import { SqliteStore } from "./sqlite.js";
 import { ControlStore } from "./control/store.js";
 import { ControlClient } from "./control/client.js";
 import { createControlServer } from "./control/api.js";
+import { createLocalDeliveryGate } from "./control/localDelivery.js";
 import { Scheduler } from "./control/scheduler.js";
 import {
   createIsolatedRuntime,
@@ -977,6 +978,9 @@ async function serve(config: LoadedConfiguration) {
       config.settings.stateDir,
       `http://127.0.0.1:${config.settings.server.port}`,
       {
+        localDeliveryGate: config.settings.localDeliveryVerifier
+          ? createLocalDeliveryGate(config.settings.localDeliveryVerifier)
+          : undefined,
         storagePolicy: config.settings.storage,
         claimThroughApi: true,
         backend: (g) => {

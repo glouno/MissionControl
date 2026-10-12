@@ -1,4 +1,10 @@
-import { observations, assertObservationsClosed, closeObservation, deliveryIncident } from "./delivery.js";
+import {
+  observations,
+  assertObservationsClosed,
+  closeObservation,
+  deliveryIncident,
+} from "./delivery.js";
+import type { LocalDeliveryInput } from "./localDelivery.js";
 import { z } from "zod";
 import { executionUsage } from "./usage.js";
 import { matchesGlob, join } from "node:path";
@@ -67,6 +73,7 @@ export class Scheduler {
     readonly options: {
       backend?: (g: Goal) => AgentBackend;
       gitHost?: GitHost;
+      localDeliveryGate?: (input: LocalDeliveryInput) => Promise<void>;
       spawnWorkers?: boolean;
       /** Registered controller dispatches claim via the same authenticated API. */
       claimThroughApi?: boolean;
@@ -307,10 +314,28 @@ export class Scheduler {
             );
             continue;
           }
-          if (job.kind === "publish" && e instanceof ControlError &&
-              ["checks_pending", "checks_failed", "stale_base", "freshness_policy", "blocking_observation"].includes(e.code)) {
-            const candidate = this.store.setting(`publication:${goal.id}`) as any;
-            deliveryIncident(this.store, goal.id, candidate?.commit ?? "unknown", candidate?.targetSha ?? "unknown", e.code, e.message);
+          if (
+            job.kind === "publish" &&
+            e instanceof ControlError &&
+            [
+              "checks_pending",
+              "checks_failed",
+              "stale_base",
+              "freshness_policy",
+              "blocking_observation",
+            ].includes(e.code)
+          ) {
+            const candidate = this.store.setting(
+              `publication:${goal.id}`,
+            ) as any;
+            deliveryIncident(
+              this.store,
+              goal.id,
+              candidate?.commit ?? "unknown",
+              candidate?.targetSha ?? "unknown",
+              e.code,
+              e.message,
+            );
           }
           if (e instanceof HumanWait) {
             this.store.requestGoalHuman(goal.id, e.request);
@@ -840,7 +865,13 @@ export class Scheduler {
       );
       if (reviewPassed) {
         for (const observationId of review.resolvedObservations ?? []) {
-          closeObservation(this.store, goal.id, observationId, commit, "independent-reviewer");
+          closeObservation(
+            this.store,
+            goal.id,
+            observationId,
+            commit,
+            "independent-reviewer",
+          );
         }
       }
       for (const finding of review.findings)
@@ -1477,6 +1508,45 @@ export class Scheduler {
       publication = result;
       if (g.config.policy.autoMerge && !result.merged)
         throw new ControlError("merge_pending", "PR has not merged", 409);
+    }
+    if (!g.config.policy.publish && g.config.policy.requiredChecks.length) {
+      if (!this.options.localDeliveryGate)
+        throw new ControlError(
+          "checks_pending",
+          "Local delivery requires a trusted configured delivery verifier",
+          409,
+        );
+      if (g.config.repository?.mode !== "local")
+        throw new ControlError(
+          "checks_pending",
+          "Non-publishing required checks need an explicit local repository target",
+          409,
+        );
+      const targetBranch = g.config.repository.branch;
+      const workspace = this.workspaces.goalPath(g);
+      const candidateSha = await git(workspace, ["rev-parse", "HEAD"]);
+      const targetSha = await git(g.config.repoPath, [
+        "rev-parse",
+        targetBranch,
+      ]);
+      await this.options.localDeliveryGate({
+        goalId: g.id,
+        workspace,
+        repoPath: g.config.repoPath,
+        candidateSha,
+        targetSha,
+        requiredChecks: g.config.policy.requiredChecks,
+      });
+      if (
+        (await git(workspace, ["rev-parse", "HEAD"])) !== candidateSha ||
+        (await git(g.config.repoPath, ["rev-parse", targetBranch])) !==
+          targetSha
+      )
+        throw new ControlError(
+          "stale_base",
+          "Local source or target advanced after delivery verification",
+          409,
+        );
     }
     assertObservationsClosed(this.store, g.id);
     this.store.setGoalState(g.id, "completed", g.revision, "scheduler", {

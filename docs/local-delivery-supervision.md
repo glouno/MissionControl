@@ -26,3 +26,12 @@ This patch does not claim that an arbitrary Git push is intrinsically intercepte
 GitHub branch protection and the owned integration command must guard operator
 integration. Never turn a worker-authored JSON document into trusted CI evidence.
 Native Mac/device and selected personal-use gates remain distinct.
+
+Local nonpublishing goals with required checks now require an installation-owned
+`localDeliveryVerifier`. Its absolute executable and script, pinned script SHA256,
+private catalog and receipt-state paths cannot be chosen by a task. The bridge
+validates the same signed source/base/contract evidence as the owned PR lane;
+missing evidence queues work with that supervisor and leaves completion pending.
+Failed receipts report `checks_failed`. Source and target are rechecked after
+verification. The bridge definition is part of the runtime hash, so changing it
+requires stopped-instance activation. No remote Mac commands are involved.
