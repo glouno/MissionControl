@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { abortable } from "./control/reliability.js";
+import { writeSupportBundle } from "./control/supportBundle.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { mkdir, readFile, writeFile, realpath, lstat } from "node:fs/promises";
 import { resolve, join, dirname, relative, isAbsolute } from "node:path";
@@ -669,6 +671,81 @@ export async function main(args = process.argv.slice(2)) {
     }
     return;
   }
+  if (command === "support") {
+    if (!id) throw Error("Goal ID is required");
+    const path = `/goals/${encodeURIComponent(id)}/support-bundle${flags["attempt-id"] ? `?attemptId=${encodeURIComponent(flags["attempt-id"])}` : ""}`;
+    if (action === "preview") return output(await client.request(path));
+    if (action === "export") {
+      if (
+        !flags["attempt-id"] ||
+        flags.reviewed !== "true" ||
+        !flags["manifest-sha256"]
+      )
+        throw Error(
+          "Support export requires --attempt-id, --manifest-sha256 and --reviewed true after preview",
+        );
+      if (!flags.destination)
+        throw Error("Private export destination is required");
+      const result = await client.request<{
+        manifest: unknown;
+        bundle: unknown;
+      }>(`/goals/${encodeURIComponent(id)}/support-bundle`, "POST", {
+        attemptId: flags["attempt-id"],
+        previewSha256: flags["manifest-sha256"],
+        reviewed: true,
+      });
+      await writeSupportBundle(flags.destination, result);
+      return output(result.manifest);
+    }
+  }
+  if (command === "reliability") {
+    const query = new URLSearchParams();
+    for (const [key, flag] of [
+      ["goalId", "goal-id"],
+      ["attemptId", "attempt-id"],
+      ["after", "after"],
+      ["limit", "limit"],
+    ])
+      if (flags[flag] ?? flags[key])
+        query.set(key, String(flags[flag] ?? flags[key]));
+    const path =
+      action === "diagnostics"
+        ? "inference-diagnostics"
+        : action === "incidents"
+          ? "incidents"
+          : "readiness";
+    return output(await client.request(`/${path}?${query}`));
+  }
+  if (command === "replacement") {
+    if (!id || !flags.file || !flags.revision || !flags.explanation)
+      throw new Error(
+        "Replacement requires goal ID, --file, --revision and --explanation",
+      );
+    const input = JSON.parse(await readFile(resolve(flags.file), "utf8"));
+    return output(
+      await client.request(
+        `/goals/${encodeURIComponent(id)}/replacement`,
+        "POST",
+        {
+          revision: Number(flags.revision),
+          input,
+          explanation: flags.explanation,
+        },
+      ),
+    );
+  }
+  if (command === "recovery") {
+    if (!id) throw Error("Goal ID is required");
+    return output(
+      await client.request(
+        `/goals/${encodeURIComponent(id)}/recovery`,
+        action === "resume" ? "POST" : "GET",
+        action === "resume"
+          ? { revision: Number(flags.revision), explanation: flags.explanation }
+          : undefined,
+      ),
+    );
+  }
   if (command === "task" && action === "inspect") {
     output(await client.request(`/tasks/${encodeURIComponent(id)}`));
     return;
@@ -989,6 +1066,7 @@ async function serve(config: LoadedConfiguration) {
           : undefined,
         storagePolicy: config.settings.storage,
         claimThroughApi: true,
+        asynchronousJobs: true,
         backend: (g) => {
           if (g.config.backend.kind !== "fake")
             throw new Error(
@@ -1004,6 +1082,8 @@ async function serve(config: LoadedConfiguration) {
                   ? syntheticVerifier(claim, path)
                   : runtime!.verify(claim, path),
               executionMaintenance: () => runtime!.maintenance(false),
+              recoverAttempt: (taskId, generation, signal) =>
+                runtime!.recoverAttempt(taskId, generation, signal),
               imageMaintenance: runtime.imageMaintenance,
             }
           : {}),
@@ -1132,11 +1212,24 @@ async function serve(config: LoadedConfiguration) {
       if (stopping) return;
       stopping = true;
       clearInterval(timer);
-      await scheduler!.close();
-      await runtime?.close();
-      await new Promise<void>((r) => server.close(() => r()));
-      db.close();
-      await unlock();
+      const limit = AbortSignal.timeout(90000);
+      const force = setTimeout(() => process.exit(1), 90000);
+      force.unref();
+      try {
+        await abortable(scheduler!.close(), limit);
+        if (runtime) await abortable(runtime.close(), limit);
+        server.closeAllConnections();
+        await abortable(
+          new Promise<void>((r) => server.close(() => r())),
+          limit,
+        );
+        db.close();
+        await unlock();
+        clearTimeout(force);
+      } catch {
+        // Keep durable ownership for exact startup recovery; do not release a live controller lock.
+        process.exitCode = 1;
+      }
     };
     process.once("SIGINT", () => {
       void stop();

@@ -143,7 +143,7 @@ Schema 7 adds durable project backlog (`control_backlog`) with indexed project,
 status and priority, revision concurrency control, immutable entry identity and a
 unique foreign-key goal link. Fresh initialization and schema-6 upgrades apply
 migration 7 and its ledger entry with `PRAGMA user_version` in one transaction.
-Instance inspection accepts supported schemas 1 through 7 and checks their exact
+Instance inspection accepts supported schemas 1 through 8 and checks their exact
 ledger. Recovery retains pending, archived and launched entries and the original
 launch revision. Backlog changes do not start execution; explicit launch commits
 admission, accounting, planning job, status and goal link atomically. See

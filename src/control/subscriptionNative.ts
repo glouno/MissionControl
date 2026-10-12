@@ -1,3 +1,4 @@
+import { ProviderFailure, classifyFailure } from "./reliability.js";
 import { z } from "zod";
 import { createInterface } from "node:readline";
 import type { AgentBackend, BackendResult, RunContext } from "./backend.js";
@@ -161,8 +162,8 @@ export class SubscriptionNativeBackend implements AgentBackend {
       status: "unknown" as const,
       elapsedMs: Date.now() - startedAt,
     });
-    const fail = (message: string) => {
-      failure ??= Object.assign(Error(message), { usage: unknown() });
+    const fail = (message: string, error?: Error) => {
+      failure ??= Object.assign(error ?? Error(message), { usage: unknown() });
       stop();
     };
     const abort = () => {
@@ -210,6 +211,9 @@ export class SubscriptionNativeBackend implements AgentBackend {
       if (failure) return;
       try {
         const event = JSON.parse(line);
+        if (event.type === "item.completed") c.onProgress?.("tool_completed");
+        if (event.type === "content_block_delta" && event.delta)
+          c.onProgress?.("model_output");
         if (harness === "codex") {
           if (
             terminal &&
@@ -227,7 +231,7 @@ export class SubscriptionNativeBackend implements AgentBackend {
           )
             finalText = z.string().parse(event.item.text);
           if (event.type === "turn.failed" || event.type === "error")
-            throw Error("Subscription inference failed");
+            throw new ProviderFailure(classifyFailure(event.error ?? event));
           if (event.type === "turn.completed") {
             if (terminal) throw Error("Duplicate subscription terminal result");
             terminal = event;
@@ -243,6 +247,7 @@ export class SubscriptionNativeBackend implements AgentBackend {
           e instanceof SyntaxError
             ? "Invalid subscription protocol"
             : (e as Error).message,
+          e instanceof ProviderFailure ? e : undefined,
         );
       }
     });

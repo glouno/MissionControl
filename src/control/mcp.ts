@@ -3,12 +3,100 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { ControlClient } from "./client.js";
 import { usageReconciliationSchema } from "./usage.js";
-import { backendSwitchSchema, projectSchema } from "./schema.js";
+import { goalSchema, backendSwitchSchema, projectSchema } from "./schema.js";
 export async function runMcp(client: ControlClient) {
   const server = new McpServer({ name: "mission-control", version: "1.0.0" });
   const text = (value: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
   });
+  for (const [name, path] of [
+    ["reliability_incidents", "incidents"],
+    ["inference_diagnostics", "inference-diagnostics"],
+    ["controller_readiness", "readiness"],
+  ])
+    server.registerTool(
+      name,
+      {
+        description: "Operator: inspect private reliability diagnostics",
+        inputSchema: {
+          goalId: z.string().optional(),
+          attemptId: z.string().optional(),
+          after: z.string().optional(),
+        },
+      },
+      async (input) =>
+        text(
+          await client.request(
+            `/${path}?${new URLSearchParams(Object.entries(input).filter(([, v]) => v !== undefined) as [string, string][]).toString()}`,
+          ),
+        ),
+    );
+  server.registerTool(
+    "recovery_inspect",
+    {
+      description: "Operator: inspect retained resources and blockers",
+      inputSchema: { goalId: z.string() },
+    },
+    async ({ goalId }) =>
+      text(
+        await client.request(`/goals/${encodeURIComponent(goalId)}/recovery`),
+      ),
+  );
+  server.registerTool(
+    "recovery_resume",
+    {
+      description: "Operator: record inspection and resume safe work",
+      inputSchema: {
+        goalId: z.string(),
+        revision: z.number().int().positive(),
+        explanation: z.string().min(1).max(4096),
+      },
+    },
+    async ({ goalId, ...input }) =>
+      text(
+        await client.request(
+          `/goals/${encodeURIComponent(goalId)}/recovery`,
+          "POST",
+          input,
+        ),
+      ),
+  );
+  server.registerTool(
+    "support_bundle_preview",
+    {
+      description:
+        "Operator: preview selected metadata-only failure evidence; private export through CLI",
+      inputSchema: { goalId: z.string(), attemptId: z.string() },
+    },
+    async ({ goalId, attemptId }) =>
+      text(
+        await client.request(
+          `/goals/${encodeURIComponent(goalId)}/support-bundle?attemptId=${encodeURIComponent(attemptId)}`,
+        ),
+      ),
+  );
+  server.registerTool(
+    "goal_replace",
+    {
+      description:
+        "Operator: create an immutable successor within retained family and installation allowance",
+      inputSchema: {
+        goalId: z.string(),
+        revision: z.number().int().positive(),
+        input: goalSchema,
+        explanation: z.string().min(1).max(4096),
+      },
+    },
+    async ({ goalId, ...body }) =>
+      text(
+        await client.request(
+          `/goals/${encodeURIComponent(goalId)}/replacement`,
+          "POST",
+          body,
+        ),
+      ),
+  );
+
   server.registerTool(
     "connector_health",
     {
@@ -236,10 +324,16 @@ export async function runMcp(client: ControlClient) {
   server.registerTool(
     "task_claim",
     {
-      description: "Claim ready work for an existing approved controller dispatch; arbitrary remote workers are unsupported",
-      inputSchema: { workerId: z.string(), goalId: z.string().optional(), idempotencyKey: z.string().min(1).max(200).optional() },
+      description:
+        "Claim ready work for an existing approved controller dispatch; arbitrary remote workers are unsupported",
+      inputSchema: {
+        workerId: z.string(),
+        goalId: z.string().optional(),
+        idempotencyKey: z.string().min(1).max(200).optional(),
+      },
     },
-    async ({ workerId, goalId, idempotencyKey }) => text(await client.claim(workerId, goalId, idempotencyKey)),
+    async ({ workerId, goalId, idempotencyKey }) =>
+      text(await client.claim(workerId, goalId, idempotencyKey)),
   );
   for (const operation of [
     "heartbeat",

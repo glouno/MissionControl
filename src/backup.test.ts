@@ -78,7 +78,7 @@ test(
       const manifest = await createBackup(db, state, backup, recipient, true);
       assert.equal(manifest.instanceId, id.id);
       assert.equal(manifest.complete, true);
-      assert.equal(manifest.schemaVersion, 7);
+      assert.equal(manifest.schemaVersion, 8);
       assert.equal(
         (await readFile(backup)).includes(
           Buffer.from("Synthetic private evidence"),
@@ -88,7 +88,7 @@ test(
       const restore = join(root, "restored");
       await restoreBackup(backup, identity, restore);
       assert.equal((await inspectState(restore)).id, id.id);
-      assert.equal((await inspectState(restore)).schemaVersion, 7);
+      assert.equal((await inspectState(restore)).schemaVersion, 8);
       const restoredDb = new SqliteStore(join(restore, "mission-control.db"));
       try {
         assert.deepEqual(

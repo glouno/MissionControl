@@ -60,7 +60,7 @@ export function serviceDefinition(
     return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${macName}</string><key>ProgramArguments</key><array>${args.map((a) => `<string>${xml(a)}</string>`).join("")}</array><key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(serviceToolPath(toolPath))}</string></dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>Umask</key><integer>63</integer><key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string></dict></plist>\n`;
   if (platform !== "linux")
     throw Error("User services require Linux/WSL or macOS");
-  return `[Unit]\nDescription=MissionControl v1 private controller\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=${args.map(unitArg).join(" ")}\nUMask=0077\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=120\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n`;
+  return `[Unit]\nDescription=MissionControl v1 private controller\nAfter=default.target\n\n[Service]\nType=simple\nExecStart=${args.map(unitArg).join(" ")}\nUMask=0077\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=90\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n`;
 }
 export type ServiceOptions = {
   platform?: string;

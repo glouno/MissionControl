@@ -223,7 +223,7 @@ test("evidence acceptance is tied to exact source and integration commits", asyn
     /immutable/,
   );
 });
-test("parallel claims reserve budget and provider waits do not consume attempts", async () => {
+test("parallel claims reserve budget and provider waits consume bounded replacement attempts", async () => {
   const f = await fixture();
   const g = f.store.createGoal({
     title: "Paid",
@@ -244,6 +244,7 @@ test("parallel claims reserve budget and provider waits do not consume attempts"
       inputUsdPerMillion: 1,
       outputUsdPerMillion: 1,
     },
+    verificationCommands: ["test -f one.txt", "test -f two.txt"],
     maxCostUsd: 1,
     estimatePerRunUsd: 1,
   });
@@ -258,7 +259,7 @@ test("parallel claims reserve budget and provider waits do not consume attempts"
     "quota",
     0,
   );
-  assert.equal(f.store.getTask(c.task.id).attempts, 0);
+  assert.equal(f.store.getTask(c.task.id).attempts, 1);
   assert.ok(f.store.claimNextTask("second"));
 });
 test("API authenticates, fences worker scope and replays idempotent goal submission", async (t) => {

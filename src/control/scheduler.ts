@@ -1,3 +1,17 @@
+import { repositoryIdentity } from "./repositories.js";
+import {
+  withExecutionDeadline,
+  executionDeadline,
+  executionSignal,
+} from "./executionDeadline.js";
+import {
+  ProviderFailure,
+  classifyFailure,
+  failureRecord,
+  deadlineSignal,
+  abortable,
+  boundedCleanup,
+} from "./reliability.js";
 import {
   observations,
   assertObservationsClosed,
@@ -50,12 +64,18 @@ import {
 export class Scheduler {
   readonly workspaces: WorkspaceManager;
   private ticking = false;
+  private runningJobs = new Map<string, Promise<void>>();
+  private operationAborts = new Map<string, AbortController>();
+  private recovering = new Map<string, Promise<void>>();
+  private closing = false;
+  private shutdownAbort = new AbortController();
   private maintenanceRequested = false;
   private isolated = new Map<
     string,
     { claim: Claim; token: string; abort: AbortController; done: Promise<void> }
   >();
   private integrating: Promise<unknown> = Promise.resolve();
+  private repositoryIntegrations = new Map<string, Promise<unknown>>();
   private busyResults = new Set<string>();
   private controllerWorkers = new Map<
     string,
@@ -72,6 +92,7 @@ export class Scheduler {
     readonly url: string,
     readonly options: {
       backend?: (g: Goal) => AgentBackend;
+      asynchronousJobs?: boolean;
       gitHost?: GitHost;
       localDeliveryGate?: (input: LocalDeliveryInput) => Promise<void>;
       spawnWorkers?: boolean;
@@ -85,6 +106,11 @@ export class Scheduler {
         source: string,
       ) => Promise<VerificationResult>;
       executionMaintenance?: () => Promise<unknown>;
+      recoverAttempt?: (
+        taskId: string,
+        generation: number,
+        signal: AbortSignal,
+      ) => Promise<void>;
       imageMaintenance?: (apply: boolean) => Promise<unknown>;
       storagePolicy?: import("./storage.js").StorageManager["policy"];
     } = {},
@@ -171,9 +197,10 @@ export class Scheduler {
             "Free storage is below the configured reserve",
             409,
           );
-        const workspace = await this.workspaces.prepareTask(
-          claim.goal,
-          claim.task,
+        const workspace = await withExecutionDeadline(
+          claim.runtime!.deadlineAt,
+          this.shutdownAbort.signal,
+          () => this.workspaces.prepareTask(claim.goal, claim.task),
         );
         if (
           this.controllerWorkers.get(workerId) !== dispatch ||
@@ -189,6 +216,13 @@ export class Scheduler {
         return dispatch.claim;
       } catch (error) {
         dispatch.closed = true;
+        if (claim.runtime && this.store.clock() >= claim.runtime.deadlineAt) {
+          this.store.db.exec(
+            `UPDATE control_tasks SET lease_until=${this.store.clock() - 1} WHERE id=${sql(claim.task.id)}`,
+          );
+          this.store.reconcileExpired(claim.task.id, claim.generation);
+          throw error;
+        }
         this.store.release(
           claim.task.id,
           workerId,
@@ -208,16 +242,142 @@ export class Scheduler {
     }
   }
   async tick() {
-    if (this.ticking || this.maintenanceRequested) return;
+    if (this.closing || this.ticking || this.maintenanceRequested) return;
     this.ticking = true;
+    this.store.setting("scheduler-heartbeat", {
+      startedAt: this.store.clock(),
+    });
     try {
+      for (const attempt of this.store.db
+        .query<{ id: string; goal_id: string; task_id: string | null }>(
+          "SELECT id,goal_id,task_id FROM control_attempts WHERE outcome='active'",
+        )
+        .map((a) => ({
+          id: a.id,
+          goalId: a.goal_id,
+          taskId: a.task_id,
+          runtime: this.store.reliability.runtime(a.id),
+        }))) {
+        const r = attempt.runtime;
+        if (!r) continue;
+        const goal = this.store.getGoal(attempt.goalId),
+          idle = this.store.clock() - r.lastProgressAt;
+        if (
+          idle >= goal.config.noProgressWarningMs &&
+          !this.store.setting(`stall-warning:${attempt.id}`)
+        ) {
+          this.store.recordFailure(
+            goal.id,
+            failureRecord("service", {
+              message:
+                "Execution has no meaningful progress; inspect the attempt timeline.",
+            }),
+            attempt.id,
+          );
+          this.store.setting(`stall-warning:${attempt.id}`, true);
+        }
+        if (
+          idle >= goal.config.noProgressTimeoutMs ||
+          this.store.clock() >= r.deadlineAt
+        ) {
+          if (attempt.taskId) {
+            const task = this.store.getTask(String(attempt.taskId));
+            if (task.workerId) {
+              this.store.db.exec(
+                `UPDATE control_tasks SET lease_until=${this.store.clock() - 1} WHERE id=${sql(task.id)}`,
+              );
+            }
+          } else
+            this.operationAborts
+              .get(attempt.id)
+              ?.abort(
+                new Error(
+                  "Controller operation deadline or no-progress limit expired",
+                ),
+              );
+        }
+      }
       for (const t of this.store.expired()) {
         const isolated = this.isolated.get(t.id);
         if (isolated) {
-          isolated.abort.abort(new Error("Task lease expired"));
-          await isolated.done;
+          this.store.reconcileExpired(t.id, t.generation);
+          isolated.abort.abort(new Error("Task deadline or lease expired"));
+          void isolated.done;
+          continue;
         }
         this.store.reconcileExpired(t.id, t.generation);
+      }
+      for (const attempt of this.store.db
+        .query<{ id: string; task_id: string; goal_id: string }>(
+          "SELECT id,task_id,goal_id FROM control_attempts WHERE outcome='recovering' AND task_id IS NOT NULL",
+        )
+        .map((a) => ({
+          id: a.id,
+          taskId: a.task_id,
+          goalId: a.goal_id,
+          runtime: this.store.reliability.runtime(a.id),
+        }))) {
+        const task = this.store.getTask(String(attempt.taskId));
+        if (
+          this.recovering.has(attempt.id) ||
+          attempt.runtime?.cleanupState === "blocked"
+        )
+          continue;
+        const job = Promise.resolve()
+          .then(() =>
+            boundedCleanup(async (cleanup) => {
+              const active = this.isolated.get(task.id);
+              active?.abort.abort(new Error("Attempt recovery"));
+              // The adapter must finish all import/checkpoint callbacks before ownership is released.
+              if (active) await abortable(active.done, cleanup);
+              if (this.options.recoverAttempt)
+                await abortable(
+                  this.options.recoverAttempt(
+                    task.id,
+                    task.generation,
+                    cleanup,
+                  ),
+                  cleanup,
+                );
+              else if (
+                !active &&
+                this.store.getGoal(task.goalId).config.backend.kind !== "fake"
+              )
+                throw new ControlError(
+                  "cleanup_blocked",
+                  "Runtime inspection is required",
+                  409,
+                );
+              let safe = false;
+              if (
+                task.checkpoint?.commit &&
+                !task.checkpoint.pendingTool &&
+                !this.store.setting(`result-request:${attempt.id}`)
+              ) {
+                try {
+                  const path = this.workspaces.taskPath(task);
+                  safe =
+                    (await git(path, ["rev-parse", "HEAD"])) ===
+                      task.checkpoint.commit &&
+                    !(await git(path, ["status", "--porcelain"]));
+                } catch {
+                  /* Retain the recovery decision if the checkpoint cannot be reproduced. */
+                }
+              }
+              cleanup.throwIfAborted();
+              this.store.finishAttemptRecovery(task.id, task.generation, safe);
+            }),
+          )
+          .catch((error) =>
+            this.store.recordFailure(
+              task.goalId,
+              failureRecord("cleanup_blocked"),
+              attempt.id,
+            ),
+          )
+          .then(() => {})
+          .finally(() => this.recovering.delete(attempt.id));
+        this.recovering.set(attempt.id, job);
       }
       for (const active of this.isolated.values())
         if (
@@ -226,161 +386,52 @@ export class Scheduler {
           )
         )
           active.abort.abort(new Error("Goal execution stopped"));
-      const maintenanceAt = Number(
-        this.store.setting("storage-maintenance-at") ?? 0,
-      );
-      if (this.store.clock() - maintenanceAt >= 3600000) {
-        const configured =
-          this.store.setting("storage-maintenance-mode") ?? "preview";
-        if (!["preview", "workspaces", "branches"].includes(configured))
-          throw new ControlError(
-            "storage_policy",
-            "Unknown storage maintenance mode",
-          );
-        const preview = await new StorageMaintenance(
-          this.workspaces.storage,
-          this.store,
-        ).maintain(configured as MaintenanceMode);
-        this.store.setting("storage-maintenance-preview", preview);
-        if (this.options.executionMaintenance)
-          this.store.setting(
-            "execution-maintenance-preview",
-            await this.options.executionMaintenance(),
-          );
-        if (this.options.imageMaintenance)
-          this.store.setting(
-            "image-maintenance-preview",
-            await this.options.imageMaintenance(configured !== "preview"),
-          );
-        this.store.setting("storage-maintenance-at", this.store.clock());
-        const previousPressure =
-          this.store.setting("storage-pressure-active") === true;
-        const pressure = !preview.pressure.admissionAllowed;
-        if (pressure !== previousPressure) {
-          this.store.db.transaction(() => {
-            this.store.setting("storage-pressure-active", pressure);
-            this.store.event(
-              pressure ? "STORAGE_PRESSURE" : "STORAGE_RECOVERED",
-              "maintenance",
-              preview.pressure,
-            );
-            this.store.outbox("storage", {
-              message: pressure
-                ? "New workspace admission is paused: free disk is below the configured storage reserve. Inspect storage maintenance before reclaiming data."
-                : "Free disk has recovered above the configured storage reserve; new workspace admission can resume.",
-              pressure: preview.pressure,
-            });
-          });
-        }
+      if (!this.runningJobs.has("maintenance")) {
+        const run = () => this.maintainStorage();
+        if (this.options.asynchronousJobs) {
+          const job = run()
+            .catch(() =>
+              this.store.event("MAINTENANCE_FAILED", "controller", {}),
+            )
+            .finally(() => this.runningJobs.delete("maintenance"));
+          this.runningJobs.set("maintenance", job);
+        } else await run();
       }
       this.runSchedules();
       for (const job of this.store.jobs()) {
-        if (this.isolated.size >= 4) break;
-        const payload = JSON.parse(String(job.payload));
-        try {
-          const g = this.store.getGoal(payload.goalId);
-          if (job.kind === "report") {
-            await this.writeGoalReport(g.id);
-            this.store.finishJob(String(job.id));
-            continue;
-          }
-          if (["cancelled", "completed", "failed"].includes(g.status)) {
-            // Completion and filesystem lifecycle cannot share a transaction.
-            // Replay pending publication intent before retiring its durable job.
-            if (g.status === "completed" && job.kind === "publish")
-              await this.publish(g.id);
-            this.store.finishJob(String(job.id));
-            continue;
-          }
-          if (g.status === "paused") {
-            this.store.deferJob(String(job.id));
-            continue;
-          }
-          if (job.kind === "plan") await this.plan(payload.goalId);
-          else if (job.kind === "publish") await this.publish(payload.goalId);
-          else if (job.kind === "replan") await this.replan(payload.goalId);
-          this.store.finishJob(String(job.id));
-        } catch (e) {
-          const goal = this.store.getGoal(payload.goalId);
-          if (job.kind === "report" || goal.status === "completed") {
-            // Terminal domain effects are durable. A filesystem/lifecycle retry
-            // can never fail or reexecute already-completed work.
-            this.store.deferJob(String(job.id), 30000);
-            this.store.event(
-              "TERMINAL_EVIDENCE_RETRY",
-              "scheduler",
-              { jobId: job.id, kind: job.kind },
-              goal.id,
-            );
-            continue;
-          }
-          if (
-            job.kind === "publish" &&
-            e instanceof ControlError &&
-            [
-              "checks_pending",
-              "checks_failed",
-              "stale_base",
-              "freshness_policy",
-              "blocking_observation",
-            ].includes(e.code)
-          ) {
-            const candidate = (this.store.setting(`publication:${goal.id}`) ??
-              this.store.setting(`local-delivery:${goal.id}`)) as any;
-            deliveryIncident(
-              this.store,
-              goal.id,
-              candidate?.commit ?? "unknown",
-              candidate?.targetSha ?? "unknown",
-              e.code,
-              e.message,
-            );
-          }
-          if (e instanceof HumanWait) {
-            this.store.requestGoalHuman(goal.id, e.request);
-            this.store.deferJob(String(job.id));
-          } else if (e instanceof ControlError && e.code === "budget") {
-            this.store.requestGoalHuman(goal.id, {
-              question: "Authorize an additional run budget?",
-              reason: "Current authorized spending is exhausted.",
-              options: [
-                { id: "approve", label: "Increase the authorized budget" },
-                { id: "reject", label: "Keep the current budget" },
-              ],
-              category: "spending",
-              requestedMaxCostUsd:
-                goal.config.maxCostUsd + goal.config.estimatePerRunUsd,
-            });
-            this.store.deferJob(String(job.id));
-          } else if (
-            e instanceof ControlError &&
-            [
-              "checks_pending",
-              "checks_failed",
-              "blocking_observation",
-              "active_work",
-              "merge_pending",
-              "fetch_pending",
-              "stale_base",
-              "freshness_policy",
-              "storage_pressure",
-              "repair_unresolved",
-              "repair_retry",
-            ].includes(e.code)
-          ) {
-            this.store.deferJob(String(job.id));
-          } else {
-            this.store.retryJob(String(job.id), (e as Error).message);
-            if (Number(job.attempts) >= 2)
-              this.store.setGoalState(
-                goal.id,
-                "failed",
-                goal.revision,
-                "scheduler",
-                { reason: (e as Error).message },
-              );
-          }
-        }
+        if (
+          this.isolated.size + this.runningJobs.size + this.recovering.size >=
+          4
+        )
+          break;
+        if (this.runningJobs.has(String(job.id))) continue;
+        const goalId = JSON.parse(String(job.payload)).goalId;
+        if (
+          [...this.runningJobs.keys()].some(
+            (id) =>
+              this.store.db.one<{ payload: string }>(
+                `SELECT payload FROM control_jobs WHERE id=${sql(id)}`,
+              )?.payload &&
+              JSON.parse(
+                this.store.db.one<{ payload: string }>(
+                  `SELECT payload FROM control_jobs WHERE id=${sql(id)}`,
+                )!.payload,
+              ).goalId === goalId,
+          )
+        )
+          continue;
+        const run = () => this.runJob(job);
+        if (this.options.asynchronousJobs) {
+          const done = Promise.resolve()
+            .then(run)
+            .catch((error) =>
+              this.store.event("JOB_DISPATCH_ERROR", "scheduler", {
+                reason: classifyFailure(error).message,
+              }),
+            )
+            .finally(() => this.runningJobs.delete(String(job.id)));
+          this.runningJobs.set(String(job.id), done);
+        } else await run();
       }
       for (const goal of this.store
         .goals(500)
@@ -443,72 +494,367 @@ export class Scheduler {
           });
       }
       if (this.options.spawnWorkers !== false) {
-        while (this.isolated.size < 4) {
-          const workerId = `worker_${randomUUID()}`;
-          this.authorizeControllerWorker(workerId);
-          const token = this.store.createToken(workerId, "worker", workerId);
-          let claim: Claim | null = null;
-          try {
-            claim = this.options.claimThroughApi
-              ? await new ControlClient(this.url, token).claim(workerId)
-              : await this.claimControllerWorker(workerId);
-            if (!claim) {
-              this.store.revokeToken(token);
-              this.revokeControllerWorker(workerId);
-              break;
-            }
-            const admitted = claim;
-            {
-              const backend = this.options.isolatedBackend
-                ? this.options.isolatedBackend(claim.goal)
-                : this.backend(claim.goal);
-              const abort = new AbortController();
-              // Defer to register ownership before the adapter starts asynchronous work.
-              const done = Promise.resolve()
-                .then(() =>
-                  executeClaim(
-                    new ControlClient(this.url, token),
-                    admitted,
-                    this.stateRoot,
-                    backend,
-                    abort.signal,
-                    this.workspaces,
-                  ),
-                )
-                .catch((error) => {
-                  this.store.event(
-                    "ISOLATED_WORKER_ERROR",
-                    "scheduler",
-                    { reason: (error as Error).message },
-                    admitted.goal.id,
-                    admitted.task.id,
-                  );
-                })
-                .finally(() => {
-                  this.isolated.delete(admitted.task.id);
-                  this.store.revokeToken(token);
-                  this.revokeControllerWorker(workerId);
-                });
-              this.isolated.set(claim.task.id, { claim, token, abort, done });
-              continue;
-            }
-          } catch (e) {
-            this.store.revokeToken(token);
-            this.revokeControllerWorker(workerId);
-            if (claim)
-              this.store.release(
-                claim.task.id,
-                workerId,
-                claim.generation,
-                "retry_wait",
-                (e as Error).message,
-              );
-            else break;
+        const capacity =
+          4 - this.isolated.size - this.runningJobs.size - this.recovering.size;
+        for (let i = 0; i < capacity; i++) {
+          if (!this.options.asynchronousJobs) {
+            await this.dispatchWorker();
+            continue;
           }
+          const key = `dispatch:${randomUUID()}`;
+          const job = Promise.resolve()
+            .then(() => this.dispatchWorker())
+            .catch((error) => {
+              this.store.event("WORKER_DISPATCH_FAILED", "scheduler", {
+                reason: classifyFailure(error).message,
+              });
+            })
+            .finally(() => this.runningJobs.delete(key));
+          this.runningJobs.set(key, job);
         }
       }
     } finally {
+      this.store.setting("scheduler-heartbeat", {
+        completedAt: this.store.clock(),
+      });
       this.ticking = false;
+    }
+  }
+  private async dispatchWorker() {
+    if (this.closing || this.maintenanceRequested) return;
+    const workerId = `worker_${randomUUID()}`;
+    this.authorizeControllerWorker(workerId);
+    const token = this.store.createToken(workerId, "worker", workerId);
+    let claim: Claim | null = null;
+    try {
+      claim = this.options.claimThroughApi
+        ? await new ControlClient(this.url, token).claim(workerId)
+        : await this.claimControllerWorker(workerId);
+      if (!claim) {
+        this.store.revokeToken(token);
+        this.revokeControllerWorker(workerId);
+        return;
+      }
+      const admitted = claim;
+      {
+        const backend = this.options.isolatedBackend
+          ? this.options.isolatedBackend(claim.goal)
+          : this.backend(claim.goal);
+        const abort = new AbortController();
+        // Defer to register ownership before the adapter starts asynchronous work.
+        const done = Promise.resolve()
+          .then(() =>
+            executeClaim(
+              new ControlClient(this.url, token),
+              admitted,
+              this.stateRoot,
+              backend,
+              abort.signal,
+              this.workspaces,
+            ),
+          )
+          .catch((error) => {
+            this.store.event(
+              "ISOLATED_WORKER_ERROR",
+              "scheduler",
+              { reason: (error as Error).message },
+              admitted.goal.id,
+              admitted.task.id,
+            );
+          })
+          .finally(() => {
+            this.isolated.delete(admitted.task.id);
+            this.store.revokeToken(token);
+            this.revokeControllerWorker(workerId);
+          });
+        this.isolated.set(claim.task.id, { claim, token, abort, done });
+        return;
+      }
+    } catch (e) {
+      this.store.revokeToken(token);
+      this.revokeControllerWorker(workerId);
+      if (claim)
+        this.store.release(
+          claim.task.id,
+          workerId,
+          claim.generation,
+          "retry_wait",
+          (e as Error).message,
+        );
+      else return;
+    }
+  }
+  private async maintainStorage() {
+    const maintenanceAt = Number(
+      this.store.setting("storage-maintenance-at") ?? 0,
+    );
+    if (this.store.clock() - maintenanceAt >= 3600000) {
+      const configured =
+        this.store.setting("storage-maintenance-mode") ?? "preview";
+      if (!["preview", "workspaces", "branches"].includes(configured))
+        throw new ControlError(
+          "storage_policy",
+          "Unknown storage maintenance mode",
+        );
+      const preview = await new StorageMaintenance(
+        this.workspaces.storage,
+        this.store,
+      ).maintain(configured as MaintenanceMode);
+      this.store.setting("storage-maintenance-preview", preview);
+      if (this.options.executionMaintenance)
+        this.store.setting(
+          "execution-maintenance-preview",
+          await this.options.executionMaintenance(),
+        );
+      if (this.options.imageMaintenance)
+        this.store.setting(
+          "image-maintenance-preview",
+          await this.options.imageMaintenance(configured !== "preview"),
+        );
+      this.store.setting("storage-maintenance-at", this.store.clock());
+      const previousPressure =
+        this.store.setting("storage-pressure-active") === true;
+      const pressure = !preview.pressure.admissionAllowed;
+      if (pressure !== previousPressure) {
+        this.store.db.transaction(() => {
+          this.store.setting("storage-pressure-active", pressure);
+          this.store.event(
+            pressure ? "STORAGE_PRESSURE" : "STORAGE_RECOVERED",
+            "maintenance",
+            preview.pressure,
+          );
+          this.store.outbox("storage", {
+            message: pressure
+              ? "New workspace admission is paused: free disk is below the configured storage reserve. Inspect storage maintenance before reclaiming data."
+              : "Free disk has recovered above the configured storage reserve; new workspace admission can resume.",
+            pressure: preview.pressure,
+          });
+        });
+      }
+    }
+  }
+  private async runJob(job: any) {
+    const { goalId } = JSON.parse(String(job.payload)),
+      goal = this.store.getGoal(goalId);
+    const key = `controller-job:${job.id}`;
+    const prior = this.store.setting(key);
+    if (prior?.status === "running") {
+      this.store.recordFailure(goalId, failureRecord("interrupted"));
+      if (!["paused", "completed", "cancelled", "failed"].includes(goal.status))
+        this.store.setGoalState(goalId, "paused", goal.revision, "controller", {
+          reason:
+            "Interrupted controller job requires source and effect inspection before resume",
+        });
+      this.store.setting(`pause:${goalId}`, {
+        version: 1,
+        actor: "controller",
+        category: "interrupted",
+        reason:
+          "Interrupted controller job requires source and effect inspection",
+        recordedAt: this.store.clock(),
+        nextAction:
+          "Inspect retained source and publication effects, then use revision-checked recovery",
+      });
+      this.store.deferJob(String(job.id));
+      return;
+    }
+    // Each dispatch has one envelope including repository preparation and publication.
+    // Restart retains incomplete intent and requires source/effect reconciliation.
+    const record = {
+      version: 1,
+      jobId: job.id,
+      goalId,
+      phase: job.kind,
+      startedAt: this.store.clock(),
+      deadlineAt: this.store.clock() + goal.config.timeoutMs,
+      status: "running",
+      previous:
+        prior?.status === "running"
+          ? { startedAt: prior.startedAt, deadlineAt: prior.deadlineAt }
+          : undefined,
+    };
+    this.store.setting(key, record);
+    let reconciled = true;
+    try {
+      await withExecutionDeadline(
+        record.deadlineAt,
+        this.shutdownAbort.signal,
+        async () => {
+          const signal = executionSignal()!;
+          const operation = this.runJobWithinDeadline(job);
+          try {
+            await abortable(operation, signal);
+          } catch (error) {
+            if (signal.aborted) {
+              this.store.recordFailure(goalId, failureRecord("deadline"));
+              const current = this.store.getGoal(goalId);
+              if (
+                !["completed", "failed", "cancelled", "paused"].includes(
+                  current.status,
+                )
+              )
+                this.store.setGoalState(
+                  goalId,
+                  "paused",
+                  current.revision,
+                  "controller",
+                  {
+                    reason:
+                      "Controller deadline expired; inspect retained effects before recovery",
+                  },
+                );
+              try {
+                await boundedCleanup((cleanup) =>
+                  abortable(
+                    operation.then(
+                      () => {},
+                      () => {},
+                    ),
+                    cleanup,
+                  ),
+                );
+              } catch (cleanupError) {
+                reconciled = false;
+                this.store.recordFailure(
+                  goalId,
+                  failureRecord("cleanup_blocked"),
+                );
+                throw cleanupError;
+              }
+            }
+            throw error;
+          }
+        },
+      );
+    } finally {
+      this.store.setting(key, {
+        ...record,
+        status: reconciled ? "settled" : "running",
+        cleanupState: reconciled ? "stopped" : "blocked",
+        endedAt: reconciled ? this.store.clock() : undefined,
+      });
+    }
+  }
+
+  private async runJobWithinDeadline(job: any) {
+    const payload = JSON.parse(String(job.payload));
+    try {
+      const g = this.store.getGoal(payload.goalId);
+      if (job.kind === "report") {
+        await this.writeGoalReport(g.id);
+        this.store.finishJob(String(job.id));
+        return;
+      }
+      if (["cancelled", "completed", "failed"].includes(g.status)) {
+        // Completion and filesystem lifecycle cannot share a transaction.
+        // Replay pending publication intent before retiring its durable job.
+        if (g.status === "completed" && job.kind === "publish")
+          await this.publish(g.id);
+        this.store.finishJob(String(job.id));
+        return;
+      }
+      if (g.status === "paused") {
+        this.store.deferJob(String(job.id));
+        return;
+      }
+      if (job.kind === "plan") await this.plan(payload.goalId);
+      else if (job.kind === "publish") await this.publish(payload.goalId);
+      else if (job.kind === "replan") await this.replan(payload.goalId);
+      executionSignal()?.throwIfAborted();
+      this.store.finishJob(String(job.id));
+    } catch (e) {
+      if (executionSignal()?.aborted) {
+        this.store.deferJob(String(job.id));
+        return;
+      }
+      const goal = this.store.getGoal(payload.goalId);
+      if (job.kind === "report" || goal.status === "completed") {
+        // Terminal domain effects are durable. A filesystem/lifecycle retry
+        // can never fail or reexecute already-completed work.
+        this.store.deferJob(String(job.id), 30000);
+        this.store.event(
+          "TERMINAL_EVIDENCE_RETRY",
+          "scheduler",
+          { jobId: job.id, kind: job.kind },
+          goal.id,
+        );
+        return;
+      }
+      if (
+        job.kind === "publish" &&
+        e instanceof ControlError &&
+        [
+          "checks_pending",
+          "checks_failed",
+          "stale_base",
+          "freshness_policy",
+          "blocking_observation",
+        ].includes(e.code)
+      ) {
+        const candidate = (this.store.setting(`publication:${goal.id}`) ??
+          this.store.setting(`local-delivery:${goal.id}`)) as any;
+        deliveryIncident(
+          this.store,
+          goal.id,
+          candidate?.commit ?? "unknown",
+          candidate?.targetSha ?? "unknown",
+          e.code,
+          e.message,
+        );
+      }
+      if (e instanceof ProviderFailure) {
+        this.store.recordFailure(
+          goal.id,
+          e.failure,
+          (e as any).reliabilityAttemptId,
+        );
+        if (e.failure.retryable)
+          this.store.retryJob(String(job.id), e.failure.message);
+        else this.store.deferJob(String(job.id));
+      } else if (e instanceof HumanWait) {
+        this.store.requestGoalHuman(goal.id, e.request);
+        this.store.deferJob(String(job.id));
+      } else if (e instanceof ControlError && e.code === "budget") {
+        this.store.requestGoalHuman(goal.id, {
+          question: "Authorize an additional run budget?",
+          reason: "Current authorized spending is exhausted.",
+          options: [
+            { id: "approve", label: "Increase the authorized budget" },
+            { id: "reject", label: "Keep the current budget" },
+          ],
+          category: "spending",
+          requestedMaxCostUsd:
+            goal.config.maxCostUsd + goal.config.estimatePerRunUsd,
+        });
+        this.store.deferJob(String(job.id));
+      } else if (
+        e instanceof ControlError &&
+        [
+          "checks_pending",
+          "checks_failed",
+          "blocking_observation",
+          "active_work",
+          "merge_pending",
+          "fetch_pending",
+          "stale_base",
+          "freshness_policy",
+          "storage_pressure",
+          "repair_unresolved",
+          "repair_retry",
+        ].includes(e.code)
+      ) {
+        this.store.deferJob(String(job.id));
+      } else {
+        this.store.retryJob(String(job.id), (e as Error).message);
+        if (Number(job.attempts) >= 2)
+          this.store.setGoalState(
+            goal.id,
+            "failed",
+            goal.revision,
+            "scheduler",
+            { reason: (e as Error).message },
+          );
+      }
     }
   }
   async runBackend(
@@ -539,8 +885,37 @@ export class Scheduler {
           "Publication coding repair requires the isolated runtime",
           409,
         );
-      const output = await backend.run({
+      const runtime = this.store.reliability.runtime(budget)!;
+      const deadlineAt = Math.min(
+        runtime.deadlineAt,
+        context.deadlineAt ?? Infinity,
+        executionDeadline() ?? Infinity,
+      );
+      runtime.deadlineAt = deadlineAt;
+      this.store.reliability.saveRuntime(runtime);
+      const abort = new AbortController();
+      this.operationAborts.set(budget, abort);
+      const signal = deadlineSignal(
+        deadlineAt,
+        AbortSignal.any([
+          context.signal,
+          this.shutdownAbort.signal,
+          abort.signal,
+          ...(executionSignal() ? [executionSignal()!] : []),
+        ]),
+      );
+      let cleanupSignal: AbortSignal | undefined;
+      const cleanup = () => (cleanupSignal ??= AbortSignal.timeout(60000));
+      const running = backend.run({
         ...context,
+        cleanupSignal: cleanup,
+        signal,
+        deadlineAt,
+        onProgress: (kind) => {
+          const r = this.store.reliability.runtime(budget);
+          if (r && this.store.clock() - r.lastProgressAt >= 1000)
+            this.store.reliability.progress(budget, kind);
+        },
         prompt: [
           context.prompt,
           ...(g.config.admission?.contexts ?? []).map(
@@ -557,6 +932,24 @@ export class Scheduler {
           : {}),
         operationReservationId: budget,
       });
+      let output;
+      try {
+        output = await abortable(running, signal);
+      } catch (error) {
+        if (signal.aborted)
+          await boundedCleanup(
+            async (cleanup) => {
+              await abortable(
+                running.catch(() => {}),
+                cleanup,
+              );
+            },
+            60000,
+            cleanup(),
+          );
+        throw error;
+      }
+      signal.throwIfAborted();
       cost = output.costUsd;
       usage = executionUsage(output, g.config);
       outcome = "completed";
@@ -566,6 +959,9 @@ export class Scheduler {
       };
       return output;
     } catch (e) {
+      this.store.recordFailure(g.id, classifyFailure(e), budget);
+      if (e instanceof Error)
+        Object.assign(e, { reliabilityAttemptId: budget });
       cost = (e as any).costUsd;
       try {
         usage = executionUsage(e as any, g.config);
@@ -575,7 +971,18 @@ export class Scheduler {
       }
       throw e;
     } finally {
-      this.store.settleOperation(budget, cost, usage, outcome, result);
+      this.operationAborts.delete(budget);
+      const failure = this.store.reliability.runtime(budget)?.failure;
+      if (failure?.kind === "cleanup_blocked") {
+        this.store.db.exec(
+          `UPDATE control_attempts SET outcome='recovering' WHERE id=${sql(budget)} AND outcome='active'`,
+        );
+        const r = this.store.reliability.runtime(budget);
+        if (r) {
+          r.cleanupState = "blocked";
+          this.store.reliability.saveRuntime(r);
+        }
+      } else this.store.settleOperation(budget, cost, usage, outcome, result);
     }
   }
   async plan(goalId: string) {
@@ -695,6 +1102,19 @@ export class Scheduler {
     generation: number,
     result: unknown,
   ) {
+    const runtime = this.store.reliability.runtime(`${taskId}:${generation}`);
+    return withExecutionDeadline(
+      runtime?.deadlineAt ?? Date.now() + 30000,
+      this.shutdownAbort.signal,
+      () => this.resultWithinDeadline(taskId, workerId, generation, result),
+    );
+  }
+  private async resultWithinDeadline(
+    taskId: string,
+    workerId: string,
+    generation: number,
+    result: unknown,
+  ) {
     const key = `${taskId}:${generation}`;
     const replay = this.replayResult(taskId, workerId, generation, result);
     if (replay !== undefined) return replay;
@@ -736,7 +1156,13 @@ export class Scheduler {
           "Worker result differs from task HEAD",
           409,
         );
-      const claim = { task, goal, workerId, generation };
+      const claim = {
+        task,
+        goal,
+        workerId,
+        generation,
+        runtime: this.store.reliability.runtime(`${taskId}:${generation}`),
+      };
       const changed = await this.workspaces.changed(goal, task);
       if (
         changed.some(
@@ -830,7 +1256,10 @@ export class Scheduler {
           claim,
           workspace: this.workspaces.taskPath(task),
           mode: "review",
-          signal: AbortSignal.timeout(goal.config.timeoutMs),
+          signal: deadlineSignal(
+            claim.runtime?.deadlineAt ?? Date.now() + goal.config.timeoutMs,
+          ),
+          deadlineAt: claim.runtime?.deadlineAt,
           onCheckpoint: async () => {},
           prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Explicitly list resolved observation ids in resolvedObservations only after reproducing and verifying their resolution. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nOperator observations: ${JSON.stringify(observations(this.store, goal.id))}\nDiff:\n${diff}`,
         },
@@ -931,7 +1360,10 @@ export class Scheduler {
               workspace: error.candidate.path,
               mode: "implement",
               prompt: "",
-              signal: AbortSignal.timeout(goal.config.timeoutMs),
+              signal: deadlineSignal(
+                claim.runtime?.deadlineAt ?? Date.now() + goal.config.timeoutMs,
+              ),
+              deadlineAt: claim.runtime?.deadlineAt,
               onCheckpoint: async () => {},
             },
             (context) => this.runBackend(goal, context, "repair"),
@@ -945,7 +1377,10 @@ export class Scheduler {
               claim,
               workspace: candidate.path,
               mode: "review",
-              signal: AbortSignal.timeout(goal.config.timeoutMs),
+              signal: deadlineSignal(
+                claim.runtime?.deadlineAt ?? Date.now() + goal.config.timeoutMs,
+              ),
+              deadlineAt: claim.runtime?.deadlineAt,
               onCheckpoint: async () => {},
               prompt: `Independently review task integration repair at exact commit ${candidate.commit}. Preserve both prerequisite integration behavior and task contract ${JSON.stringify(task.spec)}. Inspect the complete conflict resolution. Return only JSON with commit, verdict and findings.`,
             },
@@ -1049,8 +1484,29 @@ export class Scheduler {
           throw error;
         }
       };
-      const execution = this.integrating.then(integrate);
-      this.integrating = execution.catch(() => {});
+      const repository =
+        this.workspaces.repositories.record(goal.id)?.repositoryId ??
+        repositoryIdentity(
+          goal.config.repository?.mode === "remote"
+            ? goal.config.repository.remoteUrl
+            : goal.config.repoPath,
+        );
+      const prior =
+        this.repositoryIntegrations.get(repository) ?? Promise.resolve();
+      const execution = abortable(
+        prior,
+        executionSignal() ?? this.shutdownAbort.signal,
+      ).then(() => {
+        executionSignal()?.throwIfAborted();
+        return integrate();
+      });
+      const settled = execution.catch(() => {});
+      this.repositoryIntegrations.set(repository, settled);
+      this.integrating = Promise.all([...this.repositoryIntegrations.values()]);
+      void settled.finally(() => {
+        if (this.repositoryIntegrations.get(repository) === settled)
+          this.repositoryIntegrations.delete(repository);
+      });
       return await execution;
     } catch (e) {
       const t = this.store.getTask(taskId);
@@ -1131,8 +1587,11 @@ export class Scheduler {
           taskId,
           workerId,
           generation,
-          "retry_wait",
-          (e as Error).message,
+          classifyFailure(e).retryable ? "retry_wait" : "blocked",
+          classifyFailure(e).message,
+          undefined,
+          undefined,
+          classifyFailure(e),
         );
       }
       throw e;
@@ -1211,7 +1670,12 @@ export class Scheduler {
     for (const command of commands) {
       const result = await runShell(command, {
         cwd: path,
-        timeoutMs: claim.goal.config.timeoutMs,
+        timeoutMs: Math.max(
+          1,
+          (claim.runtime?.deadlineAt ??
+            executionDeadline() ??
+            Date.now() + claim.goal.config.timeoutMs) - Date.now(),
+        ),
         env: { PATH: process.env.PATH, HOME: process.env.HOME },
       });
       results.push({
@@ -1661,7 +2125,12 @@ export class Scheduler {
     this.maintenanceRequested = true;
     try {
       const deadline = Date.now() + timeoutMs;
-      while (this.ticking || this.isolated.size || this.busyResults.size) {
+      while (
+        this.ticking ||
+        this.isolated.size ||
+        this.busyResults.size ||
+        this.runningJobs.size
+      ) {
         if (Date.now() > deadline)
           throw new ControlError(
             "maintenance_busy",
@@ -1677,8 +2146,22 @@ export class Scheduler {
     }
   }
   async close() {
+    this.closing = true;
+    this.shutdownAbort.abort(new Error("Controller shutdown"));
     for (const active of this.isolated.values())
       active.abort.abort(new Error("Scheduler shutdown"));
-    await Promise.all([...this.isolated.values()].map((active) => active.done));
+    await boundedCleanup(async (signal) => {
+      await abortable(
+        Promise.all(
+          [...this.isolated.values()]
+            .map((active) => active.done)
+            .concat(
+              [...this.runningJobs.values()],
+              [...this.recovering.values()],
+            ),
+        ).then(() => {}),
+        signal,
+      );
+    }, 90000);
   }
 }

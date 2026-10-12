@@ -9,6 +9,7 @@ test("service definitions quote paths, use separate v1 identity and require expl
     "/installed/cli.js",
   );
   assert.match(linux, /UMask=0077/);
+  assert.match(linux, /TimeoutStopSec=90/);
   assert.ok(linux.includes('config with \\"quotes\\" %%'));
   assert.ok(linux.includes("$$HOME"));
   assert.ok(!linux.includes("43190"));

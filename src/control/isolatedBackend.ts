@@ -1,3 +1,10 @@
+import {
+  boundedCleanup,
+  deadlineSignal,
+  abortable,
+  ProviderFailure,
+  ReliabilityStore,
+} from "./reliability.js";
 import { randomUUID } from "node:crypto";
 import type { AgentBackend, RunContext, BackendResult } from "./backend.js";
 import { HumanWait, OwnerWait } from "./backend.js";
@@ -39,6 +46,14 @@ export class IsolatedBackend implements AgentBackend {
     readonly options: IsolatedBackendOptions,
   ) {}
   async run(context: RunContext): Promise<BackendResult> {
+    context = {
+      ...context,
+      signal: deadlineSignal(
+        context.deadlineAt ?? Date.now() + context.claim.goal.config.timeoutMs,
+        context.signal,
+      ),
+    };
+    context.signal.throwIfAborted();
     const config = context.claim.goal.config.backend;
     const portable = config.kind === "azure" || config.kind === "bedrock";
     if (config.kind !== "codex" && config.kind !== "claude-code" && !portable)
@@ -85,21 +100,24 @@ export class IsolatedBackend implements AgentBackend {
       );
     // Each invocation (including independent review) has private source/home/network.
     // Interrupted source stays recorded for recovery instead of being reused blindly.
-    const session = await this.environment.prepare({
-      taskId: context.claim.task.id,
-      generation,
-      invocationId: `${context.mode}_${randomUUID().replaceAll("-", "")}`,
-      goalId: context.claim.goal.id,
-      workerId: context.claim.workerId,
-      authorityGeneration: context.claim.generation,
-      operationReservationId: context.operationReservationId,
-      source: context.workspace,
-      baseSha,
-      image: this.options.imageDigest,
-      cpu: context.claim.task.spec.cpuUnits,
-      memoryMiB: context.claim.task.spec.memoryMiB,
-      timeoutMs: context.claim.goal.config.timeoutMs,
-    });
+    const session = await this.environment.prepare(
+      {
+        taskId: context.claim.task.id,
+        generation,
+        invocationId: `${context.mode}_${randomUUID().replaceAll("-", "")}`,
+        goalId: context.claim.goal.id,
+        workerId: context.claim.workerId,
+        authorityGeneration: context.claim.generation,
+        operationReservationId: context.operationReservationId,
+        source: context.workspace,
+        baseSha,
+        image: this.options.imageDigest,
+        cpu: context.claim.task.spec.cpuUnits,
+        memoryMiB: context.claim.task.spec.memoryMiB,
+        timeoutMs: context.claim.goal.config.timeoutMs,
+      },
+      context.signal,
+    );
     if (session.status !== "prepared")
       throw new ControlError(
         "environment_recovery",
@@ -114,6 +132,10 @@ export class IsolatedBackend implements AgentBackend {
     let checkpointCost: number | undefined;
     let result: BackendResult | undefined;
     let failure: unknown;
+    let cleanupSignal: AbortSignal | undefined;
+    const cleanup = () =>
+      (cleanupSignal ??=
+        context.cleanupSignal?.() ?? AbortSignal.timeout(60000));
     try {
       const contracts = context.claim.goal.config.siblingContracts.length
         ? await prepareContractSnapshot(
@@ -123,13 +145,16 @@ export class IsolatedBackend implements AgentBackend {
         : undefined;
       let gatewayEnv: Record<string, string> = {};
       if (!portable) {
-        network = await this.networks.acquire({
-          sessionId: session.id,
-          generation: session.generation,
-          imageDigest: this.options.imageDigest,
-          socketDirectory: this.options.socketDirectory,
-          relayScript: this.options.relayScript,
-        });
+        network = await this.networks.acquire(
+          {
+            sessionId: session.id,
+            generation: session.generation,
+            imageDigest: this.options.imageDigest,
+            socketDirectory: this.options.socketDirectory,
+            relayScript: this.options.relayScript,
+          },
+          context.signal,
+        );
         const token = this.gateway.issue({
           sessionId: session.id,
           goalId: context.claim.goal.id,
@@ -138,7 +163,9 @@ export class IsolatedBackend implements AgentBackend {
           provider: this.options.provider,
           protocol: config.kind === "codex" ? "responses" : "messages",
           model: config.model,
-          expiresAt: Date.now() + context.claim.goal.config.timeoutMs,
+          expiresAt:
+            context.deadlineAt ??
+            startedAt + context.claim.goal.config.timeoutMs,
         });
         gatewayEnv =
           config.kind === "codex"
@@ -165,7 +192,11 @@ export class IsolatedBackend implements AgentBackend {
             : undefined,
         },
       });
-      const active = await this.environment.acquire(session.id, gatewayEnv);
+      const active = await this.environment.acquire(
+        session.id,
+        gatewayEnv,
+        context.signal,
+      );
       if (config.kind === "codex") {
         const toml = `model = ${JSON.stringify(config.model)}\nmodel_reasoning_effort = "medium"\nmodel_provider = "missioncontrol"\n[model_providers.missioncontrol]\nname = "MissionControl"\nbase_url = "http://inference-gateway:8080/v1"\nwire_api = "responses"\nenv_key = "MISSIONCONTROL_INFERENCE_TOKEN"\nrequires_openai_auth = false\nsupports_websockets = false\n`;
         // HOME is disposable tmpfs, separate from the source checkout.
@@ -196,41 +227,61 @@ export class IsolatedBackend implements AgentBackend {
             })()
           : createBackend(config));
       try {
-        result = await backend.run({
-          ...context,
-          prompt:
-            context.prompt +
-            (contracts
-              ? `\nPinned read-only sibling contracts at /contracts. Snapshot ${contracts.digest}; manifest.json maps numbered siblings to exact revisions. Do not modify these files; request owner coordination for contract changes.`
-              : ""),
-          ...(portable
-            ? {}
-            : {
-                execution: (this.options.transport ?? dockerNativeExecution)(
-                  active,
-                  assertExecutionLease,
-                ),
-              }),
-          onCheckpoint: async (summary, messages, pendingTool, cost) => {
-            latestSummary = summary;
-            checkpointCost = cost;
-            if (portable) {
-              latestMessages = messages;
-              latestPending = pendingTool;
-              await context.onContinuation?.(
-                summary,
-                messages,
-                pendingTool,
-                cost,
-              );
-            }
-          },
-        });
+        result = await abortable(
+          backend.run({
+            ...context,
+            executionSessionId: session.id,
+            prompt:
+              context.prompt +
+              (contracts
+                ? `\nPinned read-only sibling contracts at /contracts. Snapshot ${contracts.digest}; manifest.json maps numbered siblings to exact revisions. Do not modify these files; request owner coordination for contract changes.`
+                : ""),
+            ...(portable
+              ? {}
+              : {
+                  execution: (this.options.transport ?? dockerNativeExecution)(
+                    active,
+                    assertExecutionLease,
+                  ),
+                }),
+            onCheckpoint: async (summary, messages, pendingTool, cost) => {
+              latestSummary = summary;
+              checkpointCost = cost;
+              if (portable) {
+                latestMessages = messages;
+                latestPending = pendingTool;
+                await context.onContinuation?.(
+                  summary,
+                  messages,
+                  pendingTool,
+                  cost,
+                );
+              }
+            },
+          }),
+          context.signal,
+        );
       } catch (error) {
-        failure = error;
+        const reliability = new ReliabilityStore(this.registry.db);
+        reliability.migrate();
+        const latest = reliability.latestFailure(
+          context.claim.goal.id,
+          context.operationReservationId ??
+            `${context.claim.task.id}:${context.claim.generation}`,
+          session.id,
+        );
+        failure = latest?.failure ? new ProviderFailure(latest.failure) : error;
       }
       // The container is stopped before any trusted Git inspection or source import.
-      await this.environment.checkpoint(session.id);
+      this.gateway.revoke(session.id);
+      await boundedCleanup(
+        async (signal) => {
+          await this.environment.stop(session.id, signal);
+        },
+        60000,
+        cleanup(),
+      );
+      if (context.signal.aborted && !failure) failure = context.signal.reason;
       this.gateway.revoke(session.id);
       assertExecutionLease(session.taskId, session.generation);
       await sanitizeGit(session.path);
@@ -290,7 +341,7 @@ export class IsolatedBackend implements AgentBackend {
           },
         });
       }
-      if (latestSummary)
+      if (latestSummary && !context.signal.aborted)
         await context.onCheckpoint(
           latestSummary,
           latestMessages,
@@ -351,8 +402,14 @@ export class IsolatedBackend implements AgentBackend {
     } finally {
       this.gateway.revoke(session.id);
       // No destructive source cleanup: recovery/retention owns these records.
-      await this.environment.reset(session.id);
-      if (network) await this.networks.stop(session.id);
+      await boundedCleanup(
+        async (signal) => {
+          await this.environment.reset(session.id, signal);
+          if (network) await this.networks.stop(session.id, signal);
+        },
+        60000,
+        cleanup(),
+      );
       const saved = this.registry.get(session.id);
       this.registry.save({
         ...saved,

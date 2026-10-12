@@ -1,3 +1,12 @@
+import { supportBundle } from "./supportBundle.js";
+import {
+  failureSchema,
+  attemptRuntimeSchema,
+  inferenceDiagnosticSchema,
+  incidentSchema,
+  pauseRecordSchema,
+  recoveryDecisionSchema,
+} from "./reliability.js";
 import {
   createServer,
   type IncomingMessage,
@@ -20,7 +29,11 @@ import {
   scheduleSchema,
   projectSchema,
 } from "./schema.js";
-import { recordObservation, observations, closeObservation } from "./delivery.js";
+import {
+  recordObservation,
+  observations,
+  closeObservation,
+} from "./delivery.js";
 import { CONTROL_HTML } from "./ui.js";
 import { dashboardSnapshot } from "./dashboard.js";
 import {
@@ -384,6 +397,167 @@ export function createControlServer(
             403,
           );
       };
+      if (path === "/readiness" && method === "GET") {
+        operator();
+        const health = store.setting("scheduler-heartbeat");
+        const overdue = store.expired().map((t) => t.id);
+        const fresh = Boolean(
+          health?.completedAt && store.clock() - health.completedAt < 10000,
+        );
+        const ready =
+          fresh &&
+          !store.setting("startup-recovery-fault") &&
+          !store.setting("instance-maintenance") &&
+          !overdue.length &&
+          !store.setting("operational-log-fault");
+        return send(res, ready ? 200 : 503, {
+          version: 1,
+          ready,
+          scheduler: health ?? null,
+          recoveryFault: store.setting("startup-recovery-fault") ?? null,
+          overdue,
+        });
+      }
+      if (
+        (path === "/inference-diagnostics" || path === "/incidents") &&
+        method === "GET"
+      ) {
+        operator();
+        return send(
+          res,
+          200,
+          store.reliability.page(
+            path === "/incidents"
+              ? "reliability_incidents"
+              : "inference_diagnostics",
+            url.searchParams.get("goalId") ?? undefined,
+            url.searchParams.get("attemptId") ?? undefined,
+            Number(url.searchParams.get("limit") ?? 100),
+            url.searchParams.get("after") ?? "",
+          ),
+        );
+      }
+      const bundle = /^\/goals\/([^/]+)\/support-bundle$/.exec(path);
+      if (bundle) {
+        operator();
+        const preview = (attemptId: string, excerpts: string[] = []) => {
+          const result = supportBundle(store, bundle[1], attemptId, excerpts);
+          store.setting(`support-preview:${result.manifest.sha256}`, {
+            actor: principal.actor,
+            expiresAt: store.clock() + 600000,
+            result,
+          });
+          return result;
+        };
+        if (method === "GET") {
+          const attemptId = url.searchParams.get("attemptId");
+          if (!attemptId)
+            throw new ControlError(
+              "attempt_required",
+              "Select one failure attempt for support preview",
+              400,
+            );
+          return send(res, 200, preview(attemptId));
+        }
+        if (method === "POST") {
+          const v = z
+            .object({
+              attemptId: z.string(),
+              action: z.enum(["preview", "export"]).default("export"),
+              reviewedExcerpts: z
+                .array(z.string().max(2048))
+                .max(10)
+                .default([]),
+              reviewed: z.literal(true),
+              previewSha256: z
+                .string()
+                .regex(/^[a-f0-9]{64}$/)
+                .optional(),
+            })
+            .strict()
+            .parse(body);
+          if (v.action === "preview")
+            return send(res, 200, preview(v.attemptId, v.reviewedExcerpts));
+          const saved = v.previewSha256
+            ? store.setting(`support-preview:${v.previewSha256}`)
+            : undefined;
+          if (
+            !saved ||
+            saved.actor !== principal.actor ||
+            saved.expiresAt <= store.clock() ||
+            saved.result.manifest.goalId !== bundle[1] ||
+            saved.result.manifest.attemptId !== v.attemptId
+          )
+            throw new ControlError(
+              "preview_required",
+              "Export requires the same operator's unexpired reviewed preview manifest",
+              409,
+            );
+          if (v.reviewedExcerpts.length)
+            throw new ControlError(
+              "preview_required",
+              "Review excerpts in a new preview before export",
+              409,
+            );
+          store.event(
+            "SUPPORT_BUNDLE_EXPORTED",
+            principal.actor,
+            saved.result.manifest,
+            bundle[1],
+          );
+          return send(res, 200, saved.result);
+        }
+      }
+      const replacement = /^\/goals\/([^/]+)\/replacement$/.exec(path);
+      if (replacement && method === "POST") {
+        operator();
+        const v = z
+          .object({
+            revision: z.number().int().positive(),
+            input: z.unknown(),
+            explanation: z.string().min(1).max(4096),
+          })
+          .strict()
+          .parse(body);
+        const goal = store.replaceGoal(
+          replacement[1],
+          v.input,
+          v.revision,
+          principal.actor,
+        );
+        store.event(
+          "REPLACEMENT_INSPECTION",
+          principal.actor,
+          { explanation: v.explanation, predecessor: replacement[1] },
+          goal.id,
+        );
+        return send(res, 201, goal);
+      }
+      const recovery = /^\/goals\/([^/]+)\/recovery$/.exec(path);
+      if (recovery) {
+        operator();
+        if (method === "GET")
+          return send(res, 200, store.recoveryPreview(recovery[1]));
+        if (method === "POST") {
+          const v = z
+            .object({
+              revision: z.number().int().positive(),
+              explanation: z.string().min(1).max(4096),
+            })
+            .strict()
+            .parse(body);
+          return send(
+            res,
+            200,
+            store.recoverGoal(
+              recovery[1],
+              v.revision,
+              v.explanation,
+              principal.actor,
+            ),
+          );
+        }
+      }
       const artifact = /^\/artifacts\/([a-zA-Z0-9_-]+)\/content$/.exec(path);
       if ((path === "/source" || path === "/source-info") && method === "GET") {
         operator();
@@ -550,11 +724,25 @@ export function createControlServer(
         operator();
         return send(res, 200, revokeAutomation(store, identityRevoke[1]));
       }
-      const observationClose = /^\/goals\/([^/]+)\/observations\/([^/]+)\/close$/.exec(path);
+      const observationClose =
+        /^\/goals\/([^/]+)\/observations\/([^/]+)\/close$/.exec(path);
       if (observationClose && method === "POST") {
         operator();
-        const value = z.object({candidateSha: z.string().regex(/^[a-f0-9]{40}$/)}).strict().parse(body);
-        return send(res, 200, closeObservation(store, observationClose[1], observationClose[2], value.candidateSha, principal.actor));
+        const value = z
+          .object({ candidateSha: z.string().regex(/^[a-f0-9]{40}$/) })
+          .strict()
+          .parse(body);
+        return send(
+          res,
+          200,
+          closeObservation(
+            store,
+            observationClose[1],
+            observationClose[2],
+            value.candidateSha,
+            principal.actor,
+          ),
+        );
       }
       const mutation = () => {
         const maintenance = store.setting("instance-maintenance") as
@@ -885,7 +1073,7 @@ export function createControlServer(
           }
         }
         const tm =
-          /^\/tasks\/([^/]+)(?:\/(heartbeat|transition|checkpoint|question|release|finding|operation))?$/.exec(
+          /^\/tasks\/([^/]+)(?:\/(heartbeat|progress|transition|checkpoint|question|release|finding|operation))?$/.exec(
             path,
           );
         if (tm) {
@@ -918,6 +1106,14 @@ export function createControlServer(
                 l.generation,
                 ownerOperationSchema.parse(v.request),
               );
+            case "progress":
+              store.reliability.progress(
+                `${tid}:${l.generation}`,
+                z
+                  .enum(["model_output", "model_completed", "tool_completed"])
+                  .parse(v.kind),
+              );
+              return { ok: true };
             case "heartbeat":
               return store.heartbeat(tid, l.workerId, l.generation);
             case "transition": {
@@ -957,6 +1153,9 @@ export function createControlServer(
                   ? undefined
                   : z.number().nonnegative().parse(v.actualCost),
                 v.usage,
+                v.failure === undefined
+                  ? undefined
+                  : failureSchema.parse(v.failure),
               );
             case "finding":
               return {
@@ -1180,6 +1379,12 @@ function number(url: URL, key: string, fallback: number) {
 }
 export function openApi() {
   const schemas = {
+    ProviderFailure: z.toJSONSchema(failureSchema),
+    AttemptRuntime: z.toJSONSchema(attemptRuntimeSchema),
+    InferenceDiagnostic: z.toJSONSchema(inferenceDiagnosticSchema),
+    Incident: z.toJSONSchema(incidentSchema),
+    PauseRecord: z.toJSONSchema(pauseRecordSchema),
+    RecoveryDecision: z.toJSONSchema(recoveryDecisionSchema),
     GoalInput: z.toJSONSchema(goalSchema, { io: "input" }),
     Plan: z.toJSONSchema(planSchema, { io: "input" }),
     Schedule: z.toJSONSchema(scheduleSchema, { io: "input" }),
@@ -1271,6 +1476,157 @@ export function openApi() {
       },
     },
   };
+  for (const path of [
+    "/api/v1/readiness",
+    "/api/v1/inference-diagnostics",
+    "/api/v1/incidents",
+    "/api/v1/goals/{id}/recovery",
+  ])
+    paths[path] = {
+      get: {
+        summary:
+          "Operator: inspect bounded reliability evidence and recovery readiness",
+        responses: {
+          200: { description: "Versioned private reliability evidence" },
+          403: { description: "Operator authority required" },
+        },
+      },
+    };
+  for (const [path, schema] of [
+    ["/api/v1/incidents", "Incident"],
+    ["/api/v1/inference-diagnostics", "InferenceDiagnostic"],
+  ])
+    paths[path].get.responses[200].content = {
+      "application/json": {
+        schema: {
+          type: "array",
+          items: { $ref: `#/components/schemas/${schema}` },
+        },
+      },
+    };
+  paths["/api/v1/readiness"].get.responses[503] = {
+    description: "Scheduler stale, overdue execution or recovery faults",
+  };
+  paths["/api/v1/goals/{id}/recovery"].post = {
+    summary:
+      "Operator: resume inspected recoverable work at its current revision",
+    responses: {
+      200: { description: "Recorded inspection and goal state" },
+      409: {
+        description: "Changed goal or unreconciled ownership/provider blocker",
+      },
+    },
+  };
+  const idParameter = {
+    name: "id",
+    in: "path",
+    required: true,
+    schema: { type: "string" },
+  };
+  const revisionBody = {
+    required: true,
+    content: {
+      "application/json": {
+        schema: {
+          type: "object",
+          required: ["revision", "explanation"],
+          properties: {
+            revision: { type: "integer", minimum: 1 },
+            explanation: { type: "string", minLength: 1, maxLength: 4096 },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+  paths["/api/v1/goals/{id}/recovery"].post.requestBody = revisionBody;
+  paths["/api/v1/goals/{id}/recovery"].parameters = [idParameter];
+  for (const path of ["/api/v1/incidents", "/api/v1/inference-diagnostics"])
+    paths[path].get.parameters = [
+      { name: "goalId", in: "query", schema: { type: "string" } },
+      { name: "attemptId", in: "query", schema: { type: "string" } },
+      { name: "after", in: "query", schema: { type: "string" } },
+      {
+        name: "limit",
+        in: "query",
+        schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+      },
+    ];
+  paths["/api/v1/goals/{id}/replacement"] = {
+    parameters: [idParameter],
+    post: {
+      summary:
+        "Operator: replace inspected goal within immutable family allowance",
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["revision", "input", "explanation"],
+              properties: {
+                revision: { type: "integer", minimum: 1 },
+                input: z.toJSONSchema(goalSchema),
+                explanation: { type: "string", minLength: 1, maxLength: 4096 },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      responses: {
+        201: { description: "Successor with retained family allowance" },
+        409: { description: "Unsafe recovery or insufficient allowance" },
+      },
+    },
+  };
+  paths["/api/v1/goals/{id}/support-bundle"] = {
+    parameters: [idParameter],
+    get: {
+      summary: "Operator: preview bounded metadata-only support bundle",
+      parameters: [
+        { name: "attemptId", in: "query", schema: { type: "string" } },
+      ],
+      responses: {
+        200: { description: "Preview manifest and sanitized bundle" },
+      },
+    },
+    post: {
+      summary:
+        "Operator: audit selected support export with explicitly reviewed excerpts",
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["reviewed", "attemptId"],
+              properties: {
+                action: {
+                  type: "string",
+                  enum: ["preview", "export"],
+                  default: "export",
+                },
+                previewSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                reviewed: { const: true },
+                attemptId: { type: "string" },
+                reviewedExcerpts: {
+                  type: "array",
+                  maxItems: 10,
+                  items: { type: "string", maxLength: 2048 },
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+      },
+      responses: {
+        200: { description: "Audited manifest and sanitized bundle" },
+      },
+    },
+  };
+
   paths["/api/v1/goals/{id}/evidence"] = {
     get: {
       summary: "Read bounded evidence for an authorized goal",
@@ -1362,8 +1718,8 @@ export function openApi() {
       "/goals/{id}/tasks",
       "/goals/{id}/attempts",
       "/goals/{id}/policy",
-    "/goals/{id}/observations",
-    "/goals/{id}/observations/{observationId}/close",
+      "/goals/{id}/observations",
+      "/goals/{id}/observations/{observationId}/close",
       "/tasks/{id}",
       "/questions",
       "/events",

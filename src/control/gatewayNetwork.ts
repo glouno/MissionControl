@@ -1,3 +1,4 @@
+import { abortable } from "./reliability.js";
 import { lstat, realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -17,14 +18,17 @@ export interface GatewayNetworkRecord {
   status: "preparing" | "active" | "stopping" | "stopped";
   updatedAt: number;
 }
-type Docker = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+type Docker = (
+  args: string[],
+  signal?: AbortSignal,
+) => Promise<{ stdout: string; stderr: string }>;
 // One network per execution session: unrelated workers never share a network.
 export class GatewayNetworkManager {
   constructor(
     readonly db: SqliteStore,
     readonly revoke: (sessionId: string) => void,
-    readonly docker: Docker = (args) =>
-      exec("docker", args, { timeout: 60000 }),
+    readonly docker: Docker = (args, signal) =>
+      exec("docker", args, { signal, timeout: 60000 }),
     readonly bridge?: {
       start(
         sessionId: string,
@@ -50,7 +54,11 @@ export class GatewayNetworkManager {
     );
     return record;
   }
-  private async object(kind: "network" | "container", name: string) {
+  private async object(
+    kind: "network" | "container",
+    name: string,
+    signal?: AbortSignal,
+  ) {
     try {
       return JSON.parse(
         (
@@ -58,6 +66,7 @@ export class GatewayNetworkManager {
             kind === "network"
               ? ["network", "inspect", name]
               : ["inspect", name],
+            signal,
           )
         ).stdout,
       )[0];
@@ -103,7 +112,10 @@ export class GatewayNetworkManager {
       | "socketDirectory"
       | "relayScript"
     >,
+    signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
+    const docker = (args: string[]) => this.docker(args, signal);
     if (
       !/^[a-zA-Z0-9_-]{1,100}$/.test(spec.sessionId) ||
       !Number.isSafeInteger(spec.generation) ||
@@ -189,7 +201,7 @@ export class GatewayNetworkManager {
             updatedAt: Date.now(),
           },
     );
-    const network = await this.object("network", record.network);
+    const network = await this.object("network", record.network, signal);
     if (network) {
       this.assertOwner(record, network.Labels);
       if (
@@ -205,7 +217,7 @@ export class GatewayNetworkManager {
           409,
         );
     } else {
-      await this.docker([
+      await docker([
         "network",
         "create",
         "--internal",
@@ -218,7 +230,7 @@ export class GatewayNetworkManager {
         record.network,
       ]);
     }
-    const relay = await this.object("container", record.relay);
+    const relay = await this.object("container", record.relay, signal);
     if (relay) {
       this.assertOwner(record, relay.Config.Labels);
       if (
@@ -231,7 +243,7 @@ export class GatewayNetworkManager {
           409,
         );
     } else {
-      await this.docker([
+      await docker([
         "create",
         "--name",
         record.relay,
@@ -272,24 +284,27 @@ export class GatewayNetworkManager {
             ]),
       ]);
     }
-    if (!relay?.State.Running) await this.docker(["start", record.relay]);
+    if (!relay?.State.Running) await docker(["start", record.relay]);
     if (this.bridge)
-      await this.bridge.start(
-        record.sessionId,
-        record.relay,
-        record.relayScript,
+      await abortable(
+        this.bridge.start(record.sessionId, record.relay, record.relayScript),
+        signal ?? AbortSignal.timeout(60000),
       );
     return this.save({ ...record, status: "active" });
   }
-  async stop(sessionId: string) {
+  async stop(sessionId: string, signal?: AbortSignal) {
     const record = this.records().find((r) => r.sessionId === sessionId);
     if (!record)
       throw new ControlError("not_found", "Gateway session not found", 404);
     this.revoke(sessionId);
-    await this.bridge?.stop(sessionId);
+    if (this.bridge)
+      await abortable(
+        this.bridge.stop(sessionId),
+        signal ?? AbortSignal.timeout(60000),
+      );
     this.save({ ...record, status: "stopping" });
-    const network = await this.object("network", record.network);
-    const relay = await this.object("container", record.relay);
+    const network = await this.object("network", record.network, signal);
+    const relay = await this.object("container", record.relay, signal);
     if (network) {
       this.assertOwner(record, network.Labels);
       if (
@@ -305,16 +320,17 @@ export class GatewayNetworkManager {
     }
     if (relay) {
       this.assertOwner(record, relay.Config.Labels);
-      await this.docker(["rm", "-f", record.relay]);
+      await this.docker(["rm", "-f", record.relay], signal);
     }
-    if (network) await this.docker(["network", "rm", record.network]);
+    if (network) await this.docker(["network", "rm", record.network], signal);
     return this.save({ ...record, status: "stopped" });
   }
-  async reconcile() {
+  async reconcile(signal?: AbortSignal) {
     // After a controller restart no prior inference capability remains authorized.
     for (const record of this.records()) {
       this.revoke(record.sessionId);
-      if (record.status !== "stopped") await this.stop(record.sessionId);
+      if (record.status !== "stopped")
+        await this.stop(record.sessionId, signal);
     }
   }
 }

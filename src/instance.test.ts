@@ -225,7 +225,7 @@ test("migration failure preserves its prior ledger/schema and retries transactio
   new ControlStore(db);
   assert.equal(
     db.one<{ user_version: number }>("PRAGMA user_version")!.user_version,
-    7,
+    8,
   );
   assert.equal(db.integrityCheck()[0], "ok");
 });

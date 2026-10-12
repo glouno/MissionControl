@@ -78,13 +78,15 @@ test("switching requires drained paused work, preserves continuation and fences 
       () => store.switchBackend(g.id, { kind: "claude-code" }, paused.revision),
       /drain/,
     );
-    store.release(
-      claim.task.id,
-      "old",
-      claim.generation,
-      "waiting_provider",
-      "Quota",
-      0.2,
+    store.fenceStartup();
+    store.finishStartupRecovery();
+    const recovery = store.questions().find((q) => q.taskId === claim.task.id)!;
+    store.answer(
+      recovery.id,
+      "inspect",
+      recovery.revision,
+      "test",
+      "Synthetic stopped source inspected",
     );
     const attemptsBeforeSwitch = store.getTask(claim.task.id).attempts;
     const switched = store.switchBackend(
@@ -95,11 +97,14 @@ test("switching requires drained paused work, preserves continuation and fences 
     assert.equal(switched.status, "paused");
     const task = store.getTask(claim.task.id);
     assert.equal(task.status, "pending");
-    assert.deepEqual(task.checkpoint, {
-      commit: "sha",
-      summary: "Durable progress",
-      costUsd: 0.2,
-    });
+    assert.equal(task.checkpoint?.commit, "sha");
+    assert.equal(task.checkpoint?.costUsd, 0.2);
+    assert.match(task.checkpoint!.summary, /^Durable progress/);
+    assert.match(
+      task.checkpoint!.summary,
+      /Synthetic stopped source inspected/,
+    );
+    assert.equal(task.checkpoint?.messages, undefined);
     assert.equal(task.attempts, attemptsBeforeSwitch);
     assert.throws(
       () => store.switchBackend(g.id, { kind: "fake" }, paused.revision),
@@ -707,6 +712,8 @@ for await (const line of createInterface({input:process.stdin})) {
       signal: AbortSignal.timeout(5000),
       onCheckpoint: async () => {},
     }),
-    /Synthetic terminal failure/,
+    (error: any) =>
+      error.failure?.kind === "unknown" &&
+      !error.message.includes("Synthetic terminal failure"),
   );
 });

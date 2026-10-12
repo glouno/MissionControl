@@ -392,7 +392,7 @@ test("cleanup failure retains fenced claims and resumes the same recovery intent
       networks,
       () => {},
     ),
-    /daemon/,
+    /Owned resources could not be confirmed stopped/,
   );
   assert.equal(store.getTask(claim.task.id).workerId, "worker");
   assert.throws(() =>

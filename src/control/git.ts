@@ -1,14 +1,16 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { executionSignal } from "./executionDeadline.js";
 import { portableWorktreeLink } from "./worktreeLinks.js";
 const exec = promisify(execFile);
-export async function git(repo: string, args: string[]) {
+export async function git(repo: string, args: string[], signal?: AbortSignal) {
   const result = (
     await exec(
       "git",
       ["--no-replace-objects", "-c", "core.hooksPath=/dev/null", ...args],
       {
         cwd: repo,
+        signal: signal ?? executionSignal(),
         maxBuffer: 16 * 1024 * 1024,
         timeout: 60000,
       },

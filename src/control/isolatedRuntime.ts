@@ -1,3 +1,4 @@
+import { ReliabilityStore, boundedCleanup } from "./reliability.js";
 import { assertRuntimeBinding } from "./runtimeFingerprint.js";
 import { inferenceHttpFetch } from "./inferenceHttp.js";
 import { assertSubscriptionQualification } from "./subscriptionQualification.js";
@@ -205,6 +206,8 @@ export function assertSessionAuthority(
   if (spec.authorityGeneration === 0) {
     if (
       !spec.operationReservationId ||
+      (store.reliability.runtime(spec.operationReservationId)?.deadlineAt ??
+        Infinity) <= store.clock() ||
       !store.db.one(
         `SELECT id FROM control_attempts WHERE id=${sql(spec.operationReservationId)} AND goal_id=${sql(goal.id)} AND task_id IS NULL AND outcome='active'`,
       )
@@ -287,6 +290,8 @@ export async function createIsolatedRuntime(
           b,
           inferenceHttpFetch,
           headers,
+          store.reliability,
+          name,
         );
       } else if (b.kind === "bedrock") {
         if (!secretsDir || p.authentication.kind !== "aws-session")
@@ -308,6 +313,7 @@ export async function createIsolatedRuntime(
             credentials: { accessKeyId, secretAccessKey, sessionToken },
             maxAttempts: 1,
           }),
+          store.reliability,
         );
       } else throw new Error("Unsupported metered tool-loop provider");
       continue;
@@ -593,14 +599,46 @@ export async function createIsolatedRuntime(
               apply && Boolean(config.environmentExecutionRoots?.length),
             )
         : undefined,
+      recoverAttempt: async (
+        taskId: string,
+        generation: number,
+        cleanup: AbortSignal,
+      ) => {
+        await boundedCleanup(
+          async (signal) => {
+            for (const session of registry
+              .all()
+              .filter(
+                (s) =>
+                  s.taskId === taskId &&
+                  s.spec.authorityGeneration === generation,
+              )) {
+              gateway.revoke(session.id);
+              await environment.reset(session.id, signal);
+              if (
+                networks
+                  .records()
+                  .some(
+                    (r) => r.sessionId === session.id && r.status !== "stopped",
+                  )
+              )
+                await networks.stop(session.id, signal);
+            }
+          },
+          60000,
+          cleanup,
+        );
+      },
       close: async () => {
         try {
-          for (const record of networks.records())
-            gateway.revoke(record.sessionId);
-          for (const session of registry.all())
-            if (!["destroyed", "destroying"].includes(session.status))
-              await environment.reset(session.id);
-          await networks.reconcile();
+          await boundedCleanup(async (signal) => {
+            for (const record of networks.records())
+              gateway.revoke(record.sessionId);
+            for (const session of registry.all())
+              if (!["destroyed", "destroying"].includes(session.status))
+                await environment.reset(session.id, signal);
+            await networks.reconcile(signal);
+          });
         } finally {
           await new Promise<void>((r) => server.close(() => r()));
         }

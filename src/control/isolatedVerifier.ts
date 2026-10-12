@@ -1,3 +1,4 @@
+import { deadlineSignal, boundedCleanup } from "./reliability.js";
 import { randomUUID } from "node:crypto";
 import type { Claim } from "./schema.js";
 import { ControlError } from "./schema.js";
@@ -30,6 +31,9 @@ export class IsolatedVerifier {
         "Verification requires a pinned image digest",
         409,
       );
+    const deadlineAt =
+      claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs;
+    const signal = deadlineSignal(deadlineAt);
     const commands = [
       ...new Set([
         ...claim.goal.config.verificationCommands,
@@ -49,20 +53,23 @@ export class IsolatedVerifier {
         "Verification requires checkpointed source",
         409,
       );
-    const session = await this.environment.prepare({
-      taskId: claim.task.id,
-      generation: Math.max(1, claim.generation),
-      invocationId: `verify_${randomUUID().replaceAll("-", "")}`,
-      source,
-      baseSha: commit,
-      goalId: claim.goal.id,
-      workerId: claim.workerId,
-      authorityGeneration: claim.generation,
-      image: this.imageDigest,
-      cpu: claim.task.spec.cpuUnits,
-      memoryMiB: claim.task.spec.memoryMiB,
-      timeoutMs: claim.goal.config.timeoutMs,
-    });
+    const session = await this.environment.prepare(
+      {
+        taskId: claim.task.id,
+        generation: Math.max(1, claim.generation),
+        invocationId: `verify_${randomUUID().replaceAll("-", "")}`,
+        source,
+        baseSha: commit,
+        goalId: claim.goal.id,
+        workerId: claim.workerId,
+        authorityGeneration: claim.generation,
+        image: this.imageDigest,
+        cpu: claim.task.spec.cpuUnits,
+        memoryMiB: claim.task.spec.memoryMiB,
+        timeoutMs: claim.goal.config.timeoutMs,
+      },
+      signal,
+    );
     const results: VerificationResult["results"] = [];
     try {
       for (const command of commands) {
@@ -72,7 +79,7 @@ export class IsolatedVerifier {
         const output = await this.environment.execute(
           session.id,
           ["python3", "-c", code],
-          AbortSignal.timeout(claim.goal.config.timeoutMs),
+          signal,
         );
         const parsed = JSON.parse(output.stdout);
         if (
@@ -87,7 +94,7 @@ export class IsolatedVerifier {
           );
         results.push({ command, ...parsed });
       }
-      await this.environment.checkpoint(session.id);
+      await this.environment.checkpoint(session.id, signal);
       await sanitizeGit(session.path);
       const unchanged =
         (await git(session.path, ["rev-parse", "HEAD"])) === commit &&
@@ -116,7 +123,9 @@ export class IsolatedVerifier {
         });
       return result;
     } finally {
-      await this.environment.reset(session.id);
+      await boundedCleanup((signal) =>
+        this.environment.reset(session.id, signal),
+      );
     }
   }
 }

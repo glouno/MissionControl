@@ -1,3 +1,4 @@
+import { ProviderFailure, classifyFailure } from "./reliability.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { terminateProcessTree } from "../util.js";
@@ -220,7 +221,16 @@ export class PortableBackend implements AgentBackend {
       }
       let r: Awaited<ReturnType<ModelProvider["generate"]>>;
       try {
-        r = await this.provider.generate(messages, tools, c.signal);
+        r = await this.provider.generate(messages, tools, c.signal, {
+          attemptId:
+            c.operationReservationId ??
+            `${c.claim.task.id}:${c.claim.generation}`,
+          goalId: c.claim.goal.id,
+          taskId: c.claim.task.id,
+          generation: c.claim.generation,
+          sessionId: c.executionSessionId,
+          progress: c.onProgress,
+        });
       } catch (error) {
         if (error instanceof Error)
           Object.assign(error, {
@@ -230,6 +240,7 @@ export class PortableBackend implements AgentBackend {
           });
         throw error;
       }
+      c.onProgress?.("model_completed");
       const measuredCost = this.provider.cost(r);
       if (!Number.isFinite(measuredCost) || measuredCost < 0)
         throw Object.assign(
@@ -272,6 +283,7 @@ export class PortableBackend implements AgentBackend {
           costUsd,
         );
         const result = completed.get(call.id) ?? (await this.tool(c, call));
+        c.onProgress?.("tool_completed");
         completed.set(call.id, result);
         messages.push({ role: "tool", content: result, callId: call.id });
         await c.onCheckpoint(
@@ -596,6 +608,9 @@ export class CodexBackend implements AgentBackend {
           if (m.params.item.phase !== "commentary")
             text = m.params.item.text + "\n";
         }
+        if (m.method === "item/completed") c.onProgress?.("tool_completed");
+        if (m.method === "item/agentMessage/delta" && m.params?.delta)
+          c.onProgress?.("model_output");
         if (m.method === "thread/tokenUsage/updated") {
           const u = m.params?.tokenUsage?.total;
           inputTokens = u?.inputTokens ?? inputTokens;
@@ -604,9 +619,9 @@ export class CodexBackend implements AgentBackend {
         if (m.method === "error") {
           // The native server owns retries within this reserved invocation.
           // A recoverable stream notification is not a terminal turn result.
-          if (m.params?.willRetry === true) return;
-          const message = m.params?.error?.message ?? "Codex inference failed";
-          fail(new Error(message));
+          const failure = classifyFailure(m.params?.error ?? {});
+          if (m.params?.willRetry === true && failure.retryable) return;
+          fail(new ProviderFailure(failure));
         }
         if (m.method === "turn/completed") {
           if (m.params?.turn?.status !== "completed")
