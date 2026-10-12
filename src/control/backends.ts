@@ -1,4 +1,8 @@
 import { nativePrompt } from "./nativePrompt.js";
+import {
+  nativeOutputSchema,
+  normalizeNativeOutput,
+} from "./nativeOutputSchema.js";
 import { ProviderFailure, classifyFailure } from "./reliability.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -633,7 +637,11 @@ export class CodexBackend implements AgentBackend {
             );
           else
             settle({
-              text,
+              text: c.outputSchema
+                ? JSON.stringify(
+                    normalizeNativeOutput(JSON.parse(text), c.outputSchema),
+                  )
+                : text,
               usage: {
                 kind: "metered",
                 status: "unknown",
@@ -675,7 +683,9 @@ export class CodexBackend implements AgentBackend {
       await request("turn/start", {
         threadId: sessionId,
         input: [{ type: "text", text: nativePrompt(c) }],
-        ...(c.outputSchema ? { outputSchema: c.outputSchema } : {}),
+        ...(c.outputSchema
+          ? { outputSchema: nativeOutputSchema(c.outputSchema) }
+          : {}),
         sandboxPolicy: c.execution
           ? { type: "dangerFullAccess" }
           : c.mode === "implement"

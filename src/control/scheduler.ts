@@ -1573,6 +1573,20 @@ export class Scheduler {
     } catch (e) {
       const t = this.store.getTask(taskId);
       if (
+        e instanceof ProviderFailure &&
+        t.workerId === workerId &&
+        t.generation === generation
+      ) {
+        // A deterministic provider blocker pauses the goal before result error
+        // handling. Fence the parent immediately; paused authority cannot use
+        // ordinary worker release and must not linger until lease expiry.
+        this.store.db.exec(
+          `UPDATE control_tasks SET lease_until=${this.store.clock() - 1} WHERE id=${sql(taskId)}`,
+        );
+        this.store.reconcileExpired(taskId, generation);
+        return this.store.getTask(taskId);
+      }
+      if (
         e instanceof ControlError &&
         [
           "repair_limit",

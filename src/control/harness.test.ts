@@ -532,7 +532,12 @@ test("Codex planning uses final output instead of progress commentary", async ()
   assert.deepEqual(JSON.parse(output.text), { tasks: [] });
   assert.deepEqual(
     JSON.parse(await readFile(join(root, "turn.json"), "utf8")).outputSchema,
-    { type: "object", properties: { tasks: { type: "array" } } },
+    {
+      type: "object",
+      properties: { tasks: { anyOf: [{ type: "array" }, { type: "null" }] } },
+      required: ["tasks"],
+      additionalProperties: false,
+    },
   );
 });
 test("Codex registers scoped handoff tools and stops on validated owner request", async () => {

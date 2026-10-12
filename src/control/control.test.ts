@@ -19,6 +19,7 @@ import { createControlServer } from "./api.js";
 import { validatePlan, type Claim, type Goal } from "./schema.js";
 import { git, WorkspaceManager } from "./workspaces.js";
 import { Scheduler } from "./scheduler.js";
+import { ProviderFailure, failureRecord } from "./reliability.js";
 import { executeClaim } from "./worker.js";
 import {
   FakeBackend,
@@ -638,6 +639,36 @@ test("worker returns candidates for controller review; failed review preserves r
   assert.equal(f.store.getTask(c.task.id).status, "accepted");
   assert.equal(reviews, 2);
   assert.equal(f.store.operations().length, 0);
+});
+test("provider refusal during controller review immediately fences the parent candidate", async (t) => {
+  const f = await fixture(),
+    g = await planned(f, [spec("one")]);
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+    backend: () => ({
+      run: async () => {
+        throw new ProviderFailure(failureRecord("invalid_request"));
+      },
+    }),
+  });
+  const s = await serve(f, scheduler);
+  t.after(() => s.server.close());
+  const claim = f.store.claimNextTask("builder")!;
+  await scheduler.workspaces.prepareTask(g, claim.task);
+  await executeClaim(s.client, claim, f.root);
+  assert.equal(f.store.getGoal(g.id).status, "paused");
+  assert.equal(f.store.getTask(claim.task.id).status, "waiting_human");
+  assert.equal(
+    f.store.attempts(g.id).find((a) => a.taskId === claim.task.id)!.outcome,
+    "recovering",
+  );
+  assert.ok(f.store.getTask(claim.task.id).checkpoint?.commit);
+  assert.equal(
+    f.db.query(
+      "SELECT id FROM control_evidence WHERE kind='review' AND passed=1",
+    ).length,
+    0,
+  );
 });
 test("conflicting branches retain a conflict finding and never overwrite accepted work", async (t) => {
   const f = await fixture();

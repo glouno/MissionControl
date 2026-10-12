@@ -3632,6 +3632,14 @@
               "blocked"
             ]
           },
+          "cleanupStartedAt": {
+            "type": "number",
+            "minimum": 0
+          },
+          "cleanupDeadlineAt": {
+            "type": "number",
+            "minimum": 0
+          },
           "retryCount": {
             "type": "integer",
             "minimum": 0,
