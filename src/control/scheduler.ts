@@ -1538,6 +1538,7 @@ export class Scheduler {
         requiredChecks: g.config.policy.requiredChecks,
       });
       if (
+        (await git(workspace, ["status", "--porcelain"])) ||
         (await git(workspace, ["rev-parse", "HEAD"])) !== candidateSha ||
         (await git(g.config.repoPath, ["rev-parse", targetBranch])) !==
           targetSha

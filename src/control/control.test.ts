@@ -908,6 +908,20 @@ test("local delivery with required checks cannot complete without a trusted exac
     /trusted configured delivery verifier/,
   );
   assert.notEqual(f.store.getGoal(goal.id).status, "completed");
+  const changed = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+    localDeliveryGate: async (input) => {
+      await writeFile(join(input.workspace, "unexpected"), "mutation");
+    },
+  });
+  await assert.rejects(
+    () => changed.publish(goal.id),
+    /advanced after delivery verification/,
+  );
+  const workspace = changed.workspaces.goalPath(f.store.getGoal(goal.id));
+  await import("node:fs/promises").then((fs) =>
+    fs.unlink(join(workspace, "unexpected")),
+  );
   let bound: any;
   const qualified = new Scheduler(f.store, f.root, "unused", {
     spawnWorkers: false,
