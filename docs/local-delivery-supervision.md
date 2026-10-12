@@ -35,3 +35,13 @@ missing evidence queues work with that supervisor and leaves completion pending.
 Failed receipts report `checks_failed`. Source and target are rechecked after
 verification. The bridge definition is part of the runtime hash, so changing it
 requires stopped-instance activation. No remote Mac commands are involved.
+
+Automatic Actions push/PR triggers are removed. The retained optional manual
+workflow calls `python3 -B scripts/verify.py --lane linux --logs /private/path`
+(the owned local command) with the complete former core/status/privacy/package,
+dependency audit, history audit and locked Matrix Rust suites. The Mac lane uses
+`--lane macos` and is run by the owner's Mac agent. Install locked dependencies
+with `npm ci --ignore-scripts` first. Node 24.21.0 and Rust 1.96.0 are explicit.
+A failing history audit is a real unresolved gate; it is not waived or hidden.
+The script records source, lane, check failures and logs outside the checkout;
+it is a check entry point, not a substitute for signed verifier/reviewer authority.
