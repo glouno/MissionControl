@@ -1562,8 +1562,8 @@ export class ControlStore {
         attemptId = `${taskId}:${generation}`;
       if (task.generation !== generation)
         throw new ControlError("stale_recovery", "Attempt changed", 409);
-      const attempt = this.attempts(task.goalId, 500).find(
-        (a) => a.id === attemptId,
+      const attempt = this.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(attemptId)}`,
       );
       if (attempt?.outcome !== "recovering") return;
       this.assertInterruptedResourcesStopped(task);

@@ -255,6 +255,7 @@ export class InferenceGateway {
       }
       this.authenticate(token);
       diagnostic.phase = "headers";
+      diagnostics.diagnostic(diagnostic);
       const response = await abortable(
         this.fetcher(upstream.endpoint, {
           method: "POST",
@@ -268,6 +269,7 @@ export class InferenceGateway {
       diagnostic.httpStatus = response.status;
       diagnostic.requestIds = requestIds(response.headers);
       diagnostic.phase = "body";
+      diagnostics.diagnostic(diagnostic);
       if (!response.ok) {
         const raw = await boundedErrorBody(response, requestSignal);
         throw new ProviderFailure({

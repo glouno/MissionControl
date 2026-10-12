@@ -147,6 +147,8 @@ export class AzureProvider implements ModelProvider {
         "Content-Type": "application/json",
         ...(await abortable(this.authentication(), signal)),
       };
+      diagnostic.phase = "headers";
+      this.diagnostics?.diagnostic(diagnostic);
       const input = messages.flatMap<any>((m) =>
         m.role === "tool"
           ? [
@@ -200,6 +202,7 @@ export class AzureProvider implements ModelProvider {
       diagnostic.httpStatus = response.status;
       diagnostic.requestIds = requestIds(response.headers);
       diagnostic.phase = "body";
+      this.diagnostics?.diagnostic(diagnostic);
       if (!response.ok) {
         const raw = await boundedErrorBody(response, signal);
         const failure = {
@@ -395,6 +398,7 @@ export class BedrockProvider implements ModelProvider {
         signal,
       );
       diagnostic.phase = "body";
+      this.diagnostics?.diagnostic(diagnostic);
       diagnostic.httpStatus = response.$metadata?.httpStatusCode;
       if (response.$metadata?.requestId)
         diagnostic.requestIds = {
