@@ -423,6 +423,13 @@ export function createControlServer(
         method === "GET"
       ) {
         operator();
+        const order = url.searchParams.get("order") ?? "asc";
+        if (order !== "asc" && order !== "desc")
+          throw new ControlError(
+            "invalid_order",
+            "Diagnostic order must be asc or desc",
+            400,
+          );
         return send(
           res,
           200,
@@ -434,6 +441,7 @@ export function createControlServer(
             url.searchParams.get("attemptId") ?? undefined,
             Number(url.searchParams.get("limit") ?? 100),
             url.searchParams.get("after") ?? "",
+            order,
           ),
         );
       }
@@ -1546,6 +1554,13 @@ export function openApi() {
       { name: "goalId", in: "query", schema: { type: "string" } },
       { name: "attemptId", in: "query", schema: { type: "string" } },
       { name: "after", in: "query", schema: { type: "string" } },
+      {
+        name: "order",
+        in: "query",
+        schema: { type: "string", enum: ["asc", "desc"], default: "asc" },
+        description:
+          "Sort by record ID; after continues in the selected direction.",
+      },
       {
         name: "limit",
         in: "query",

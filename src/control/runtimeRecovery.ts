@@ -11,7 +11,8 @@ export async function reconcileRuntime(
   store: ControlStore,
   registry: EnvironmentRegistry,
   environment: ExecutionEnvironment,
-  networks: Pick<GatewayNetworkManager, "records" | "reconcile">,
+  networks: Pick<GatewayNetworkManager, "records" | "reconcile"> &
+    Partial<Pick<GatewayNetworkManager, "inspectAbsent">>,
   revoke: (sessionId: string) => void,
 ) {
   store.fenceStartup();
@@ -38,6 +39,32 @@ export async function reconcileRuntime(
           new Error("Original startup cleanup deadline expired"),
         );
   try {
+    if (remaining <= 0) {
+      // Never replenish destructive cleanup authority. A later startup may
+      // inspect absence under its exclusive lock after an operator/daemon repair.
+      await boundedCleanup(async (signal) => {
+        for (const record of networks.records()) revoke(record.sessionId);
+        for (const session of registry.all()) {
+          revoke(session.id);
+          const inspected = await environment.inspect(session.id, signal);
+          if (inspected.container)
+            throw Error(
+              "Retained execution resource requires operator cleanup",
+            );
+        }
+        if (networks.records().length && !networks.inspectAbsent)
+          throw Error("Gateway absence inspection unavailable");
+        await networks.inspectAbsent?.(signal);
+      }, 30000);
+      store.setting("startup-cleanup-inspection", {
+        originalIntent: intent,
+        inspectedAt: store.now(),
+        outcome: "owned-resources-absent",
+      });
+      store.finishStartupRecovery();
+      store.setting("startup-cleanup", null);
+      return;
+    }
     await boundedCleanup(
       async (signal) => {
         for (const record of networks.records()) revoke(record.sessionId);

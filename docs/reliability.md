@@ -29,8 +29,10 @@ The authenticated API exposes `/api/v1/readiness`, `/api/v1/incidents` and
 `/healthz` remains liveness. Recovery preview and revision-checked actions are
 available at `/api/v1/goals/{id}/recovery`, the recovery CLI and MCP tools.
 Deterministic task/configuration blockers require a new admitted replacement.
-Replacement lineage retains its original family ceiling and unresolved holds;
-installation cumulative admission does not refund predecessor authority.
+Replacement lineage retains its original family ceiling and unresolved holds. An explicit
+spending-question approval can add authority, recorded atomically with the shared family
+allowance and cumulative installation admission; it must fit installation limits.
+Installation cumulative admission does not refund predecessor authority.
 
 Generated checks must belong to configured required commands or the explicit
 `trustedAdditionalVerificationCommands` allowlist. Mandatory repository checks
@@ -61,3 +63,18 @@ provider settings as CLI overrides. Repository `.codex/config.toml` defaults can
 replace that runtime binding. Token values remain in the scoped environment, never
 in command arguments. Inference diagnostics retain the effective reasoning effort
 and output cap so operators can inspect configuration mismatches.
+
+The native inference gateway serializes requests per admitted attempt and enforces
+persisted retry counts and backoff, including bounded Retry-After. Refusals and
+uncertain streams cannot be replayed by native harness retry behavior. At most
+three transient HTTP retries share the original attempt deadline and allowance.
+
+An expired startup cleanup intent never grants fresh destructive cleanup time.
+A later startup under the exclusive instance lock can perform a bounded read-only
+inspection of Docker resources. It resumes only when owned containers, relays and
+networks are proven absent; retained resources require operator cleanup. The
+original cleanup intent and inspection result remain recorded.
+
+Dashboard incident cards prioritize open recent incidents. Goal details fetch
+that goal's newest diagnostics and can load earlier pages. Diagnostic APIs retain
+ascending cursor semantics by default; optional order=desc continues backwards.

@@ -1547,7 +1547,8 @@ export class ControlStore {
       ),
       rootId = String(lineage?.root_id ?? goalId),
       allowance = Number(
-        lineage?.allowance ??
+        this.setting(`family-approved-allowance:${rootId}`) ??
+          lineage?.allowance ??
           this.setting(`family-allowance:${goalId}`) ??
           g.config.maxCostUsd,
       );
@@ -1835,6 +1836,7 @@ export class ControlStore {
     failure: FailureRecord,
     attemptId?: string,
     actor = "controller",
+    affectsExecution = true,
   ) {
     return this.db.transaction(() => {
       const incident = this.reliability.incident(goalId, failure, attemptId);
@@ -1848,14 +1850,14 @@ export class ControlStore {
         });
         this.setting(notified, true);
       }
-      if (attemptId) {
+      if (attemptId && affectsExecution) {
         const runtime = this.reliability.runtime(attemptId);
         if (runtime) {
           runtime.failure = failure;
           this.reliability.saveRuntime(runtime);
         }
       }
-      if (!failure.retryable) {
+      if (!failure.retryable && affectsExecution) {
         const g = this.getGoal(goalId);
         if (!["completed", "cancelled", "failed", "paused"].includes(g.status))
           this.db.exec(
@@ -2749,7 +2751,70 @@ export class ControlStore {
         option === "approve"
       ) {
         const g = this.getGoal(q.goalId);
-        g.config.maxCostUsd = q.request.requestedMaxCostUsd;
+        if (this.setting(`replaced-by:${g.id}`))
+          throw new ControlError(
+            "replaced_goal",
+            "Spending approval requires the supported successor",
+            409,
+          );
+        const previous = g.config.maxCostUsd;
+        const next = q.request.requestedMaxCostUsd;
+        const delta = Math.max(0, next - previous);
+        const configuration = {
+          ...g.config,
+          maxCostUsd: next,
+          ...(q.request.requestedRunEstimateUsd
+            ? { estimatePerRunUsd: q.request.requestedRunEstimateUsd }
+            : {}),
+        };
+        this.validateGoalConfiguration(configuration);
+        const installation = this.setting("configuration-snapshot")?.settings;
+        if (
+          installation?.authority.maxGoalCostUsd !== undefined &&
+          next > installation.authority.maxGoalCostUsd
+        )
+          throw new ControlError(
+            "intake_budget",
+            "Spending approval exceeds installation goal allowance",
+            409,
+          );
+        if (delta && installation) {
+          if (this.setting("instance-maintenance"))
+            throw new ControlError(
+              "maintenance",
+              "Admissions paused during complete backup",
+              409,
+            );
+          const admitted = Number(this.setting("admitted-cost-usd") ?? 0);
+          if (admitted + delta > installation.authority.maxTotalAdmittedCostUsd)
+            throw new ControlError(
+              "intake_budget",
+              "Cumulative configured admission allowance is exhausted",
+              409,
+            );
+          this.setting("admitted-cost-usd", admitted + delta);
+        }
+        if (delta) {
+          const family = this.familyBudget(g.id);
+          this.setting(
+            `family-approved-allowance:${family.rootId}`,
+            family.allowanceUsd + delta,
+          );
+          this.decision(
+            g.id,
+            undefined,
+            "family-spending-approval",
+            {
+              questionId: qid,
+              rootId: family.rootId,
+              previousAllowanceUsd: family.allowanceUsd,
+              allowanceUsd: family.allowanceUsd + delta,
+              addedAdmissionUsd: delta,
+            },
+            actor,
+          );
+        }
+        g.config.maxCostUsd = next;
         if (q.request.requestedRunEstimateUsd)
           g.config.estimatePerRunUsd = q.request.requestedRunEstimateUsd;
         this.db.exec(

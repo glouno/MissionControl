@@ -254,6 +254,44 @@ test("readiness requires scheduler freshness and operator authority; diagnostics
   f.store.setting("scheduler-heartbeat", { completedAt: Date.now() });
   assert.equal((await fetch(base + "/readiness", { headers })).status, 200);
   assert.equal((await fetch(base + "/inference-diagnostics")).status, 401);
+  for (const id of ["older", "recent"])
+    f.store.reliability.diagnostic({
+      version: 1,
+      id,
+      goalId: f.goal.id,
+      provider: "synthetic",
+      endpoint: "https://example.invalid",
+      model: "synthetic",
+      phase: "body",
+      status: "completed",
+      startedAt: Date.now(),
+    });
+  const recent = await (
+    await fetch(
+      base +
+        "/inference-diagnostics?goalId=" +
+        f.goal.id +
+        "&order=desc&limit=1",
+      { headers },
+    )
+  ).json();
+  assert.equal(recent[0].id, "recent");
+  const earlier = await (
+    await fetch(
+      base +
+        "/inference-diagnostics?goalId=" +
+        f.goal.id +
+        "&order=desc&limit=1&after=" +
+        recent[0].id,
+      { headers },
+    )
+  ).json();
+  assert.equal(earlier[0].id, "older");
+  assert.equal(
+    (await fetch(base + "/inference-diagnostics?order=malformed", { headers }))
+      .status,
+    400,
+  );
 });
 test("reported budget totals include histories longer than dashboard pagination", async (t) => {
   const f = await fixture(t);

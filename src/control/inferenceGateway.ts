@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   ReliabilityStore,
   ProviderFailure,
@@ -41,6 +42,7 @@ const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export class InferenceGateway {
   private readonly activeRequests = new Map<string, Set<AbortController>>();
+  private readonly admittedRequests = new Set<string>();
   constructor(
     readonly db: SqliteStore,
     readonly upstreams: Record<string, TrustedUpstream>,
@@ -125,6 +127,9 @@ export class InferenceGateway {
     const abort = new AbortController();
     let requestSignal: AbortSignal | undefined;
     let diagnostic: InferenceDiagnostic | undefined;
+    let admittedKey: string | undefined;
+    let requestAdmitted = false;
+    let providerRequestStarted = false;
     const diagnostics = new ReliabilityStore(this.db, this.clock);
     req.on("aborted", () => abort.abort());
     res.on("close", () => {
@@ -233,8 +238,63 @@ export class InferenceGateway {
         phase: "authentication",
         status: "active",
       };
+      // Native harness retries are requests, not new authority. Serialize them
+      // before any await and retain failure/backoff across gateway restarts.
+      const key = diagnostic.attemptId ?? sessionId;
+      if (this.admittedRequests.has(key))
+        throw new ControlError(
+          "inference_busy",
+          "Inference is already in flight",
+          409,
+        );
+      this.admittedRequests.add(key);
+      admittedKey = key;
+      const runtime = diagnostic.attemptId
+        ? diagnostics.runtime(diagnostic.attemptId)
+        : undefined;
+      requestSignal = deadlineSignal(
+        Math.min(
+          capability.expiresAt,
+          runtime?.deadlineAt ?? capability.expiresAt,
+        ),
+        abort.signal,
+      );
+      const unresolved = this.db.one<{ record: string }>(
+        `SELECT record FROM inference_diagnostics WHERE ${diagnostic.attemptId ? `attempt_id=${sql(diagnostic.attemptId)}` : `json_extract(record,'$.sessionId')=${sql(sessionId)}`} AND json_extract(record,'$.status')='active' LIMIT 1`,
+      );
+      if (unresolved)
+        throw new ProviderFailure(
+          failureRecord("interrupted", {
+            diagnosticId: JSON.parse(unresolved.record).id,
+          }),
+        );
+      if (runtime?.failure) {
+        const previous = runtime.failure;
+        if (
+          !previous.httpStatus ||
+          !["rate_limit", "service"].includes(previous.kind) ||
+          runtime.retryCount >= 3
+        )
+          throw new ProviderFailure(previous);
+        if (!runtime.nextRetryAt || runtime.nextRetryAt >= runtime.deadlineAt)
+          throw new ProviderFailure(previous);
+        const wait = runtime.nextRetryAt - this.clock();
+        if (wait > 0) await delay(wait, undefined, { signal: requestSignal });
+        this.authenticate(token);
+        requestSignal.throwIfAborted();
+        const current = diagnostics.runtime(runtime.attemptId)!;
+        current.retryCount++;
+        diagnostics.saveRuntime(current);
+      }
+      if (!runtime) {
+        const previous = this.db.one<{ record: string }>(
+          `SELECT record FROM inference_diagnostics WHERE json_extract(record,'$.sessionId')=${sql(sessionId)} AND json_extract(record,'$.failure') IS NOT NULL ORDER BY id DESC LIMIT 1`,
+        );
+        if (previous)
+          throw new ProviderFailure(JSON.parse(previous.record).failure);
+      }
+      requestAdmitted = true;
       diagnostics.diagnostic(diagnostic);
-      requestSignal = deadlineSignal(capability.expiresAt, abort.signal);
       const trustedHeaders = await import("./reliability.js").then(
         ({ abortable }) => abortable(upstream.headers(), requestSignal!),
       );
@@ -262,6 +322,7 @@ export class InferenceGateway {
       this.authenticate(token);
       diagnostic.phase = "headers";
       diagnostics.diagnostic(diagnostic);
+      providerRequestStarted = true;
       const response = await abortable(
         this.fetcher(upstream.endpoint, {
           method: "POST",
@@ -281,6 +342,16 @@ export class InferenceGateway {
         throw new ProviderFailure({
           ...classifyFailure(raw, response.status, diagnostic.id),
           requestIds: diagnostic.requestIds,
+          retryAfterMs: (() => {
+            const value = response.headers.get("retry-after");
+            if (!value) return undefined;
+            const ms = /^\d+(\.\d+)?$/.test(value)
+              ? Number(value) * 1000
+              : Date.parse(value) - this.clock();
+            return Number.isFinite(ms)
+              ? Math.min(300000, Math.max(0, ms))
+              : undefined;
+          })(),
         });
       }
       const type = response.headers.get("content-type") ?? "application/json";
@@ -406,6 +477,14 @@ export class InferenceGateway {
       });
       diagnostic.status = "completed";
       diagnostic.usageStatus = "reported";
+      if (diagnostic.attemptId) {
+        const runtime = diagnostics.runtime(diagnostic.attemptId);
+        if (runtime) {
+          runtime.failure = undefined;
+          runtime.nextRetryAt = undefined;
+          diagnostics.saveRuntime(runtime);
+        }
+      }
       res.end();
     } catch (error) {
       const failure =
@@ -417,13 +496,36 @@ export class InferenceGateway {
                 : abort.signal.aborted
                   ? new Error("Execution interrupted")
                   : error,
-              undefined,
+              error instanceof ControlError && !providerRequestStarted
+                ? error.status
+                : undefined,
               diagnostic?.id,
             );
       if (diagnostic) {
         diagnostic.status = "failed";
         diagnostic.failure = failure;
         diagnostic.usageStatus = "unknown";
+        // Persist before closing a refused/failed stream: the native server can
+        // submit another POST immediately. Local protocol errors grant no retry.
+        if (requestAdmitted && diagnostic.attemptId) {
+          const runtime = diagnostics.runtime(diagnostic.attemptId);
+          if (runtime) {
+            runtime.failure = failure;
+            runtime.nextRetryAt =
+              failure.httpStatus &&
+              ["rate_limit", "service"].includes(failure.kind)
+                ? this.clock() +
+                  Math.min(
+                    300000,
+                    Math.max(
+                      failure.retryAfterMs ?? 0,
+                      10000 * 2 ** runtime.retryCount,
+                    ) + Math.floor(Math.random() * 1000),
+                  )
+                : undefined;
+            diagnostics.saveRuntime(runtime);
+          }
+        }
       }
       if (tokenHash)
         this.usage(tokenHash, {
@@ -449,10 +551,12 @@ export class InferenceGateway {
       const status =
         error instanceof ControlError
           ? error.status
-          : error instanceof ProviderFailure
-            ? (error.failure.httpStatus ??
-              (error.failure.kind === "policy_refusal" ? 403 : 502))
-            : 502;
+          : error instanceof ProviderFailure && !requestAdmitted
+            ? 400 // Terminal admission denial; do not invite native POST retries.
+            : error instanceof ProviderFailure
+              ? (error.failure.httpStatus ??
+                (error.failure.kind === "policy_refusal" ? 403 : 502))
+              : 502;
       res.writeHead(status, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -475,6 +579,7 @@ export class InferenceGateway {
         diagnostics.diagnostic(diagnostic);
       }
       abort.abort();
+      if (admittedKey) this.admittedRequests.delete(admittedKey);
       if (sessionId) {
         const active = this.activeRequests.get(sessionId);
         active?.delete(abort);

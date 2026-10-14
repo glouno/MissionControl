@@ -559,12 +559,22 @@ CREATE TABLE IF NOT EXISTS goal_lineage(goal_id TEXT PRIMARY KEY REFERENCES cont
     attemptId?: string,
     limit = 100,
     after = "",
+    order: "asc" | "desc" = "asc",
   ) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 500)
       throw Error("Invalid diagnostic page limit");
+    if (!["asc", "desc"].includes(order))
+      throw Error("Invalid diagnostic page order");
     return this.db
       .query<{ record: string }>(
-        `SELECT record FROM ${table} WHERE id>${sql(after)} ${goalId ? `AND goal_id=${sql(goalId)}` : ""} ${attemptId ? `AND attempt_id=${sql(attemptId)}` : ""} ORDER BY id LIMIT ${limit}`,
+        `SELECT record FROM ${table} WHERE ${after ? `id${order === "asc" ? ">" : "<"}${sql(after)}` : "1=1"} ${goalId ? `AND goal_id=${sql(goalId)}` : ""} ${attemptId ? `AND attempt_id=${sql(attemptId)}` : ""} ORDER BY id ${order} LIMIT ${limit}`,
+      )
+      .map((r) => JSON.parse(r.record));
+  }
+  actionableIncidents() {
+    return this.db
+      .query<{ record: string }>(
+        "SELECT record FROM reliability_incidents ORDER BY (json_extract(record,'$.status')='open') DESC,id DESC LIMIT 100",
       )
       .map((r) => JSON.parse(r.record));
   }

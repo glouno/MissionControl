@@ -167,3 +167,18 @@ test("daemon failure and foreign resource labels never authorize cleanup or recr
   await assert.rejects(f.manager.reconcile(), /daemon unavailable/);
   assert.equal(f.manager.records()[0].status, "stopping");
 });
+
+test("expired cleanup inspection proves absence without removing retained or foreign resources", async (t) => {
+  const f = await fixture(t);
+  await f.manager.acquire(f.spec);
+  f.calls.length = 0;
+  await assert.rejects(f.manager.inspectAbsent(), /Retained gateway/);
+  assert.ok(f.calls.every((a) => a.includes("inspect")));
+  f.objects.clear();
+  f.calls.length = 0;
+  await f.manager.inspectAbsent();
+  assert.ok(f.calls.every((a) => a.includes("inspect")));
+  assert.equal(f.manager.records()[0].status, "stopped");
+  f.outage();
+  await assert.rejects(f.manager.inspectAbsent(), /daemon unavailable/);
+});

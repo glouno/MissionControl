@@ -96,17 +96,14 @@ export function dashboardSnapshot(
     });
   return {
     goals,
-    incidents: store.reliability.page(
-      "reliability_incidents",
-      undefined,
-      undefined,
-      100,
-    ),
+    incidents: store.reliability.actionableIncidents(),
     inferenceDiagnostics: store.reliability.page(
       "inference_diagnostics",
       undefined,
       undefined,
       100,
+      "",
+      "desc",
     ),
     pauses: Object.fromEntries(
       goals.map((g) => [g.id, store.setting(`pause:${g.id}`) ?? null]),

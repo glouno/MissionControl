@@ -277,6 +277,8 @@ export class Scheduler {
                 "Execution has no meaningful progress; inspect the attempt timeline.",
             }),
             attempt.id,
+            "controller",
+            false,
           );
           this.store.setting(`stall-warning:${attempt.id}`, true);
         }

@@ -333,4 +333,19 @@ export class GatewayNetworkManager {
         await this.stop(record.sessionId, signal);
     }
   }
+  /** Read-only Docker proof after an expired destructive cleanup allowance. */
+  async inspectAbsent(signal?: AbortSignal) {
+    for (const record of this.records()) {
+      this.revoke(record.sessionId);
+      const network = await this.object("network", record.network, signal);
+      const relay = await this.object("container", record.relay, signal);
+      if (network || relay)
+        throw new ControlError(
+          "cleanup_blocked",
+          "Retained gateway resources require operator cleanup",
+          409,
+        );
+      this.save({ ...record, status: "stopped" });
+    }
+  }
 }

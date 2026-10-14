@@ -9,16 +9,23 @@ import { Scheduler } from "./scheduler.js";
 import { FakeBackend } from "./backends.js";
 import { git } from "./git.js";
 import { ProviderFailure, failureRecord } from "./reliability.js";
-async function fixture(t: any) {
+async function fixture(t: any, clock = Date.now) {
   const root = await mkdtemp(join(tmpdir(), "mc-scheduler-faults-")),
     db = new SqliteStore(join(root, "state.db")),
-    store = new ControlStore(db);
+    store = new ControlStore(db, clock);
   store.setting("storage-maintenance-at", Date.now());
   t.after(async () => {
     db.close();
     await rm(root, { recursive: true, force: true });
   });
-  async function goal(name: string) {
+  async function goal(
+    name: string,
+    overrides: {
+      timeoutMs?: number;
+      noProgressWarningMs?: number;
+      noProgressTimeoutMs?: number;
+    } = {},
+  ) {
     const repo = join(root, name);
     await mkdir(repo);
     await git(repo, ["init", "-b", "main"]);
@@ -43,6 +50,7 @@ async function fixture(t: any) {
       timeoutMs: 1000,
       maxCostUsd: 5,
       estimatePerRunUsd: 1,
+      ...overrides,
     });
   }
   return { root, db, store, goal };
@@ -213,3 +221,110 @@ for (const kind of [
     assert.equal(f.store.setting(`pause:${goal.id}`).category, kind);
   });
 }
+
+test("progress warnings preserve native provider authority and recovered tools can infer again", async (t) => {
+  let now = Date.now();
+  const f = await fixture(t, () => now);
+  const goal = await f.goal("warning", {
+    timeoutMs: 1000000,
+    noProgressWarningMs: 1000,
+    noProgressTimeoutMs: 5000,
+  });
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "One",
+          description: "Synthetic",
+          allowedPaths: ["**"],
+          acceptanceCriteria: ["Synthetic"],
+        },
+      ],
+    },
+    goal.revision,
+  );
+  const claim = f.store.claimNextTask("worker", { goalId: goal.id })!;
+  const attemptId = `${claim.task.id}:${claim.generation}`;
+  f.db.exec(
+    `UPDATE control_attempts SET execution_session_id='warning-session' WHERE id='${attemptId}'`,
+  );
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    asynchronousJobs: true,
+    spawnWorkers: false,
+  });
+  t.after(() => scheduler.close());
+  now += 1500;
+  await scheduler.tick();
+  assert.equal(f.store.reliability.runtime(attemptId)!.failure, undefined);
+  assert.ok(f.store.setting(`stall-warning:${attemptId}`));
+  f.store.reliability.progress(attemptId, "tool_completed");
+  const { InferenceGateway } = await import("./inferenceGateway.js");
+  const { once } = await import("node:events");
+  let calls = 0;
+  const gateway = new InferenceGateway(
+    f.db,
+    {
+      synthetic: {
+        protocol: "responses",
+        endpoint: "https://example.invalid",
+        headers: async () => ({}),
+      },
+    },
+    () => {},
+    async () => {
+      calls++;
+      return new Response(
+        'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    },
+  );
+  const server = gateway.server();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+  const token = gateway.issue({
+    sessionId: "warning-session",
+    goalId: goal.id,
+    taskId: claim.task.id,
+    generation: claim.generation,
+    provider: "synthetic",
+    protocol: "responses",
+    model: "synthetic",
+    expiresAt: Date.now() + 60000,
+  });
+  const response = await fetch(
+    `http://127.0.0.1:${(server.address() as any).port}/v1/responses`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ model: "synthetic" }),
+    },
+  );
+  await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+  const runtime = f.store.reliability.runtime(attemptId)!;
+  runtime.failure = failureRecord("rate_limit", {
+    httpStatus: 429,
+    retryAfterMs: 120000,
+  });
+  runtime.nextRetryAt = now + 120000;
+  f.store.reliability.saveRuntime(runtime);
+  f.store.setting(`stall-warning:${attemptId}`, false);
+  now += 1500;
+  await scheduler.tick();
+  assert.deepEqual(
+    f.store.reliability.runtime(attemptId)!.failure,
+    JSON.parse(JSON.stringify(runtime.failure)),
+  );
+  assert.equal(
+    f.store.reliability.runtime(attemptId)!.nextRetryAt,
+    runtime.nextRetryAt,
+  );
+});
