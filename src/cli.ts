@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { abortable } from "./control/reliability.js";
+import { abortable, boundedCleanup } from "./control/reliability.js";
+import { OperationalLog } from "./control/operationalLog.js";
+import { Redactor } from "./privacy.js";
 import { writeSupportBundle } from "./control/supportBundle.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { mkdir, readFile, writeFile, realpath, lstat } from "node:fs/promises";
@@ -957,15 +959,45 @@ export async function main(args = process.argv.slice(2)) {
   throw new Error(`Unsupported v1 command: ${command} ${action ?? ""}`);
 }
 async function serve(config: LoadedConfiguration) {
-  await inspectState(config.settings.stateDir);
-  const unlock = await lockInstance(config.settings.stateDir);
-  const db = new SqliteStore(
-    join(config.settings.stateDir, "mission-control.db"),
-    { mustExist: true },
+  const log = new OperationalLog(
+    join(config.settings.stateDir, "logs", "operations.jsonl"),
+    new Redactor(),
   );
+  let phase = "state_inspection";
+  const lifecycle = (event: string, kind?: string) => {
+    try {
+      log.write(event, { phase, kind });
+    } catch {
+      // A logging fault must be visible without exposing arbitrary error values.
+      console.error(
+        "MissionControl lifecycle diagnostic could not be recorded.",
+      );
+    }
+  };
+  lifecycle("controller_start");
+  let unlock: () => Promise<void>;
+  try {
+    await inspectState(config.settings.stateDir);
+    phase = "controller_lock";
+    unlock = await lockInstance(config.settings.stateDir);
+  } catch (error) {
+    lifecycle("controller_start_failed", "ownership_or_state");
+    throw error;
+  }
+  let db: SqliteStore;
+  try {
+    db = new SqliteStore(join(config.settings.stateDir, "mission-control.db"), {
+      mustExist: true,
+    });
+  } catch (error) {
+    lifecycle("controller_start_failed", "state_open_failed");
+    await unlock();
+    throw error;
+  }
   let runtime: Awaited<ReturnType<typeof createIsolatedRuntime>> | undefined;
   let scheduler: Scheduler | undefined;
   try {
+    phase = "startup_recovery";
     const store = configuredStore(db, () => config);
     config = startupConfiguration(store, config);
     store.fenceStartup();
@@ -1198,8 +1230,11 @@ async function serve(config: LoadedConfiguration) {
       onResult: (...a) => scheduler!.result(...a),
       replayResult: (...a) => scheduler!.replayResult(...a),
     });
+    phase = "api_listen";
     server.listen(config.settings.server.port, "127.0.0.1");
     await once(server, "listening");
+    phase = "running";
+    lifecycle("controller_ready");
     const timer = setInterval(
       () =>
         scheduler!.tick().catch(() =>
@@ -1213,6 +1248,8 @@ async function serve(config: LoadedConfiguration) {
     const stop = async () => {
       if (stopping) return;
       stopping = true;
+      phase = "shutdown";
+      lifecycle("controller_stop");
       clearInterval(timer);
       const limit = AbortSignal.timeout(90000);
       const force = setTimeout(() => process.exit(1), 90000);
@@ -1227,8 +1264,10 @@ async function serve(config: LoadedConfiguration) {
         );
         db.close();
         await unlock();
+        lifecycle("controller_stopped");
         clearTimeout(force);
       } catch {
+        lifecycle("controller_stop_failed", "cleanup_blocked");
         // Keep durable ownership for exact startup recovery; do not release a live controller lock.
         process.exitCode = 1;
       }
@@ -1243,8 +1282,18 @@ async function serve(config: LoadedConfiguration) {
       `MissionControl: http://127.0.0.1:${config.settings.server.port}`,
     );
   } catch (error) {
-    await scheduler?.close();
-    await runtime?.close();
+    lifecycle("controller_start_failed", "startup_failed");
+    try {
+      await boundedCleanup(async (signal) => {
+        if (scheduler) await abortable(scheduler.close(), signal);
+        if (runtime) await abortable(runtime.close(), signal);
+      });
+    } catch {
+      lifecycle("controller_start_cleanup_failed", "cleanup_blocked");
+      // Preserve the lock and durable resource intent. Startup must not hang
+      // indefinitely or release ownership while cleanup callbacks remain live.
+      process.exit(1);
+    }
     db.close();
     await unlock();
     throw error;

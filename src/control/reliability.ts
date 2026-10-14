@@ -327,7 +327,10 @@ export function classifyFailure(
     kind = "deadline";
   else if (/abort|shutdown|interrupt|cancel/i.test(text + raw?.name))
     kind = "interrupted";
-  else if (/incomplete|without.*complet|truncat|duplicate.*complet/i.test(text))
+  else if (
+    code === "protocol" ||
+    /incomplete|without.*complet|truncat|duplicate.*complet/i.test(text)
+  )
     kind = "incomplete_stream";
   else if (/ECONN|ENOTFOUND|socket|fetch failed|network|transport/i.test(text))
     kind = "transport";

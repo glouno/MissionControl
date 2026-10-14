@@ -46,6 +46,14 @@ the database's instance identity against its private identity file. Explicit
 refuses living owners, foreign hosts and mismatched nonces. Inspect the private
 lock file locally for its nonce. Never remove a live controller's lock.
 
+New Linux controller locks also record the kernel boot identity. Startup may recover
+a same-host lock from a different recorded boot, using the same guarded ownership
+checks before reconciling resources. A living PID, same-boot lock, legacy lock without
+boot evidence or foreign host still requires explicit inspection. Startup records
+bounded metadata in the private rotating operational log, including the failed phase;
+it does not log raw configuration, credentials or provider responses. Generated Linux
+services limit repeated failed starts and retain sanitized stderr in the journal.
+
 Add `--complete` to an online backup to pause admissions/mutations and quiesce the
 scheduler before the filesystem snapshot. Work still changing files after the
 bounded drain timeout refuses the backup; pause/drain it and retry. The previous

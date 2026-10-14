@@ -869,9 +869,35 @@ export class Scheduler {
           e.failure,
           (e as any).reliabilityAttemptId,
         );
-        if (e.failure.retryable)
-          this.store.retryJob(String(job.id), e.failure.message);
-        else this.store.deferJob(String(job.id));
+        // Eligible explicit provider rejections already consumed retryProvider's
+        // persisted allowance within this operation. A new job dispatch would
+        // allocate new authority, reset that allowance and replay uncertain POSTs.
+        const current = this.store.getGoal(goal.id);
+        if (
+          !["paused", "completed", "cancelled", "failed"].includes(
+            current.status,
+          )
+        ) {
+          this.store.setGoalState(
+            goal.id,
+            "paused",
+            current.revision,
+            "scheduler",
+            {
+              reason: e.failure.message,
+            },
+          );
+          this.store.setting(`pause:${goal.id}`, {
+            version: 1,
+            actor: "scheduler",
+            category: e.failure.kind,
+            reason: e.failure.message,
+            recordedAt: this.store.clock(),
+            nextAction:
+              "Inspect the failed operation and usage before revision-checked recovery",
+          });
+        }
+        this.store.deferJob(String(job.id));
       } else if (e instanceof HumanWait) {
         this.store.requestGoalHuman(goal.id, e.request);
         this.store.deferJob(String(job.id));

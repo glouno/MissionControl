@@ -174,3 +174,42 @@ test("controller refusal blocks unchanged jobs across restart", async (t) => {
     1,
   );
 });
+
+for (const kind of [
+  "incomplete_stream",
+  "transport",
+  "rate_limit",
+  "service",
+] as const) {
+  test(`controller ${kind} does not allocate fresh inference after failed operation`, async (t) => {
+    const f = await fixture(t),
+      goal = await f.goal(kind);
+    let calls = 0;
+    const backend = () => ({
+      run: async () => {
+        calls++;
+        throw new ProviderFailure(failureRecord(kind));
+      },
+    });
+    const scheduler = new Scheduler(f.store, f.root, "unused", {
+      asynchronousJobs: true,
+      spawnWorkers: false,
+      backend,
+    });
+    await scheduler.tick();
+    await until(() => f.store.getGoal(goal.id).status === "paused");
+    await scheduler.close();
+    // Simulate a due deferred job after restart, without waiting thirty seconds.
+    f.db.exec("UPDATE control_jobs SET due_at=0 WHERE status='pending'");
+    const restarted = new Scheduler(f.store, f.root, "unused", {
+      asynchronousJobs: true,
+      spawnWorkers: false,
+      backend,
+    });
+    t.after(() => restarted.close());
+    for (let i = 0; i < 3; i++) await restarted.tick();
+    assert.equal(calls, 1);
+    assert.equal(f.store.attempts(goal.id).length, 1);
+    assert.equal(f.store.setting(`pause:${goal.id}`).category, kind);
+  });
+}

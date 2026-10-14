@@ -8,7 +8,7 @@ import {
 } from "./reliability.js";
 import { assertObservationsClosed } from "./delivery.js";
 import { effectiveGoal, type LoadedConfiguration } from "../config.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { availableParallelism, totalmem } from "node:os";
 import { projectIdentity, overlapEvidence } from "./projectContext.js";
 import { relative, resolve, dirname, isAbsolute, join } from "node:path";
@@ -1796,7 +1796,7 @@ export class ControlStore {
       const owned = `SELECT id,record FROM (${sessions}) WHERE json_extract(record,'$.spec.operationReservationId')=${sql(attemptId)}`;
       if (
         this.db.one(
-          `SELECT id FROM (${owned}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared') LIMIT 1`,
+          `SELECT id FROM (${owned}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared','checkpointed') LIMIT 1`,
         ) ||
         this.db.one(
           `SELECT session_id FROM gateway_networks WHERE session_id IN (SELECT id FROM (${owned})) AND COALESCE(json_extract(record,'$.status'),'unknown')!='stopped' LIMIT 1`,
@@ -1841,10 +1841,7 @@ export class ControlStore {
           this.reliability.saveRuntime(runtime);
         }
       }
-      if (
-        !failure.retryable &&
-        !["deadline", "interrupted", "incomplete_stream"].includes(failure.kind)
-      ) {
+      if (!failure.retryable) {
         const g = this.getGoal(goalId);
         if (!["completed", "cancelled", "failed", "paused"].includes(g.status))
           this.db.exec(
@@ -1859,10 +1856,20 @@ export class ControlStore {
           recordedAt: this.clock(),
           nextAction: failure.message,
         });
-        this.setting(`provider-block:${goalId}`, {
-          failure,
-          incidentId: incident.id,
-        });
+        // Uncertain execution needs recovery, but is not a deterministic
+        // credential/configuration blocker. Keep those two actions distinct.
+        if (
+          ![
+            "deadline",
+            "interrupted",
+            "incomplete_stream",
+            "cleanup_blocked",
+          ].includes(failure.kind)
+        )
+          this.setting(`provider-block:${goalId}`, {
+            failure,
+            incidentId: incident.id,
+          });
       }
       return incident;
     });
@@ -2231,7 +2238,7 @@ export class ControlStore {
     const sessions = `SELECT id,record FROM sessions WHERE task_id=${sql(task.id)} AND generation=${task.generation} UNION ALL SELECT id,record FROM execution_invocations WHERE (task_id=${sql(task.id)} AND generation=${task.generation}) OR (json_extract(record,'$.spec.taskId')=${sql(task.id)} AND json_extract(record,'$.spec.authorityGeneration')=${task.generation})`;
     if (
       this.db.one(
-        `SELECT id FROM (${sessions}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared') LIMIT 1`,
+        `SELECT id FROM (${sessions}) WHERE json_extract(record,'$.container') IS NOT NULL OR COALESCE(json_extract(record,'$.status'),'unknown') NOT IN ('destroyed','stopped','prepared','checkpointed') LIMIT 1`,
       ) ||
       this.db.one(
         `SELECT session_id FROM gateway_networks WHERE session_id IN (SELECT id FROM (${sessions})) AND COALESCE(json_extract(record,'$.status'),'unknown')!='stopped' LIMIT 1`,
@@ -3238,7 +3245,7 @@ export class ControlStore {
     };
   }
   createToken(actor: string, role: Principal["role"], workerId?: string) {
-    const token = randomUUID() + randomUUID();
+    const token = `mc_token_${randomBytes(32).toString("hex")}`;
     this.redactor.register(token);
     this.db.exec(
       `INSERT INTO control_tokens VALUES(${sql(hash(token))},${sql(actor)},${sql(role)},${sql(workerId)},${role === "worker" ? this.clock() + 86400000 : "NULL"})`,

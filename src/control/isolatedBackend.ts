@@ -136,9 +136,14 @@ export class IsolatedBackend implements AgentBackend {
     let cleanupSignal: AbortSignal | undefined;
     const cleanup = () =>
       (cleanupSignal ??=
-        this.options.cleanupSignal?.(context) ??
-        context.cleanupSignal?.() ??
-        AbortSignal.timeout(60000));
+        failure || context.signal.aborted
+          ? (this.options.cleanupSignal?.(context) ??
+            context.cleanupSignal?.() ??
+            AbortSignal.timeout(60000))
+          : deadlineSignal(
+              Math.min(context.deadlineAt ?? Infinity, Date.now() + 60000),
+              context.signal,
+            ));
     try {
       const contracts = context.claim.goal.config.siblingContracts.length
         ? await prepareContractSnapshot(
@@ -395,6 +400,7 @@ export class IsolatedBackend implements AgentBackend {
         environmentDigest: this.options.imageDigest,
       };
     } catch (error) {
+      failure = error;
       if (config.kind === "codex" && error instanceof Error)
         Object.assign(error, {
           costUsd: undefined,

@@ -286,6 +286,13 @@ export class InferenceGateway {
         usage: any = null,
         complete = false;
       const consume = (event: any) => {
+        if (event.type === "response.incomplete")
+          throw new ProviderFailure(
+            failureRecord("incomplete_stream", {
+              diagnosticId: diagnostic?.id,
+              providerCode: event.response?.incomplete_details?.reason,
+            }),
+          );
         if (event.type === "error" || event.type === "response.failed")
           throw new ProviderFailure(
             classifyFailure(event, undefined, diagnostic?.id),
@@ -337,13 +344,24 @@ export class InferenceGateway {
           while ((boundary = scan.indexOf("\n\n")) >= 0) {
             const frame = scan.slice(0, boundary);
             scan = scan.slice(boundary + 2);
-            for (const line of frame.split("\n"))
-              if (line.startsWith("data: ") && line !== "data: [DONE]")
-                try {
-                  consume(JSON.parse(line.slice(6)));
-                } catch (error) {
-                  if (error instanceof ProviderFailure) throw error;
-                }
+            const data = frame
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trimStart())
+              .join("\n");
+            if (data && data !== "[DONE]") {
+              let event;
+              try {
+                event = JSON.parse(data);
+              } catch {
+                throw new ControlError(
+                  "protocol",
+                  "Upstream inference event was malformed",
+                  502,
+                );
+              }
+              consume(event);
+            }
           }
         }
         if (!res.write(value))
@@ -355,6 +373,12 @@ export class InferenceGateway {
             requestSignal,
           );
       }
+      if (type.includes("text/event-stream") && scan.trim())
+        throw new ControlError(
+          "protocol",
+          "Upstream stream ended with an incomplete event",
+          502,
+        );
       if (!type.includes("text/event-stream")) {
         const data = JSON.parse(scan);
         consume({ type: "response.completed", response: data });

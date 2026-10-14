@@ -97,22 +97,45 @@ export async function inspectState(root: string) {
     db.close();
   }
 }
-export async function lockInstance(root: string) {
+export async function linuxBootId() {
+  if (process.platform !== "linux") return undefined;
+  const value = (
+    await readFile("/proc/sys/kernel/random/boot_id", "utf8").catch(() => "")
+  ).trim();
+  return /^[a-f0-9-]{36}$/.test(value) ? value : undefined;
+}
+export async function lockInstance(root: string, bootId?: string) {
+  bootId ??= await linuxBootId();
   const path = join(root, "controller.lock"),
     nonce = randomUUID();
   if (await lstat(join(root, "lock-recovery.lock")).catch(() => null))
     throw new Error("Instance lock recovery is in progress");
-  // A stale lock is deliberately not removed automatically: PID reuse and
-  // concurrent start races must not grant a second controller authority.
-  const file = await open(path, "wx", 0o600).catch(() => {
-    throw new Error(
-      "Instance is locked; inspect the owner before recovering a stale controller lock",
-    );
-  });
+  let file;
+  try {
+    file = await open(path, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const owner = JSON.parse(await readFile(path, "utf8"));
+    // An explicit previous Linux boot proves that owner's lifetime ended.
+    // Legacy, same-boot and foreign-host locks still require operator inspection.
+    if (
+      !bootId ||
+      !/^[a-f0-9-]{36}$/.test(owner.bootId ?? "") ||
+      owner.bootId === bootId ||
+      owner.hostname !== hostname()
+    )
+      throw new Error(
+        "Instance is locked; inspect the owner before recovering a stale controller lock",
+      );
+    await recoverInstanceLock(root, owner.nonce);
+    // Exclusive create still fences concurrent starters after recovery.
+    file = await open(path, "wx", 0o600);
+  }
   await file.writeFile(
     JSON.stringify({
       pid: process.pid,
       hostname: hostname(),
+      bootId,
       nonce,
       createdAt: new Date().toISOString(),
     }),

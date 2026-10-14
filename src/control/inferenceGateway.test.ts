@@ -9,14 +9,16 @@ import { InferenceGateway } from "./inferenceGateway.js";
 async function fixture(
   t: any,
   protocol: "responses" | "messages" = "responses",
+  stream?: string,
 ) {
   const root = await mkdtemp(join(tmpdir(), "mc-gateway-"));
   const db = new SqliteStore(join(root, "state.db"));
   const calls: any[] = [];
   const upstream =
-    protocol === "responses"
+    stream ??
+    (protocol === "responses"
       ? 'data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":4}}}\n\n'
-      : 'data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}\n\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\ndata: {"type":"message_stop"}\n\n';
+      : 'data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}\n\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\ndata: {"type":"message_stop"}\n\n');
   const gateway = new InferenceGateway(
     db,
     {
@@ -106,6 +108,53 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
     401,
   );
 });
+
+test("gateway accepts valid SSE data without a space and multiline JSON", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data:{"type":"response.completed",\ndata:"response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+  );
+  const response = await fetch(f.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${f.token}` },
+    body: JSON.stringify({ model: f.cap.model }),
+  });
+  assert.equal(await response.text(), f.upstream);
+  const record = JSON.parse(
+    f.db.one<any>("SELECT record FROM inference_usage")!.record,
+  );
+  assert.equal(record.complete, true);
+});
+
+for (const [stream, code] of [
+  [
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+    "max_output_tokens",
+  ],
+  [
+    'data: {malformed}\n\ndata: {"type":"response.completed","response":{}}\n\n',
+    "protocol",
+  ],
+] as const) {
+  test(`gateway preserves incomplete or malformed stream failure (${code})`, async (t) => {
+    const f = await fixture(t, "responses", stream);
+    await fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    })
+      .then((r) => r.text())
+      .catch(() => {});
+    const diagnostic = JSON.parse(
+      f.db.one<any>("SELECT record FROM inference_diagnostics")!.record,
+    );
+    assert.equal(diagnostic.status, "failed");
+    assert.equal(diagnostic.failure.kind, "incomplete_stream");
+    assert.equal(diagnostic.failure.providerCode, code);
+    assert.equal(diagnostic.usageStatus, "unknown");
+  });
+}
 test("unsupported routes, server tools, model changes and expired capabilities never reach provider", async (t) => {
   const f = await fixture(t);
   for (const body of [

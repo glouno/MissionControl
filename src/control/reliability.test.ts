@@ -106,6 +106,53 @@ test("heartbeats cannot extend phase deadline and expired authority cannot check
     /lease/,
   );
 });
+
+test("failed checks release containerless checkpointed execution without fictional cleanup failure", async (t) => {
+  const f = await fixture(t);
+  const record = {
+    id: "synthetic-session",
+    taskId: f.claim.task.id,
+    generation: 1,
+    status: "checkpointed",
+    spec: { taskId: f.claim.task.id, authorityGeneration: 1 },
+  };
+  f.db.exec(
+    `INSERT INTO execution_invocations VALUES('synthetic-session','${f.claim.task.id}',1,'${JSON.stringify(record)}')`,
+  );
+  f.store.transition(f.claim.task.id, "worker", 1, "verifying");
+  const released = f.store.release(
+    f.claim.task.id,
+    "worker",
+    1,
+    "retry_wait",
+    "Task tests failed",
+  );
+  assert.equal(released.status, "retry_wait");
+  assert.equal(f.store.attempts(f.goal.id)[0].outcome, "retry_wait");
+  assert.equal(
+    f.store.reliability.runtime(`${f.claim.task.id}:1`)!.cleanupStartedAt,
+    undefined,
+  );
+});
+
+test("checkpointed status cannot hide retained execution container", async (t) => {
+  const f = await fixture(t);
+  const record = {
+    id: "synthetic-session",
+    taskId: f.claim.task.id,
+    generation: 1,
+    status: "checkpointed",
+    container: "synthetic-owned-container",
+  };
+  f.db.exec(
+    `INSERT INTO execution_invocations VALUES('synthetic-session','${f.claim.task.id}',1,'${JSON.stringify(record)}')`,
+  );
+  assert.throws(
+    () => f.store.release(f.claim.task.id, "worker", 1, "retry_wait", "failed"),
+    /resources|execution/i,
+  );
+  assert.equal(f.store.attempts(f.goal.id)[0].outcome, "active");
+});
 test("result phase has one shared envelope and preserves implementation evidence", async (t) => {
   const f = await fixture(t);
   const start = f.store.reliability.runtime(`${f.claim.task.id}:1`)!;

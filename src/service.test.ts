@@ -10,6 +10,8 @@ test("service definitions quote paths, use separate v1 identity and require expl
   );
   assert.match(linux, /UMask=0077/);
   assert.match(linux, /TimeoutStopSec=90/);
+  assert.match(linux, /StartLimitIntervalSec=300\nStartLimitBurst=5/);
+  assert.match(linux, /StandardError=journal/);
   assert.ok(linux.includes('config with \\"quotes\\" %%'));
   assert.ok(linux.includes("$$HOME"));
   assert.ok(!linux.includes("43190"));

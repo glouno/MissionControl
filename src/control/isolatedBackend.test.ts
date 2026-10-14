@@ -141,6 +141,41 @@ test("isolated coding imports scoped source only after stopping and retains evid
   await b.run(f.context);
   assert.equal(f.registry.all().length, 2);
 });
+
+test("successful isolated invocation does not consume terminal attempt cleanup allowance", async (t) => {
+  const f = await fixture(t, "review");
+  let terminalCleanupCalls = 0;
+  f.context.cleanupSignal = () => {
+    terminalCleanupCalls++;
+    return AbortSignal.abort(
+      new Error("terminal cleanup must not run on success"),
+    );
+  };
+  const result = await f
+    .backend(async () => ({ text: "reviewed", costUsd: 0.1 }))
+    .run(f.context);
+  assert.ok(result.executionSessionId);
+  assert.equal(terminalCleanupCalls, 0);
+  assert.equal(f.registry.get(result.executionSessionId!).container, undefined);
+});
+
+test("failed isolated invocation shares terminal cleanup with its caller", async (t) => {
+  const f = await fixture(t, "review");
+  let terminalCleanupCalls = 0;
+  f.context.cleanupSignal = () => {
+    terminalCleanupCalls++;
+    return new AbortController().signal;
+  };
+  await assert.rejects(
+    f
+      .backend(async () => {
+        throw new Error("synthetic failure");
+      })
+      .run(f.context),
+    /synthetic failure/,
+  );
+  assert.equal(terminalCleanupCalls, 1);
+});
 test("human waits preserve scoped progress and release execution and inference", async (t) => {
   const f = await fixture(t);
   const b = f.backend(async (c: any) => {
