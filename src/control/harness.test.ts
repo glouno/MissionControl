@@ -78,13 +78,15 @@ test("switching requires drained paused work, preserves continuation and fences 
       () => store.switchBackend(g.id, { kind: "claude-code" }, paused.revision),
       /drain/,
     );
-    store.release(
-      claim.task.id,
-      "old",
-      claim.generation,
-      "waiting_provider",
-      "Quota",
-      0.2,
+    store.fenceStartup();
+    store.finishStartupRecovery();
+    const recovery = store.questions().find((q) => q.taskId === claim.task.id)!;
+    store.answer(
+      recovery.id,
+      "inspect",
+      recovery.revision,
+      "test",
+      "Synthetic stopped source inspected",
     );
     const attemptsBeforeSwitch = store.getTask(claim.task.id).attempts;
     const switched = store.switchBackend(
@@ -95,11 +97,14 @@ test("switching requires drained paused work, preserves continuation and fences 
     assert.equal(switched.status, "paused");
     const task = store.getTask(claim.task.id);
     assert.equal(task.status, "pending");
-    assert.deepEqual(task.checkpoint, {
-      commit: "sha",
-      summary: "Durable progress",
-      costUsd: 0.2,
-    });
+    assert.equal(task.checkpoint?.commit, "sha");
+    assert.equal(task.checkpoint?.costUsd, 0.2);
+    assert.match(task.checkpoint!.summary, /^Durable progress/);
+    assert.match(
+      task.checkpoint!.summary,
+      /Synthetic stopped source inspected/,
+    );
+    assert.equal(task.checkpoint?.messages, undefined);
     assert.equal(task.attempts, attemptsBeforeSwitch);
     assert.throws(
       () => store.switchBackend(g.id, { kind: "fake" }, paused.revision),
@@ -488,6 +493,7 @@ test("Codex planning uses final output instead of progress commentary", async ()
     command,
     `#!/usr/bin/env node
 +import {createInterface} from 'node:readline';
++await (await import('node:fs/promises')).writeFile('argv.json',JSON.stringify(process.argv.slice(2)));
 +const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
 +for await (const line of createInterface({input:process.stdin})) {
 +  const m = JSON.parse(line);
@@ -505,7 +511,12 @@ test("Codex planning uses final output instead of progress commentary", async ()
 +`.replace(/^\+/gm, ""),
     { mode: 0o755 },
   );
-  const backend = new CodexBackend({ kind: "codex", command: "codex" });
+  const backend = new CodexBackend({
+    kind: "codex",
+    command: "codex",
+    model: "synthetic-model",
+    reasoningEffort: "low",
+  });
   const output = await backend.run({
     claim: {
       goal: {
@@ -525,9 +536,40 @@ test("Codex planning uses final output instead of progress commentary", async ()
     onCheckpoint: async () => {},
   });
   assert.deepEqual(JSON.parse(output.text), { tasks: [] });
+  const argv: string[] = JSON.parse(
+    await readFile(join(root, "argv.json"), "utf8"),
+  );
+  assert.deepEqual(argv.slice(-3), ["app-server", "--listen", "stdio://"]);
+  const overrides: Record<string, string> = {};
+  for (let index = 0; index < argv.length - 3; index += 2) {
+    assert.equal(argv[index], "--config");
+    const setting = argv[index + 1],
+      separator = setting.indexOf("=");
+    overrides[setting.slice(0, separator)] = setting.slice(separator + 1);
+  }
+  assert.equal(overrides.model, '"synthetic-model"');
+  assert.equal(overrides.model_reasoning_effort, '"low"');
+  assert.equal(overrides.model_provider, '"missioncontrol"');
+  assert.equal(
+    overrides["model_providers.missioncontrol.base_url"],
+    '"http://inference-gateway:8080/v1"',
+  );
+  assert.equal(
+    overrides["model_providers.missioncontrol.env_key"],
+    '"MISSIONCONTROL_INFERENCE_TOKEN"',
+  );
+  assert.equal(
+    overrides["model_providers.missioncontrol.requires_openai_auth"],
+    "false",
+  );
   assert.deepEqual(
     JSON.parse(await readFile(join(root, "turn.json"), "utf8")).outputSchema,
-    { type: "object", properties: { tasks: { type: "array" } } },
+    {
+      type: "object",
+      properties: { tasks: { anyOf: [{ type: "array" }, { type: "null" }] } },
+      required: ["tasks"],
+      additionalProperties: false,
+    },
   );
 });
 test("Codex registers scoped handoff tools and stops on validated owner request", async () => {
@@ -707,6 +749,8 @@ for await (const line of createInterface({input:process.stdin})) {
       signal: AbortSignal.timeout(5000),
       onCheckpoint: async () => {},
     }),
-    /Synthetic terminal failure/,
+    (error: any) =>
+      error.failure?.kind === "unknown" &&
+      !error.message.includes("Synthetic terminal failure"),
   );
 });

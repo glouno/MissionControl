@@ -10,6 +10,7 @@ export const backendSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("codex"),
       model: z.string().optional(),
+      reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
       command: z.literal("codex").default("codex"),
     })
     .strict(),
@@ -100,6 +101,7 @@ export const goalSchema = z
           .string()
           .regex(/^[a-f0-9]{64}$/)
           .optional(),
+        runtimeHashVersion: z.literal(2).optional(),
         runtimeHash: z
           .string()
           .regex(/^[a-f0-9]{64}$/)
@@ -165,6 +167,9 @@ export const goalSchema = z
     executionContract: executionContractSchema.optional(),
     backend: backendSchema.prefault({ kind: "fake" }),
     verificationCommands: z.array(z.string().min(1)).default([]),
+    trustedAdditionalVerificationCommands: z
+      .array(z.string().min(1))
+      .default([]),
     maxCostUsd: z.number().nonnegative().default(0),
     estimatePerRunUsd: z.number().nonnegative().default(0),
     containerNetwork: z.enum(["none", "bridge"]).default("none"),
@@ -175,6 +180,18 @@ export const goalSchema = z
     maxWorkers: z.number().int().min(1).max(4).default(2),
     maxAttempts: z.number().int().min(1).max(10).default(3),
     timeoutMs: z.number().int().min(1000).max(3600000).default(3600000),
+    noProgressWarningMs: z
+      .number()
+      .int()
+      .min(1000)
+      .max(3600000)
+      .default(600000),
+    noProgressTimeoutMs: z
+      .number()
+      .int()
+      .min(1000)
+      .max(3600000)
+      .default(900000),
     maxReplans: z.number().int().min(0).max(10).default(3),
     policy: policySchema.prefault({}),
     scheduledAt: z.string().datetime({ offset: true }).optional(),
@@ -322,6 +339,7 @@ export interface Task {
   result?: unknown;
 }
 export interface Claim {
+  runtime?: import("./reliability.js").AttemptRuntime;
   workspace?: { path: string; branch: string; baseCommit: string };
   task: Task;
   goal: Goal;
@@ -357,6 +375,29 @@ export function validatePlan(input: unknown): TaskSpec[] {
     }
     visiting.delete(key);
     visited.add(key);
+  }
+  for (const task of tasks) {
+    for (const path of task.allowedPaths)
+      if (
+        !path ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        path.split("/").includes("..")
+      )
+        throw new ControlError(
+          "invalid_plan",
+          "Task scope must be repository-relative without traversal",
+        );
+    for (const command of task.verificationCommands)
+      if (
+        /(?:^|[;&|\s])git\s+(?:-[^\s]+\s+)*(?:commit|push|merge|reset|checkout|switch|clean|rebase|cherry-pick)\b|(?:^|[;&|\s])(?:sudo|deploy)\b/.test(
+          command,
+        )
+      )
+        throw new ControlError(
+          "invalid_plan",
+          "Verification commands must not mutate or publish source",
+        );
   }
   tasks.forEach((t) => visit(t.key));
   return tasks;

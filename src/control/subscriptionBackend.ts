@@ -1,3 +1,4 @@
+import { deadlineSignal } from "./reliability.js";
 import { randomUUID } from "node:crypto";
 import type { AgentBackend, BackendResult, RunContext } from "./backend.js";
 import { HumanWait, OwnerWait } from "./backend.js";
@@ -27,6 +28,13 @@ export class SubscriptionBackend implements AgentBackend {
     readonly native: AgentBackend = new SubscriptionNativeBackend(),
   ) {}
   async run(context: RunContext): Promise<BackendResult> {
+    context = {
+      ...context,
+      signal: deadlineSignal(
+        context.deadlineAt ?? Date.now() + context.claim.goal.config.timeoutMs,
+        context.signal,
+      ),
+    };
     const config = context.claim.goal.config;
     const contract = executionContractSchema.parse(config.executionContract);
     validateBackendContract(config.backend, contract);
@@ -54,21 +62,24 @@ export class SubscriptionBackend implements AgentBackend {
     const baseSha = await git(context.workspace, ["rev-parse", "HEAD"]);
     if (await git(context.workspace, ["status", "--porcelain"]))
       throw Error("Checkpoint trusted source before subscription execution");
-    const session = await this.environment.prepare({
-      taskId: context.claim.task.id,
-      generation: Math.max(1, context.claim.generation),
-      invocationId: `${context.mode}_${randomUUID().replaceAll("-", "")}`,
-      goalId: context.claim.goal.id,
-      workerId: context.claim.workerId,
-      authorityGeneration: context.claim.generation,
-      operationReservationId: context.operationReservationId,
-      source: context.workspace,
-      baseSha,
-      image: this.runtime.config.imageDigest,
-      cpu: context.claim.task.spec.cpuUnits,
-      memoryMiB: context.claim.task.spec.memoryMiB,
-      timeoutMs: Math.min(config.timeoutMs, contract.usagePolicy.timeoutMs),
-    });
+    const session = await this.environment.prepare(
+      {
+        taskId: context.claim.task.id,
+        generation: Math.max(1, context.claim.generation),
+        invocationId: `${context.mode}_${randomUUID().replaceAll("-", "")}`,
+        goalId: context.claim.goal.id,
+        workerId: context.claim.workerId,
+        authorityGeneration: context.claim.generation,
+        operationReservationId: context.operationReservationId,
+        source: context.workspace,
+        baseSha,
+        image: this.runtime.config.imageDigest,
+        cpu: context.claim.task.spec.cpuUnits,
+        memoryMiB: context.claim.task.spec.memoryMiB,
+        timeoutMs: Math.min(config.timeoutMs, contract.usagePolicy.timeoutMs),
+      },
+      context.signal,
+    );
     let result: BackendResult | undefined,
       failure: unknown,
       summary: string | undefined;

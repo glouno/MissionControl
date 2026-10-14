@@ -109,6 +109,7 @@ async function fixture(budget = {}) {
     repoPath: repo,
     repository: { mode: "local", branch: "development" },
     backend: { kind: "fake" },
+    trustedAdditionalVerificationCommands: ["test -f a.txt", "test -f b.txt"],
     ...budget,
   });
   store.installPlan(g.id, { tasks: [task("a"), task("b")] }, g.revision);

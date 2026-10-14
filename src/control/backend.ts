@@ -16,6 +16,11 @@ export interface RunContext {
   mode: "implement" | "review" | "plan";
   prompt: string;
   signal: AbortSignal;
+  deadlineAt?: number;
+  // Trusted controller and adapter share one cleanup allowance.
+  cleanupSignal?: () => AbortSignal;
+  executionSessionId?: string;
+  onProgress?: (kind: string) => void;
   // Supplied only by the trusted execution controller, never by a goal payload.
   execution?: NativeExecution;
   operationReservationId?: string;

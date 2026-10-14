@@ -1,3 +1,5 @@
+import { withExecutionDeadline } from "./executionDeadline.js";
+import { classifyFailure, abortable, boundedCleanup } from "./reliability.js";
 import { executionUsage, knownCost, type Usage } from "./usage.js";
 import { ControlClient } from "./client.js";
 import { OwnerWait } from "./backend.js";
@@ -28,7 +30,11 @@ export async function executeClaim(
   }
   const timeout = setTimeout(
     () => abort.abort(new Error("Task timeout")),
-    claim.goal.config.timeoutMs,
+    Math.max(
+      1,
+      (claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs) -
+        Date.now(),
+    ),
   );
   const heartbeat = setInterval(() => {
     client.heartbeat(claim).catch((e) => abort.abort(e));
@@ -36,6 +42,7 @@ export async function executeClaim(
   heartbeat.unref();
   let costUsd: number | undefined;
   let admittedUsage: Usage | undefined;
+  let resultSubmitted = false;
   const checkpoint = async (
     summary: string,
     messages?: any[],
@@ -85,26 +92,65 @@ export async function executeClaim(
       `Candidate-bound operator observations (preserve unresolved failures and address them within scope): ${JSON.stringify(taskContext.observations ?? [])}`,
       "Establish the baseline and environment prerequisites before coding. Preserve required checks. Stop unchanged deterministic setup failures; report the first failure and request a bounded environment repair rather than spending more coding retries. Review invariants across related operations and hostile inputs.",
       `Operator context for this goal: ${JSON.stringify(taskContext.operatorContext ?? [])}`,
+      "Execution protocol: your responsibility is implementation and required checks. When the candidate is ready, return the implementation summary through the normal result protocol. MissionControl then runs a separate independent reviewer against the exact candidate commit and controls integration. Any task criteria requiring independent review or integration are fulfilled by those controller phases. Do not start subagents or request reviewer infrastructure; do not claim that independent review or integration has occurred. Preserve repository-required checks and report any remaining findings.",
     ].join("\n");
-    const result = await backend.run({
-      claim,
-      workspace,
-      mode: "implement",
-      prompt,
-      signal: abort.signal,
-      onCheckpoint: checkpoint,
-      onContinuation: async (summary, messages, pendingTool, usage) => {
-        const prior = await client.request<Task>(`/tasks/${claim.task.id}`);
-        if (usage !== undefined) costUsd = usage;
-        await client.checkpoint(claim, {
-          ...prior.checkpoint,
-          summary,
-          messages,
-          pendingTool,
-          costUsd,
+    const result = await withExecutionDeadline(
+      claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs,
+      abort.signal,
+      async () => {
+        let cleanupSignal: AbortSignal | undefined;
+        const cleanup = () => (cleanupSignal ??= AbortSignal.timeout(60000));
+        const running = backend.run({
+          claim,
+          workspace,
+          mode: "implement",
+          prompt,
+          signal: abort.signal,
+          cleanupSignal: cleanup,
+          deadlineAt: claim.runtime?.deadlineAt,
+          onProgress: (kind) => {
+            void client
+              .request(`/tasks/${claim.task.id}/progress`, "POST", {
+                workerId: claim.workerId,
+                generation: claim.generation,
+                kind,
+              })
+              .catch(() => {});
+          },
+          onCheckpoint: checkpoint,
+          onContinuation: async (summary, messages, pendingTool, usage) => {
+            const prior = await client.request<Task>(`/tasks/${claim.task.id}`);
+            if (usage !== undefined) costUsd = usage;
+            await client.checkpoint(claim, {
+              ...prior.checkpoint,
+              summary,
+              messages,
+              pendingTool,
+              costUsd,
+            });
+          },
         });
+        try {
+          return await abortable(running, abort.signal);
+        } catch (error) {
+          if (abort.signal.aborted)
+            await boundedCleanup(
+              (signal) =>
+                abortable(
+                  running.then(
+                    () => {},
+                    () => {},
+                  ),
+                  signal,
+                ),
+              60000,
+              cleanup(),
+            );
+          throw error;
+        }
       },
-    });
+    );
+    abort.signal.throwIfAborted();
     costUsd = result.costUsd;
     admittedUsage = executionUsage(result, claim.goal.config);
     await checkpoint(result.text);
@@ -120,6 +166,8 @@ export async function executeClaim(
       environmentDigest: result.environmentDigest,
       costStatus: result.costStatus,
     });
+    clearTimeout(timeout);
+    resultSubmitted = true;
     await client.result(claim, {
       commit,
       usage: admittedUsage,
@@ -157,17 +205,18 @@ export async function executeClaim(
       if (e instanceof OwnerWait) await client.operation(claim, e.request);
       else await client.question(claim, e.request);
     } else {
-      const reason = (e as Error).message;
-      const waiting =
-        e instanceof ProviderUnavailable ||
-        /usage.limit|insufficient.quota|rate.limit/i.test(reason);
+      // Once result processing starts, the controller owns verification/integration.
+      // A lost HTTP response is inspected; it never releases or replays uncertain effects.
+      if (resultSubmitted) return;
+      const failure = classifyFailure(e);
       await client
         .release(
           claim,
-          waiting ? "waiting_provider" : "retry_wait",
-          reason,
+          failure.retryable ? "retry_wait" : "blocked",
+          failure.message,
           costUsd,
           admittedUsage,
+          failure,
         )
         .catch(() => {});
     }

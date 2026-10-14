@@ -1,8 +1,11 @@
+import { deadlineSignal, boundedCleanup } from "./reliability.js";
 import { randomUUID } from "node:crypto";
 import type { Claim } from "./schema.js";
 import { ControlError } from "./schema.js";
 import { git } from "./git.js";
 import { sanitizeGit, type ExecutionEnvironment } from "./environments.js";
+import { prepareContractSnapshot } from "./contractSnapshots.js";
+import { join } from "node:path";
 export interface VerificationResult {
   passed: boolean;
   results: {
@@ -30,6 +33,23 @@ export class IsolatedVerifier {
         "Verification requires a pinned image digest",
         409,
       );
+    const deadlineAt =
+      claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs;
+    const signal = deadlineSignal(deadlineAt);
+    const inputs = claim.goal.config.siblingContracts ?? [];
+    if (inputs.length && !this.environment.registry)
+      throw new ControlError(
+        "verification_contract",
+        "Pinned verification contracts require an owned environment registry",
+        409,
+      );
+    const contracts = inputs.length
+      ? await prepareContractSnapshot(
+          join(this.environment.registry!.root, "contract-snapshots"),
+          inputs,
+          signal,
+        )
+      : undefined;
     const commands = [
       ...new Set([
         ...claim.goal.config.verificationCommands,
@@ -49,20 +69,26 @@ export class IsolatedVerifier {
         "Verification requires checkpointed source",
         409,
       );
-    const session = await this.environment.prepare({
-      taskId: claim.task.id,
-      generation: Math.max(1, claim.generation),
-      invocationId: `verify_${randomUUID().replaceAll("-", "")}`,
-      source,
-      baseSha: commit,
-      goalId: claim.goal.id,
-      workerId: claim.workerId,
-      authorityGeneration: claim.generation,
-      image: this.imageDigest,
-      cpu: claim.task.spec.cpuUnits,
-      memoryMiB: claim.task.spec.memoryMiB,
-      timeoutMs: claim.goal.config.timeoutMs,
-    });
+    const session = await this.environment.prepare(
+      {
+        taskId: claim.task.id,
+        generation: Math.max(1, claim.generation),
+        invocationId: `verify_${randomUUID().replaceAll("-", "")}`,
+        source,
+        baseSha: commit,
+        goalId: claim.goal.id,
+        workerId: claim.workerId,
+        authorityGeneration: claim.generation,
+        contractSnapshot: contracts
+          ? { path: contracts.path, digest: contracts.digest }
+          : undefined,
+        image: this.imageDigest,
+        cpu: claim.task.spec.cpuUnits,
+        memoryMiB: claim.task.spec.memoryMiB,
+        timeoutMs: claim.goal.config.timeoutMs,
+      },
+      signal,
+    );
     const results: VerificationResult["results"] = [];
     try {
       for (const command of commands) {
@@ -72,7 +98,7 @@ export class IsolatedVerifier {
         const output = await this.environment.execute(
           session.id,
           ["python3", "-c", code],
-          AbortSignal.timeout(claim.goal.config.timeoutMs),
+          signal,
         );
         const parsed = JSON.parse(output.stdout);
         if (
@@ -87,7 +113,7 @@ export class IsolatedVerifier {
           );
         results.push({ command, ...parsed });
       }
-      await this.environment.checkpoint(session.id);
+      await this.environment.checkpoint(session.id, signal);
       await sanitizeGit(session.path);
       const unchanged =
         (await git(session.path, ["rev-parse", "HEAD"])) === commit &&
@@ -116,7 +142,9 @@ export class IsolatedVerifier {
         });
       return result;
     } finally {
-      await this.environment.reset(session.id);
+      await boundedCleanup((signal) =>
+        this.environment.reset(session.id, signal),
+      );
     }
   }
 }

@@ -1,3 +1,4 @@
+import { nativePrompt } from "./nativePrompt.js";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { terminateProcessTree } from "../util.js";
@@ -132,8 +133,8 @@ export class ClaudeCodeBackend implements AgentBackend {
     p.stdin.on("error", () => {});
     p.stdin.end(
       c.outputSchema
-        ? `${c.prompt}\nReturn the review object directly using the output schema.\n`
-        : `${c.prompt}\nReturn text with the final task result (for review or planning, put the requested JSON in text). Set question to null unless a durable human decision is needed. ${c.mode === "implement" && !c.disableTaskHandoffs ? "For host/infrastructure access, stop work and return ownerOperation with action, scope, reason and a stable idempotencyKey. The controller checkpoints your progress and waits for an owner result; you cannot execute that action. Otherwise set ownerOperation to null." : "Set ownerOperation to null; review/planning cannot request task operations."} Do not claim tests ran: MissionControl runs checks separately.\n`,
+        ? `${nativePrompt(c)}\nReturn the review object directly using the output schema.\n`
+        : `${nativePrompt(c)}\nReturn text with the final task result (for review or planning, put the requested JSON in text). Set question to null unless a durable human decision is needed. ${c.mode === "implement" && !c.disableTaskHandoffs ? "For host/infrastructure access, stop work and return ownerOperation with action, scope, reason and a stable idempotencyKey. The controller checkpoints your progress and waits for an owner result; you cannot execute that action. Otherwise set ownerOperation to null." : "Set ownerOperation to null; review/planning cannot request task operations."} Do not claim tests ran: MissionControl runs checks separately.\n`,
     );
     if (c.signal.aborted) stop();
     try {
