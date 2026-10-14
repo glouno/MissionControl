@@ -136,6 +136,8 @@ export class AzureProvider implements ModelProvider {
       provider: this.providerId,
       endpoint: sanitizedEndpoint(this.config.endpoint),
       model: this.config.model,
+      maxOutputTokens: this.config.maxOutputTokens,
+      reasoningEffort: this.config.reasoningEffort,
       startedAt: Date.now(),
       phase: "authentication",
       status: "active",

@@ -10,6 +10,7 @@ export const backendSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("codex"),
       model: z.string().optional(),
+      reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
       command: z.literal("codex").default("codex"),
     })
     .strict(),

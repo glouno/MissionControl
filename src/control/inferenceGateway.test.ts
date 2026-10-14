@@ -73,6 +73,7 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
       model: f.cap.model,
       input: "hello",
       stream: true,
+      reasoning: { effort: "low" },
       tools: [
         {
           type: "function",
@@ -96,6 +97,11 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
   assert.equal(record.usage.input_tokens, 12);
   assert.equal(record.costUsd, null);
   assert.equal(record.taskId, "task");
+  const diagnostic = JSON.parse(
+    f.db.one<any>("SELECT record FROM inference_diagnostics")!.record,
+  );
+  assert.equal(diagnostic.maxOutputTokens, 32768);
+  assert.equal(diagnostic.reasoningEffort, "low");
   f.gateway.revoke("session");
   assert.equal(
     (

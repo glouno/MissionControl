@@ -149,6 +149,7 @@ export class IsolatedBackend implements AgentBackend {
         ? await prepareContractSnapshot(
             join(this.registry.root, "contract-snapshots"),
             context.claim.goal.config.siblingContracts,
+            context.signal,
           )
         : undefined;
       let gatewayEnv: Record<string, string> = {};
@@ -206,7 +207,7 @@ export class IsolatedBackend implements AgentBackend {
         context.signal,
       );
       if (config.kind === "codex") {
-        const toml = `model = ${JSON.stringify(config.model)}\nmodel_reasoning_effort = "medium"\nmodel_provider = "missioncontrol"\n[model_providers.missioncontrol]\nname = "MissionControl"\nbase_url = "http://inference-gateway:8080/v1"\nwire_api = "responses"\nenv_key = "MISSIONCONTROL_INFERENCE_TOKEN"\nrequires_openai_auth = false\nsupports_websockets = false\n`;
+        const toml = `model = ${JSON.stringify(config.model)}\nmodel_reasoning_effort = ${JSON.stringify(config.reasoningEffort ?? "medium")}\nmodel_provider = "missioncontrol"\n[model_providers.missioncontrol]\nname = "MissionControl"\nbase_url = "http://inference-gateway:8080/v1"\nwire_api = "responses"\nenv_key = "MISSIONCONTROL_INFERENCE_TOKEN"\nrequires_openai_auth = false\nsupports_websockets = false\n`;
         // HOME is disposable tmpfs, separate from the source checkout.
         await this.environment.execute(
           session.id,

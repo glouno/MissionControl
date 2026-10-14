@@ -4,6 +4,8 @@ import type { Claim } from "./schema.js";
 import { ControlError } from "./schema.js";
 import { git } from "./git.js";
 import { sanitizeGit, type ExecutionEnvironment } from "./environments.js";
+import { prepareContractSnapshot } from "./contractSnapshots.js";
+import { join } from "node:path";
 export interface VerificationResult {
   passed: boolean;
   results: {
@@ -34,6 +36,20 @@ export class IsolatedVerifier {
     const deadlineAt =
       claim.runtime?.deadlineAt ?? Date.now() + claim.goal.config.timeoutMs;
     const signal = deadlineSignal(deadlineAt);
+    const inputs = claim.goal.config.siblingContracts ?? [];
+    if (inputs.length && !this.environment.registry)
+      throw new ControlError(
+        "verification_contract",
+        "Pinned verification contracts require an owned environment registry",
+        409,
+      );
+    const contracts = inputs.length
+      ? await prepareContractSnapshot(
+          join(this.environment.registry!.root, "contract-snapshots"),
+          inputs,
+          signal,
+        )
+      : undefined;
     const commands = [
       ...new Set([
         ...claim.goal.config.verificationCommands,
@@ -63,6 +79,9 @@ export class IsolatedVerifier {
         goalId: claim.goal.id,
         workerId: claim.workerId,
         authorityGeneration: claim.generation,
+        contractSnapshot: contracts
+          ? { path: contracts.path, digest: contracts.digest }
+          : undefined,
         image: this.imageDigest,
         cpu: claim.task.spec.cpuUnits,
         memoryMiB: claim.task.spec.memoryMiB,

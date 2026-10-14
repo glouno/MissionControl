@@ -49,7 +49,7 @@ async function fixture(t: any) {
     registry.db.close();
     await rm(root, { recursive: true });
   });
-  return { source, registry, verifier, claim };
+  return { source, registry, verifier, claim, environment };
 }
 test("isolated verification keys evidence to commit/image/commands and releases execution", async (t) => {
   const f = await fixture(t),
@@ -60,6 +60,49 @@ test("isolated verification keys evidence to commit/image/commands and releases 
   assert.equal(result.verifierVersion, "private-source-v1");
   assert.equal(result.results[0].exitCode, 0);
   assert.equal(f.registry.get(result.executionSessionId!).container, undefined);
+});
+
+test("independent checks receive the pinned contract snapshot despite sibling checkout changes", async (t) => {
+  const f = await fixture(t);
+  const revision = await git(f.source, ["rev-parse", "HEAD"]);
+  f.claim.goal.config.siblingContracts = [
+    { repositoryPath: f.source, revision, files: ["base"] },
+  ];
+  f.claim.goal.config.verificationCommands = [
+    "test $(cat /contracts/0/base) = base",
+  ];
+  await writeFile(join(f.source, "base"), "new sibling value\n");
+  await git(f.source, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@localhost",
+    "commit",
+    "-am",
+    "New sibling value",
+  ]);
+  const execute = f.environment.execute.bind(f.environment);
+  f.environment.execute = async (id, command, signal) => {
+    const snapshot = f.registry.get(id).spec.contractSnapshot;
+    assert.ok(snapshot, "verifier must receive the admitted contracts");
+    assert.equal(
+      await readFile(join(snapshot.path, "0/base"), "utf8"),
+      "base\n",
+    );
+    // Fake environments translate the container's immutable mount into its
+    // private host fixture path; real Docker mount coverage is in installed acceptance.
+    return execute(
+      id,
+      command.map((part) => part.replaceAll("/contracts", snapshot.path)),
+      signal,
+    );
+  };
+  const result = await f.verifier.verify(f.claim, f.source);
+  assert.equal(result.passed, true);
+  assert.equal(
+    await readFile(join(f.source, "base"), "utf8"),
+    "new sibling value\n",
+  );
 });
 test("failing checks and source mutation never alter the trusted checkout", async (t) => {
   const f = await fixture(t);

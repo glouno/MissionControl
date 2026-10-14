@@ -87,6 +87,8 @@ export const inferenceDiagnosticSchema = z.object({
   provider: z.string(),
   endpoint: z.string(),
   model: z.string(),
+  maxOutputTokens: z.number().int().min(1).max(32768).optional(),
+  reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   startedAt: timestampSchema,
   endedAt: timestampSchema.optional(),
   durationMs: timestampSchema.optional(),
@@ -158,6 +160,8 @@ export interface InferenceDiagnostic {
   provider: string;
   endpoint: string;
   model: string;
+  maxOutputTokens?: number;
+  reasoningEffort?: "low" | "medium" | "high";
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
@@ -241,7 +245,13 @@ export function failureRecord(
   kind: FailureKind,
   details: Partial<FailureRecord> = {},
 ): FailureRecord {
-  const message = safeDiagnosticText(details.message ?? fallback[kind]);
+  const message = safeDiagnosticText(
+    details.message ??
+      (kind === "incomplete_stream" &&
+      details.providerCode === "max_output_tokens"
+        ? "Provider output token allowance was exhausted; inspect the admitted reasoning and output limits before recovering this operation. Usage remains uncertain."
+        : fallback[kind]),
+  );
   const providerCode =
     details.providerCode &&
     /^[a-zA-Z0-9_.:-]{1,128}$/.test(details.providerCode)

@@ -222,6 +222,12 @@ export class InferenceGateway {
         sessionId,
         provider: capability.provider,
         model: capability.model,
+        maxOutputTokens: body.max_output_tokens ?? body.max_tokens,
+        reasoningEffort: ["low", "medium", "high"].includes(
+          body.reasoning?.effort,
+        )
+          ? body.reasoning.effort
+          : undefined,
         endpoint: sanitizedEndpoint(upstream.endpoint),
         startedAt: this.clock(),
         phase: "authentication",

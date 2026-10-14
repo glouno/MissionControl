@@ -103,7 +103,17 @@ async function fixture(t: any, mode: "implement" | "review" = "implement") {
     db.close();
     await rm(root, { recursive: true });
   });
-  return { context, registry, env, db, source, stopped, checkpoints, backend };
+  return {
+    context,
+    registry,
+    env,
+    db,
+    source,
+    stopped,
+    checkpoints,
+    backend,
+    gateway,
+  };
 }
 test("isolated coding imports scoped source only after stopping and retains evidence for recovery", async (t) => {
   const f = await fixture(t);
@@ -157,6 +167,27 @@ test("successful isolated invocation does not consume terminal attempt cleanup a
   assert.ok(result.executionSessionId);
   assert.equal(terminalCleanupCalls, 0);
   assert.equal(f.registry.get(result.executionSessionId!).container, undefined);
+});
+
+test("isolated Codex configuration honors admitted reasoning effort", async (t) => {
+  const f = await fixture(t, "review");
+  f.context.claim.goal.config.backend = {
+    kind: "codex",
+    model: "synthetic",
+    reasoningEffort: "low",
+  };
+  f.gateway.upstreams.fixture.protocol = "responses";
+  let toml = "";
+  f.env.execute = async (_id, command) => {
+    const encoded = command[2].match(/write_text\((.*)\)$/)![1];
+    toml = JSON.parse(encoded);
+    return { stdout: "", stderr: "" };
+  };
+  await f
+    .backend(async () => ({ text: "reviewed", costUsd: 0.1 }))
+    .run(f.context);
+  assert.match(toml, /model_reasoning_effort = "low"/);
+  assert.match(toml, /model_provider = "missioncontrol"/);
 });
 
 test("failed isolated invocation shares terminal cleanup with its caller", async (t) => {

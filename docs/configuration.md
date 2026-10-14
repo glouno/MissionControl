@@ -17,6 +17,13 @@ repositories, checks, models or publication policy. Credential values are not
 configuration fields: use `{ "kind": "file", "path": "credential-name" }` or an
 explicit environment reference. Secret files must be private regular files.
 
+Isolated Codex gateway execution accepts optional backend `reasoningEffort` values
+`low`, `medium` and `high`; omission preserves `medium`. The selected value is part
+of the admitted runtime binding. Inference diagnostics record the effective reasoning
+effort and output token limit, and distinguish token-limit exhaustion from transport
+truncation. Independent verification mounts the same pinned sibling contracts as
+worker execution; moving a sibling branch does not substitute different contract bytes.
+
 `config validate` reads configuration without changing state. `config apply`
 requires an authenticated running controller. Changed projects and prompts are
 activated explicitly and future goals record the new hash; admitted goals keep
