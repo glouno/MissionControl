@@ -1149,6 +1149,15 @@ export class ControlStore {
     const specs = validatePlan(input);
     return this.db.transaction(() => {
       const g = this.getGoal(goalId);
+      if (
+        this.setting(`provider-block:${goalId}`) ||
+        this.setting(`replaced-by:${goalId}`)
+      )
+        throw new ControlError(
+          "provider_blocked",
+          "Resolve retained authority through inspected recovery or replacement before installing a plan",
+          409,
+        );
       for (const spec of specs) {
         if (
           g.config.policy.approvedPaths.length &&
@@ -1317,6 +1326,11 @@ export class ControlStore {
       for (const row of candidates) {
         const task = this.getTask(String(row.id)),
           goal = this.getGoal(task.goalId);
+        if (
+          this.setting(`provider-block:${goal.id}`) ||
+          this.setting(`replaced-by:${goal.id}`)
+        )
+          continue;
         if (
           task.workerId ||
           this.db.one(

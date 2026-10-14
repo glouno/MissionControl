@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "../sqlite.js";
+import { SqliteStore, sql } from "../sqlite.js";
 import { ControlStore } from "./store.js";
 import {
   ProviderFailure,
@@ -284,6 +284,39 @@ test("provider refusal pauses once, survives restart and generic resume cannot b
   assert.throws(
     () => restarted.setGoalState(g.id, "running", g.revision, "operator"),
     /provider blocker/,
+  );
+  assert.throws(
+    () =>
+      restarted.installPlan(
+        g.id,
+        { tasks: [f.claim.task.spec] },
+        g.revision,
+        "operator",
+      ),
+    /inspected recovery or replacement/,
+  );
+  assert.equal(restarted.getGoal(g.id).status, "paused");
+
+  // Historical or malformed running state must not grant fresh execution while
+  // the durable blocker remains, even when its task otherwise qualifies.
+  const legacy = restarted.createGoal({
+    title: "Synthetic legacy blocker",
+    description: "Synthetic",
+    repoPath: join(f.root, "independent"),
+    backend: { kind: "fake" },
+  });
+  restarted.installPlan(
+    legacy.id,
+    { tasks: [f.claim.task.spec] },
+    legacy.revision,
+  );
+  restarted.recordFailure(legacy.id, fail);
+  f.db.exec(
+    `UPDATE control_goals SET status='running' WHERE id=${sql(legacy.id)}`,
+  );
+  assert.equal(
+    restarted.claimNextTask("independent-worker", { goalId: legacy.id }),
+    null,
   );
 });
 test("cleanup timeout returns bounded failure and retains worker resource ownership", async (t) => {
