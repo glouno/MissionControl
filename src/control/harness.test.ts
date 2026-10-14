@@ -493,6 +493,7 @@ test("Codex planning uses final output instead of progress commentary", async ()
     command,
     `#!/usr/bin/env node
 +import {createInterface} from 'node:readline';
++await (await import('node:fs/promises')).writeFile('argv.json',JSON.stringify(process.argv.slice(2)));
 +const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
 +for await (const line of createInterface({input:process.stdin})) {
 +  const m = JSON.parse(line);
@@ -510,7 +511,12 @@ test("Codex planning uses final output instead of progress commentary", async ()
 +`.replace(/^\+/gm, ""),
     { mode: 0o755 },
   );
-  const backend = new CodexBackend({ kind: "codex", command: "codex" });
+  const backend = new CodexBackend({
+    kind: "codex",
+    command: "codex",
+    model: "synthetic-model",
+    reasoningEffort: "low",
+  });
   const output = await backend.run({
     claim: {
       goal: {
@@ -530,6 +536,32 @@ test("Codex planning uses final output instead of progress commentary", async ()
     onCheckpoint: async () => {},
   });
   assert.deepEqual(JSON.parse(output.text), { tasks: [] });
+  const argv: string[] = JSON.parse(
+    await readFile(join(root, "argv.json"), "utf8"),
+  );
+  assert.deepEqual(argv.slice(-3), ["app-server", "--listen", "stdio://"]);
+  const overrides: Record<string, string> = {};
+  for (let index = 0; index < argv.length - 3; index += 2) {
+    assert.equal(argv[index], "--config");
+    const setting = argv[index + 1],
+      separator = setting.indexOf("=");
+    overrides[setting.slice(0, separator)] = setting.slice(separator + 1);
+  }
+  assert.equal(overrides.model, '"synthetic-model"');
+  assert.equal(overrides.model_reasoning_effort, '"low"');
+  assert.equal(overrides.model_provider, '"missioncontrol"');
+  assert.equal(
+    overrides["model_providers.missioncontrol.base_url"],
+    '"http://inference-gateway:8080/v1"',
+  );
+  assert.equal(
+    overrides["model_providers.missioncontrol.env_key"],
+    '"MISSIONCONTROL_INFERENCE_TOKEN"',
+  );
+  assert.equal(
+    overrides["model_providers.missioncontrol.requires_openai_auth"],
+    "false",
+  );
   assert.deepEqual(
     JSON.parse(await readFile(join(root, "turn.json"), "utf8")).outputSchema,
     {

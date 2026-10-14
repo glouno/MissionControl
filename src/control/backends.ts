@@ -478,7 +478,26 @@ export class CodexBackend implements AgentBackend {
       throw new Error(
         "Codex requires controller-supplied isolated execution; host fallback is disabled",
       );
+    // Repository .codex/config.toml outranks HOME defaults. Runtime authority must
+    // therefore be supplied at CLI precedence, without putting token values in argv.
+    const settings: Record<string, string | boolean> = {
+      model_provider: "missioncontrol",
+      model_reasoning_effort: this.config.reasoningEffort ?? "medium",
+      "model_providers.missioncontrol.name": "MissionControl",
+      "model_providers.missioncontrol.base_url":
+        "http://inference-gateway:8080/v1",
+      "model_providers.missioncontrol.wire_api": "responses",
+      "model_providers.missioncontrol.env_key":
+        "MISSIONCONTROL_INFERENCE_TOKEN",
+      "model_providers.missioncontrol.requires_openai_auth": false,
+      "model_providers.missioncontrol.supports_websockets": false,
+      ...(this.config.model ? { model: this.config.model } : {}),
+    };
     const p = c.execution.spawn(this.config.command, [
+      ...Object.entries(settings).flatMap(([key, value]) => [
+        "--config",
+        `${key}=${JSON.stringify(value)}`,
+      ]),
       "app-server",
       "--listen",
       "stdio://",
