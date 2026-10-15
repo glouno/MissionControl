@@ -1,9 +1,10 @@
+import { sharedGatewayUpstream } from "./sharedGateway.js";
 import { inferenceHttpFetch } from "./inferenceHttp.js";
 import { assertSubscriptionQualification } from "./subscriptionQualification.js";
 import { reconcileRuntime } from "./runtimeRecovery.js";
 import { join } from "node:path";
 import { once } from "node:events";
-import { AzureCliCredential } from "@azure/identity";
+import { AzureCliCredential, ManagedIdentityCredential } from "@azure/identity";
 import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import {
   AzureProvider,
@@ -71,6 +72,17 @@ export const isolatedRuntimeSchema = z
             endpoint: z.string().url(),
             model: z.string().min(1),
             authentication: z.discriminatedUnion("kind", [
+              z
+                .object({
+                  kind: z.literal("shared-gateway"),
+                  audience: z.string().uuid(),
+                  identityClientId: z.string().uuid(),
+                  issuer: z.string().min(1),
+                  signerKid: z.string().min(1),
+                  signer: secretReferenceSchema,
+                  actorId: z.string().min(1).max(120),
+                })
+                .strict(),
               z.object({ kind: z.literal("azure-cli") }).strict(),
               z
                 .object({
@@ -280,7 +292,11 @@ export async function createIsolatedRuntime(
           throw new Error(
             "Azure requires fixed credential-free HTTPS endpoint",
           );
-        portableProviders[name] = new AzureProvider(b, inferenceHttpFetch, headers);
+        portableProviders[name] = new AzureProvider(
+          b,
+          inferenceHttpFetch,
+          headers,
+        );
       } else if (b.kind === "bedrock") {
         if (!secretsDir || p.authentication.kind !== "aws-session")
           throw new Error(
@@ -306,6 +322,34 @@ export async function createIsolatedRuntime(
       continue;
     }
 
+    if (p.authentication.kind === "shared-gateway") {
+      if (!secretsDir || p.protocol !== "responses")
+        throw new Error(
+          "Shared gateway requires Responses and an explicit controller secrets root",
+        );
+      const auth = p.authentication;
+      const signerKey = await readSecret(auth.signer, secretsDir);
+      store.redactor.register(signerKey);
+      const credential = new ManagedIdentityCredential({
+        clientId: auth.identityClientId,
+      });
+      upstreams[name] = sharedGatewayUpstream({
+        endpoint: p.endpoint,
+        issuer: auth.issuer,
+        signerKid: auth.signerKid,
+        signerKey,
+        actorId: auth.actorId,
+        workloadToken: async () => {
+          const result = await credential.getToken(
+            `api://${auth.audience}/.default`,
+          );
+          if (!result)
+            throw new Error("Gateway workload authentication unavailable");
+          return result.token;
+        },
+      });
+      continue;
+    }
     let headers: () => Promise<Record<string, string>>;
     if (p.authentication.kind === "azure-cli") {
       const credential = new AzureCliCredential();
