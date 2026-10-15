@@ -23,6 +23,10 @@ export interface TrustedUpstream {
   endpoint: string;
   headers: () => Promise<Record<string, string>>;
   allowedBetaHeaders?: string[];
+  requestHeaders?: (input: {
+    body: string;
+    capability: InferenceCapability;
+  }) => Promise<Record<string, string>>;
 }
 const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
@@ -189,7 +193,10 @@ export class InferenceGateway {
         );
       if (capability.protocol === "responses") body.store = false;
       const upstream = this.upstreams[capability.provider];
-      const trustedHeaders = await upstream.headers();
+      const encodedBody = JSON.stringify(body);
+      const trustedHeaders = upstream.requestHeaders
+        ? await upstream.requestHeaders({ body: encodedBody, capability })
+        : await upstream.headers();
       const headers: Record<string, string> = {
         "content-type": "application/json",
         ...trustedHeaders,
@@ -215,13 +222,15 @@ export class InferenceGateway {
       const response = await this.fetcher(upstream.endpoint, {
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body: encodedBody,
         redirect: "error",
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(3600000)]),
       });
       if (!response.ok) {
         this.usage(tokenHash, {
           ...capability,
+          gatewayAttemptId: response.headers.get("x-gateway-attempt-id"),
+          accountingAuthority: upstream.requestHeaders ? "gateway" : "upstream",
           status: response.status,
           usage: null,
           costUsd: null,
@@ -297,6 +306,8 @@ export class InferenceGateway {
         );
       this.usage(tokenHash, {
         ...capability,
+        gatewayAttemptId: response.headers.get("x-gateway-attempt-id"),
+        accountingAuthority: upstream.requestHeaders ? "gateway" : "upstream",
         status: 200,
         usage,
         costUsd: null,
