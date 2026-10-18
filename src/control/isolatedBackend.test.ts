@@ -103,7 +103,17 @@ async function fixture(t: any, mode: "implement" | "review" = "implement") {
     db.close();
     await rm(root, { recursive: true });
   });
-  return { context, registry, env, db, source, stopped, checkpoints, backend };
+  return {
+    context,
+    registry,
+    env,
+    db,
+    source,
+    stopped,
+    checkpoints,
+    backend,
+    gateway,
+  };
 }
 test("isolated coding imports scoped source only after stopping and retains evidence for recovery", async (t) => {
   const f = await fixture(t);
@@ -140,6 +150,62 @@ test("isolated coding imports scoped source only after stopping and retains evid
   ]);
   await b.run(f.context);
   assert.equal(f.registry.all().length, 2);
+});
+
+test("successful isolated invocation does not consume terminal attempt cleanup allowance", async (t) => {
+  const f = await fixture(t, "review");
+  let terminalCleanupCalls = 0;
+  f.context.cleanupSignal = () => {
+    terminalCleanupCalls++;
+    return AbortSignal.abort(
+      new Error("terminal cleanup must not run on success"),
+    );
+  };
+  const result = await f
+    .backend(async () => ({ text: "reviewed", costUsd: 0.1 }))
+    .run(f.context);
+  assert.ok(result.executionSessionId);
+  assert.equal(terminalCleanupCalls, 0);
+  assert.equal(f.registry.get(result.executionSessionId!).container, undefined);
+});
+
+test("isolated Codex configuration honors admitted reasoning effort", async (t) => {
+  const f = await fixture(t, "review");
+  f.context.claim.goal.config.backend = {
+    kind: "codex",
+    model: "synthetic",
+    reasoningEffort: "low",
+  };
+  f.gateway.upstreams.fixture.protocol = "responses";
+  let toml = "";
+  f.env.execute = async (_id, command) => {
+    const encoded = command[2].match(/write_text\((.*)\)$/)![1];
+    toml = JSON.parse(encoded);
+    return { stdout: "", stderr: "" };
+  };
+  await f
+    .backend(async () => ({ text: "reviewed", costUsd: 0.1 }))
+    .run(f.context);
+  assert.match(toml, /model_reasoning_effort = "low"/);
+  assert.match(toml, /model_provider = "missioncontrol"/);
+});
+
+test("failed isolated invocation shares terminal cleanup with its caller", async (t) => {
+  const f = await fixture(t, "review");
+  let terminalCleanupCalls = 0;
+  f.context.cleanupSignal = () => {
+    terminalCleanupCalls++;
+    return new AbortController().signal;
+  };
+  await assert.rejects(
+    f
+      .backend(async () => {
+        throw new Error("synthetic failure");
+      })
+      .run(f.context),
+    /synthetic failure/,
+  );
+  assert.equal(terminalCleanupCalls, 1);
 });
 test("human waits preserve scoped progress and release execution and inference", async (t) => {
   const f = await fixture(t);

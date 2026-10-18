@@ -6,17 +6,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteStore } from "../sqlite.js";
 import { InferenceGateway } from "./inferenceGateway.js";
+import { ReliabilityStore } from "./reliability.js";
 async function fixture(
   t: any,
   protocol: "responses" | "messages" = "responses",
+  stream?: string,
+  rejection?: number,
 ) {
   const root = await mkdtemp(join(tmpdir(), "mc-gateway-"));
   const db = new SqliteStore(join(root, "state.db"));
   const calls: any[] = [];
   const upstream =
-    protocol === "responses"
+    stream ??
+    (protocol === "responses"
       ? 'data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":4}}}\n\n'
-      : 'data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}\n\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\ndata: {"type":"message_stop"}\n\n';
+      : 'data: {"type":"message_start","message":{"usage":{"input_tokens":12}}}\n\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\ndata: {"type":"message_stop"}\n\n');
   const gateway = new InferenceGateway(
     db,
     {
@@ -31,9 +35,24 @@ async function fixture(
     },
     async (url, options) => {
       calls.push({ url, options });
-      return new Response(upstream, {
-        headers: { "content-type": "text/event-stream" },
-      });
+      return new Response(
+        rejection
+          ? JSON.stringify({
+              error: {
+                code:
+                  rejection === 429
+                    ? "rate_limit_exceeded"
+                    : "ResponsibleAIPolicyViolation",
+              },
+            })
+          : upstream,
+        {
+          status: rejection ?? 200,
+          headers: rejection
+            ? { "content-type": "application/json", "retry-after": "120" }
+            : { "content-type": "text/event-stream" },
+        },
+      );
     },
   );
   const server = gateway.server();
@@ -58,6 +77,109 @@ async function fixture(
     url = `http://127.0.0.1:${(server.address() as any).port}/v1/${protocol}`;
   return { db, gateway, calls, token, url, cap, upstream };
 }
+test("native gateway persists three-retry authority and Retry-After across restart", async (t) => {
+  const f = await fixture(t, "responses", undefined, 429);
+  f.db.exec(
+    "CREATE TABLE control_goals(id TEXT PRIMARY KEY); INSERT INTO control_goals VALUES('goal'); CREATE TABLE control_attempts(id TEXT PRIMARY KEY, execution_session_id TEXT,outcome TEXT); INSERT INTO control_attempts VALUES('attempt','session','active');",
+  );
+  const reliability = new ReliabilityStore(f.db);
+  reliability.start("attempt", 1000000, "implement");
+  const send = async (url = f.url) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    });
+    await response.text();
+    return response.status;
+  };
+  assert.equal(await send(), 429);
+  const first = reliability.runtime("attempt")!;
+  assert.equal(first.retryCount, 0);
+  assert.equal(first.failure?.retryAfterMs, 120000);
+  assert.ok(first.nextRetryAt! >= Date.now() + 119000);
+  // Recreate the gateway over persisted state; advancing the saved admission
+  // instant avoids real backoff delays while exercising the authoritative gate.
+  const restarted = new InferenceGateway(
+    f.db,
+    f.gateway.upstreams,
+    () => {},
+    f.gateway.fetcher,
+  );
+  const server = restarted.server();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+  const url = `http://127.0.0.1:${(server.address() as any).port}/v1/responses`;
+  for (let i = 0; i < 3; i++) {
+    const runtime = reliability.runtime("attempt")!;
+    runtime.nextRetryAt = Date.now() - 1;
+    reliability.saveRuntime(runtime);
+    assert.equal(await send(url), 429);
+  }
+  assert.equal(await send(url), 400);
+  assert.equal(f.calls.length, 4);
+  assert.equal(reliability.runtime("attempt")!.retryCount, 3);
+});
+for (const refusal of [403, 200]) {
+  test(`native gateway blocks repeated policy refusal (${refusal})`, async (t) => {
+    const f = await fixture(
+      t,
+      "responses",
+      'data: {"type":"response.refusal.delta","delta":"Synthetic refusal"}\n\n',
+      refusal === 403 ? 403 : undefined,
+    );
+    for (let i = 0; i < 2; i++)
+      await fetch(f.url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${f.token}` },
+        body: JSON.stringify({ model: f.cap.model }),
+      })
+        .then((r) => r.text())
+        .catch(() => {});
+    assert.equal(f.calls.length, 1);
+  });
+}
+test("native gateway serializes concurrent requests while provider headers stall", async (t) => {
+  const f = await fixture(t);
+  let entered!: () => void;
+  const ready = new Promise<void>((r) => (entered = r));
+  const gateway = new InferenceGateway(
+    f.db,
+    f.gateway.upstreams,
+    () => {},
+    async () => {
+      entered();
+      return new Promise(() => {});
+    },
+  );
+  const server = gateway.server();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+  const url = `http://127.0.0.1:${(server.address() as any).port}/v1/responses`;
+  const request = () =>
+    fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    });
+  const first = request()
+    .then((r) => r.text())
+    .catch(() => {});
+  await ready;
+  const busy = await request();
+  assert.equal(busy.status, 409);
+  await busy.text();
+  gateway.revoke("session");
+  await first;
+});
 test("gateway pins upstream/model, strips worker credentials and preserves streamed Responses usage", async (t) => {
   const f = await fixture(t);
   const response = await fetch(f.url, {
@@ -71,6 +193,7 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
       model: f.cap.model,
       input: "hello",
       stream: true,
+      reasoning: { effort: "low" },
       tools: [
         {
           type: "function",
@@ -94,6 +217,11 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
   assert.equal(record.usage.input_tokens, 12);
   assert.equal(record.costUsd, null);
   assert.equal(record.taskId, "task");
+  const diagnostic = JSON.parse(
+    f.db.one<any>("SELECT record FROM inference_diagnostics")!.record,
+  );
+  assert.equal(diagnostic.maxOutputTokens, 32768);
+  assert.equal(diagnostic.reasoningEffort, "low");
   f.gateway.revoke("session");
   assert.equal(
     (
@@ -106,6 +234,53 @@ test("gateway pins upstream/model, strips worker credentials and preserves strea
     401,
   );
 });
+
+test("gateway accepts valid SSE data without a space and multiline JSON", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data:{"type":"response.completed",\ndata:"response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+  );
+  const response = await fetch(f.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${f.token}` },
+    body: JSON.stringify({ model: f.cap.model }),
+  });
+  assert.equal(await response.text(), f.upstream);
+  const record = JSON.parse(
+    f.db.one<any>("SELECT record FROM inference_usage")!.record,
+  );
+  assert.equal(record.complete, true);
+});
+
+for (const [stream, code] of [
+  [
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+    "max_output_tokens",
+  ],
+  [
+    'data: {malformed}\n\ndata: {"type":"response.completed","response":{}}\n\n',
+    "protocol",
+  ],
+] as const) {
+  test(`gateway preserves incomplete or malformed stream failure (${code})`, async (t) => {
+    const f = await fixture(t, "responses", stream);
+    await fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    })
+      .then((r) => r.text())
+      .catch(() => {});
+    const diagnostic = JSON.parse(
+      f.db.one<any>("SELECT record FROM inference_diagnostics")!.record,
+    );
+    assert.equal(diagnostic.status, "failed");
+    assert.equal(diagnostic.failure.kind, "incomplete_stream");
+    assert.equal(diagnostic.failure.providerCode, code);
+    assert.equal(diagnostic.usageStatus, "unknown");
+  });
+}
 test("unsupported routes, server tools, model changes and expired capabilities never reach provider", async (t) => {
   const f = await fixture(t);
   for (const body of [
@@ -226,3 +401,73 @@ test("revocation aborts an in-flight provider request without waiting for anothe
   assert.equal((await response).status, 502);
   assert.equal(upstreamAborted, true);
 });
+
+test("native gateway never replays an uncertain stream or unresolved request after restart", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}\n\n',
+  );
+  const request = () =>
+    fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    })
+      .then((r) => r.text())
+      .catch(() => {});
+  await request();
+  await request();
+  assert.equal(f.calls.length, 1);
+  // An active durable boundary left by a vanished gateway is uncertain even
+  // without a runtime failure. New gateway ownership cannot replay that POST.
+  const f2 = await fixture(t);
+  const reliability = new ReliabilityStore(f2.db);
+  reliability.diagnostic({
+    version: 1,
+    id: "prior-active",
+    sessionId: "session",
+    provider: "synthetic",
+    model: "synthetic",
+    endpoint: "https://example.invalid",
+    startedAt: Date.now(),
+    phase: "headers",
+    status: "active",
+  });
+  const response = await fetch(f2.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${f2.token}` },
+    body: JSON.stringify({ model: f2.cap.model }),
+  });
+  await response.text();
+  assert.equal(response.status, 400);
+  assert.equal(f2.calls.length, 0);
+});
+
+for (const stream of [
+  "data: {malformed}\n\n",
+  ": keepalive\n\n",
+  'data: {"type":"response.output_text.delta","delta":"partial"}\n\n',
+]) {
+  test("native runtime fences uncertain malformed/incomplete POST before another request", async (t) => {
+    const f = await fixture(t, "responses", stream);
+    f.db.exec(
+      "CREATE TABLE control_goals(id TEXT PRIMARY KEY); INSERT INTO control_goals VALUES('goal'); CREATE TABLE control_attempts(id TEXT PRIMARY KEY,execution_session_id TEXT,outcome TEXT); INSERT INTO control_attempts VALUES('attempt','session','active');",
+    );
+    const reliability = new ReliabilityStore(f.db);
+    reliability.start("attempt", 60000, "implement");
+    for (let i = 0; i < 2; i++)
+      await fetch(f.url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${f.token}` },
+        body: JSON.stringify({ model: f.cap.model }),
+      })
+        .then((r) => r.text())
+        .catch(() => {});
+    assert.equal(f.calls.length, 1);
+    assert.equal(
+      reliability.runtime("attempt")!.failure!.kind,
+      "incomplete_stream",
+    );
+  });
+}

@@ -48,6 +48,7 @@ export function safeContractPath(path: string) {
 export async function prepareContractSnapshot(
   root: string,
   inputs: SnapshotInput[],
+  signal?: AbortSignal,
 ): Promise<ContractSnapshot> {
   if (inputs.length > 10)
     throw new ControlError("context_limit", "Too many sibling contracts", 409);
@@ -69,13 +70,11 @@ export async function prepareContractSnapshot(
       safeContractPath(file);
       // Only ordinary blobs: never dereference a committed symlink or submodule.
       const entry = (
-        await git(input.repositoryPath, [
-          "ls-tree",
-          "-z",
-          input.revision,
-          "--",
-          file,
-        ])
+        await git(
+          input.repositoryPath,
+          ["ls-tree", "-z", input.revision, "--", file],
+          signal,
+        )
       )
         .split("\0")
         .filter(Boolean);
@@ -93,7 +92,7 @@ export async function prepareContractSnapshot(
       const oid = entry[0].split(" ")[2].split("\t")[0];
       // Check size before requesting content from the trusted Git wrapper.
       const bytes = Number(
-        await git(input.repositoryPath, ["cat-file", "-s", oid]),
+        await git(input.repositoryPath, ["cat-file", "-s", oid], signal),
       );
       total += bytes;
       if (!Number.isSafeInteger(bytes) || bytes < 0 || total > 1024 * 1024)
@@ -113,7 +112,12 @@ export async function prepareContractSnapshot(
             "blob",
             oid,
           ],
-          { cwd: input.repositoryPath, maxBuffer: 1024 * 1024, timeout: 60000 },
+          {
+            cwd: input.repositoryPath,
+            maxBuffer: 1024 * 1024,
+            timeout: 60000,
+            signal,
+          },
         )
       ).stdout;
       const path = `${index}/${file}`;

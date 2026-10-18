@@ -1,3 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  ReliabilityStore,
+  ProviderFailure,
+  classifyFailure,
+  failureRecord,
+  requestIds,
+  sanitizedEndpoint,
+  abortable,
+  boundedErrorBody,
+  deadlineSignal,
+  type InferenceDiagnostic,
+} from "./reliability.js";
 import { inferenceHttpFetch } from "./inferenceHttp.js";
 import {
   createServer,
@@ -28,6 +42,7 @@ const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export class InferenceGateway {
   private readonly activeRequests = new Map<string, Set<AbortController>>();
+  private readonly admittedRequests = new Set<string>();
   constructor(
     readonly db: SqliteStore,
     readonly upstreams: Record<string, TrustedUpstream>,
@@ -38,6 +53,7 @@ export class InferenceGateway {
     db.exec(
       "CREATE TABLE IF NOT EXISTS inference_capabilities(hash TEXT PRIMARY KEY,record TEXT NOT NULL); CREATE TABLE IF NOT EXISTS inference_usage(id INTEGER PRIMARY KEY AUTOINCREMENT,capability_hash TEXT NOT NULL,record TEXT NOT NULL,created_at INTEGER NOT NULL);",
     );
+    new ReliabilityStore(db, clock).migrate();
     for (const upstream of Object.values(upstreams)) {
       const url = new URL(upstream.endpoint);
       if (
@@ -109,6 +125,12 @@ export class InferenceGateway {
     let sessionId: string | undefined;
     let capability: InferenceCapability | undefined;
     const abort = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    let diagnostic: InferenceDiagnostic | undefined;
+    let admittedKey: string | undefined;
+    let requestAdmitted = false;
+    let providerRequestStarted = false;
+    const diagnostics = new ReliabilityStore(this.db, this.clock);
     req.on("aborted", () => abort.abort());
     res.on("close", () => {
       if (!res.writableEnded) abort.abort();
@@ -189,7 +211,93 @@ export class InferenceGateway {
         );
       if (capability.protocol === "responses") body.store = false;
       const upstream = this.upstreams[capability.provider];
-      const trustedHeaders = await upstream.headers();
+      diagnostic = {
+        version: 1,
+        id: `inference_${String(this.clock()).padStart(13, "0")}_${randomUUID()}`,
+        attemptId: this.db.one(
+          "SELECT name FROM sqlite_master WHERE name='control_attempts'",
+        )
+          ? this.db.one<{ id: string }>(
+              `SELECT id FROM control_attempts WHERE execution_session_id=${sql(sessionId)} AND outcome='active' LIMIT 1`,
+            )?.id
+          : undefined,
+        goalId: capability.goalId,
+        taskId: capability.taskId,
+        generation: capability.generation,
+        sessionId,
+        provider: capability.provider,
+        model: capability.model,
+        maxOutputTokens: body.max_output_tokens ?? body.max_tokens,
+        reasoningEffort: ["low", "medium", "high"].includes(
+          body.reasoning?.effort,
+        )
+          ? body.reasoning.effort
+          : undefined,
+        endpoint: sanitizedEndpoint(upstream.endpoint),
+        startedAt: this.clock(),
+        phase: "authentication",
+        status: "active",
+      };
+      // Native harness retries are requests, not new authority. Serialize them
+      // before any await and retain failure/backoff across gateway restarts.
+      const key = diagnostic.attemptId ?? sessionId;
+      if (this.admittedRequests.has(key))
+        throw new ControlError(
+          "inference_busy",
+          "Inference is already in flight",
+          409,
+        );
+      this.admittedRequests.add(key);
+      admittedKey = key;
+      const runtime = diagnostic.attemptId
+        ? diagnostics.runtime(diagnostic.attemptId)
+        : undefined;
+      requestSignal = deadlineSignal(
+        Math.min(
+          capability.expiresAt,
+          runtime?.deadlineAt ?? capability.expiresAt,
+        ),
+        abort.signal,
+      );
+      const unresolved = this.db.one<{ record: string }>(
+        `SELECT record FROM inference_diagnostics WHERE ${diagnostic.attemptId ? `attempt_id=${sql(diagnostic.attemptId)}` : `json_extract(record,'$.sessionId')=${sql(sessionId)}`} AND json_extract(record,'$.status')='active' LIMIT 1`,
+      );
+      if (unresolved)
+        throw new ProviderFailure(
+          failureRecord("interrupted", {
+            diagnosticId: JSON.parse(unresolved.record).id,
+          }),
+        );
+      if (runtime?.failure) {
+        const previous = runtime.failure;
+        if (
+          !previous.httpStatus ||
+          !["rate_limit", "service"].includes(previous.kind) ||
+          runtime.retryCount >= 3
+        )
+          throw new ProviderFailure(previous);
+        if (!runtime.nextRetryAt || runtime.nextRetryAt >= runtime.deadlineAt)
+          throw new ProviderFailure(previous);
+        const wait = runtime.nextRetryAt - this.clock();
+        if (wait > 0) await delay(wait, undefined, { signal: requestSignal });
+        this.authenticate(token);
+        requestSignal.throwIfAborted();
+        const current = diagnostics.runtime(runtime.attemptId)!;
+        current.retryCount++;
+        diagnostics.saveRuntime(current);
+      }
+      if (!runtime) {
+        const previous = this.db.one<{ record: string }>(
+          `SELECT record FROM inference_diagnostics WHERE json_extract(record,'$.sessionId')=${sql(sessionId)} AND json_extract(record,'$.failure') IS NOT NULL ORDER BY id DESC LIMIT 1`,
+        );
+        if (previous)
+          throw new ProviderFailure(JSON.parse(previous.record).failure);
+      }
+      requestAdmitted = true;
+      diagnostics.diagnostic(diagnostic);
+      const trustedHeaders = await import("./reliability.js").then(
+        ({ abortable }) => abortable(upstream.headers(), requestSignal!),
+      );
       const headers: Record<string, string> = {
         "content-type": "application/json",
         ...trustedHeaders,
@@ -212,30 +320,39 @@ export class InferenceGateway {
         if (requested.length) headers["anthropic-beta"] = requested.join(",");
       }
       this.authenticate(token);
-      const response = await this.fetcher(upstream.endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        redirect: "error",
-        signal: AbortSignal.any([abort.signal, AbortSignal.timeout(3600000)]),
-      });
+      diagnostic.phase = "headers";
+      diagnostics.diagnostic(diagnostic);
+      providerRequestStarted = true;
+      const response = await abortable(
+        this.fetcher(upstream.endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          redirect: "error",
+          signal: requestSignal,
+        }),
+        requestSignal,
+      );
+      diagnostic.httpStatus = response.status;
+      diagnostic.requestIds = requestIds(response.headers);
+      diagnostic.phase = "body";
+      diagnostics.diagnostic(diagnostic);
       if (!response.ok) {
-        this.usage(tokenHash, {
-          ...capability,
-          status: response.status,
-          usage: null,
-          costUsd: null,
-          complete: false,
+        const raw = await boundedErrorBody(response, requestSignal);
+        throw new ProviderFailure({
+          ...classifyFailure(raw, response.status, diagnostic.id),
+          requestIds: diagnostic.requestIds,
+          retryAfterMs: (() => {
+            const value = response.headers.get("retry-after");
+            if (!value) return undefined;
+            const ms = /^\d+(\.\d+)?$/.test(value)
+              ? Number(value) * 1000
+              : Date.parse(value) - this.clock();
+            return Number.isFinite(ms)
+              ? Math.min(300000, Math.max(0, ms))
+              : undefined;
+          })(),
         });
-        res.writeHead(response.status, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: {
-              message: `Upstream inference failed (${response.status})`,
-            },
-          }),
-        );
-        return;
       }
       const type = response.headers.get("content-type") ?? "application/json";
       if (!response.body) throw new Error("Missing upstream response");
@@ -246,6 +363,39 @@ export class InferenceGateway {
         usage: any = null,
         complete = false;
       const consume = (event: any) => {
+        if (event.type === "response.incomplete")
+          throw new ProviderFailure(
+            failureRecord("incomplete_stream", {
+              diagnosticId: diagnostic?.id,
+              providerCode: event.response?.incomplete_details?.reason,
+            }),
+          );
+        if (event.type === "error" || event.type === "response.failed")
+          throw new ProviderFailure(
+            classifyFailure(event, undefined, diagnostic?.id),
+          );
+        if (
+          event.type === "response.refusal.delta" ||
+          event.type === "response.refusal.done" ||
+          (event.response?.output ?? []).some((item: any) =>
+            (item.content ?? []).some((part: any) => part.type === "refusal"),
+          )
+        )
+          throw new ProviderFailure(
+            failureRecord("policy_refusal", { diagnosticId: diagnostic?.id }),
+          );
+        if (
+          [
+            "response.output_text.delta",
+            "response.function_call_arguments.delta",
+            "content_block_delta",
+          ].includes(event.type) &&
+          diagnostic?.attemptId
+        ) {
+          const runtime = diagnostics.runtime(diagnostic.attemptId);
+          if (runtime && this.clock() - runtime.lastProgressAt >= 1000)
+            diagnostics.progress(diagnostic.attemptId, "model_output");
+        }
         if (event.type === "response.completed") {
           usage = event.response?.usage ?? null;
           complete = true;
@@ -258,7 +408,7 @@ export class InferenceGateway {
       };
       const decoder = new TextDecoder();
       while (true) {
-        const { value, done } = await reader.read();
+        const { value, done } = await abortable(reader.read(), requestSignal);
         if (done) break;
         this.authenticate(token);
         total += value.length;
@@ -271,21 +421,44 @@ export class InferenceGateway {
           while ((boundary = scan.indexOf("\n\n")) >= 0) {
             const frame = scan.slice(0, boundary);
             scan = scan.slice(boundary + 2);
-            for (const line of frame.split("\n"))
-              if (line.startsWith("data: ") && line !== "data: [DONE]")
-                try {
-                  consume(JSON.parse(line.slice(6)));
-                } catch {}
+            const data = frame
+              .split("\n")
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).trimStart())
+              .join("\n");
+            if (data && data !== "[DONE]") {
+              let event;
+              try {
+                event = JSON.parse(data);
+              } catch {
+                throw new ControlError(
+                  "protocol",
+                  "Upstream inference event was malformed",
+                  502,
+                );
+              }
+              consume(event);
+            }
           }
         }
         if (!res.write(value))
-          await new Promise<void>((yes, no) => {
-            res.once("drain", yes);
-            res.once("close", () => no(new Error("Client disconnected")));
-          });
+          await abortable(
+            new Promise<void>((yes, no) => {
+              res.once("drain", yes);
+              res.once("close", () => no(new Error("Client disconnected")));
+            }),
+            requestSignal,
+          );
       }
+      if (type.includes("text/event-stream") && scan.trim())
+        throw new ControlError(
+          "protocol",
+          "Upstream stream ended with an incomplete event",
+          502,
+        );
       if (!type.includes("text/event-stream")) {
         const data = JSON.parse(scan);
+        consume({ type: "response.completed", response: data });
         usage = data.usage ?? null;
         complete = true;
       }
@@ -302,8 +475,58 @@ export class InferenceGateway {
         costUsd: null,
         complete,
       });
+      diagnostic.status = "completed";
+      diagnostic.usageStatus = "reported";
+      if (diagnostic.attemptId) {
+        const runtime = diagnostics.runtime(diagnostic.attemptId);
+        if (runtime) {
+          runtime.failure = undefined;
+          runtime.nextRetryAt = undefined;
+          diagnostics.saveRuntime(runtime);
+        }
+      }
       res.end();
     } catch (error) {
+      const failure =
+        error instanceof ProviderFailure
+          ? error.failure
+          : classifyFailure(
+              requestSignal?.aborted
+                ? requestSignal.reason
+                : abort.signal.aborted
+                  ? new Error("Execution interrupted")
+                  : error,
+              error instanceof ControlError && !providerRequestStarted
+                ? error.status
+                : undefined,
+              diagnostic?.id,
+            );
+      if (diagnostic) {
+        diagnostic.status = "failed";
+        diagnostic.failure = failure;
+        diagnostic.usageStatus = "unknown";
+        // Persist before closing a refused/failed stream: the native server can
+        // submit another POST immediately. Local protocol errors grant no retry.
+        if (requestAdmitted && diagnostic.attemptId) {
+          const runtime = diagnostics.runtime(diagnostic.attemptId);
+          if (runtime) {
+            runtime.failure = failure;
+            runtime.nextRetryAt =
+              failure.httpStatus &&
+              ["rate_limit", "service"].includes(failure.kind)
+                ? this.clock() +
+                  Math.min(
+                    300000,
+                    Math.max(
+                      failure.retryAfterMs ?? 0,
+                      10000 * 2 ** runtime.retryCount,
+                    ) + Math.floor(Math.random() * 1000),
+                  )
+                : undefined;
+            diagnostics.saveRuntime(runtime);
+          }
+        }
+      }
       if (tokenHash)
         this.usage(tokenHash, {
           ...capability,
@@ -325,20 +548,38 @@ export class InferenceGateway {
         res.destroy();
         return;
       }
-      const status = error instanceof ControlError ? error.status : 502;
+      const status =
+        error instanceof ControlError
+          ? error.status
+          : error instanceof ProviderFailure && !requestAdmitted
+            ? 400 // Terminal admission denial; do not invite native POST retries.
+            : error instanceof ProviderFailure
+              ? (error.failure.httpStatus ??
+                (error.failure.kind === "policy_refusal" ? 403 : 502))
+              : 502;
       res.writeHead(status, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
           error: {
             message:
-              error instanceof ControlError
-                ? error.message
-                : "Inference gateway failed",
+              error instanceof ControlError ? error.message : failure.message,
+            ...(diagnostic
+              ? {
+                  code: failure.providerCode ?? failure.kind,
+                  diagnosticId: diagnostic.id,
+                }
+              : {}),
           },
         }),
       );
     } finally {
+      if (diagnostic) {
+        diagnostic.endedAt = this.clock();
+        diagnostic.durationMs = diagnostic.endedAt - diagnostic.startedAt;
+        diagnostics.diagnostic(diagnostic);
+      }
       abort.abort();
+      if (admittedKey) this.admittedRequests.delete(admittedKey);
       if (sessionId) {
         const active = this.activeRequests.get(sessionId);
         active?.delete(abort);

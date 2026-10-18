@@ -67,20 +67,24 @@ export interface ExecutionSession {
 }
 export interface ExecutionEnvironment {
   readonly registry?: EnvironmentRegistry;
-  prepare(spec: EnvironmentSpec): Promise<ExecutionSession>;
+  prepare(
+    spec: EnvironmentSpec,
+    signal?: AbortSignal,
+  ): Promise<ExecutionSession>;
   acquire(
     id: string,
     gatewayEnv?: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<ExecutionSession>;
   execute(
     id: string,
     command: string[],
     signal: AbortSignal,
   ): Promise<{ stdout: string; stderr: string }>;
-  inspect(id: string): Promise<ExecutionSession>;
-  checkpoint(id: string): Promise<ExecutionSession>;
-  stop(id: string): Promise<ExecutionSession>;
-  reset(id: string): Promise<void>;
+  inspect(id: string, signal?: AbortSignal): Promise<ExecutionSession>;
+  checkpoint(id: string, signal?: AbortSignal): Promise<ExecutionSession>;
+  stop(id: string, signal?: AbortSignal): Promise<ExecutionSession>;
+  reset(id: string, signal?: AbortSignal): Promise<void>;
   destroy(id: string): Promise<void>;
 }
 export class EnvironmentRegistry {
@@ -179,7 +183,8 @@ export class DockerEnvironment implements ExecutionEnvironment {
         maxBuffer: 8 * 1024 * 1024,
       }),
   ) {}
-  async prepare(spec: EnvironmentSpec) {
+  async prepare(spec: EnvironmentSpec, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (
       !/^[a-zA-Z0-9_-]+$/.test(spec.taskId) ||
       !Number.isInteger(spec.generation) ||
@@ -249,26 +254,36 @@ export class DockerEnvironment implements ExecutionEnvironment {
     // Controller-created private clone: --no-local prevents object hardlinks and alternates.
     const present = await lstat(path).catch(() => null);
     if (!present)
-      await git(dirname(path), [
-        "clone",
-        "--no-local",
-        "--no-checkout",
-        "--",
-        resolve(spec.source),
-        path,
-      ]);
+      await git(
+        dirname(path),
+        [
+          "clone",
+          "--no-local",
+          "--no-checkout",
+          "--",
+          resolve(spec.source),
+          path,
+        ],
+        signal,
+      );
     await this.registry.owned(s);
     await sanitizeGit(path);
-    await git(path, ["checkout", "--detach", spec.baseSha]);
-    await git(path, ["remote", "remove", "origin"]).catch(() => {});
+    await git(path, ["checkout", "--detach", spec.baseSha], signal);
+    await git(path, ["remote", "remove", "origin"], signal).catch(() => {});
     return this.registry.save({
       ...s,
       status: "prepared",
       lastActivityAt: Date.now(),
     });
   }
-  async acquire(id: string, gatewayEnv: Record<string, string> = {}) {
-    let s = await this.inspect(id);
+  async acquire(
+    id: string,
+    gatewayEnv: Record<string, string> = {},
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
+    const docker = (args: string[]) => this.docker(args, signal);
+    let s = await this.inspect(id, signal);
     if (s.status === "active") return s;
     if (!["prepared", "checkpointed", "stopped", "starting"].includes(s.status))
       throw new ControlError(
@@ -283,14 +298,14 @@ export class DockerEnvironment implements ExecutionEnvironment {
         "Mount paths cannot contain commas",
       );
     if (s.container) {
-      await this.docker(["rm", s.container]);
+      await docker(["rm", s.container]);
       s = this.registry.save({ ...s, container: undefined });
     }
     const digest =
       s.imageDigest ??
       JSON.parse(
         (
-          await this.docker([
+          await docker([
             "image",
             "inspect",
             s.image,
@@ -313,8 +328,7 @@ export class DockerEnvironment implements ExecutionEnvironment {
     });
     if (s.spec.gatewayNetwork) {
       const network = JSON.parse(
-        (await this.docker(["network", "inspect", s.spec.gatewayNetwork]))
-          .stdout,
+        (await docker(["network", "inspect", s.spec.gatewayNetwork])).stdout,
       )[0];
       if (
         !network.Internal ||
@@ -405,7 +419,7 @@ export class DockerEnvironment implements ExecutionEnvironment {
       );
     }
 
-    await this.docker([
+    await docker([
       "create",
       "--init",
       "--name",
@@ -455,19 +469,19 @@ export class DockerEnvironment implements ExecutionEnvironment {
       "-c",
       "exec sleep infinity",
     ]);
-    await this.docker(["start", container]);
+    await docker(["start", container]);
     return this.registry.save({
       ...s,
       status: "active",
       lastActivityAt: Date.now(),
     });
   }
-  async inspect(id: string) {
+  async inspect(id: string, signal?: AbortSignal) {
     const s = this.registry.get(id);
     if (!s.container || s.status === "destroyed") return s;
     try {
       const data = JSON.parse(
-        (await this.docker(["inspect", s.container])).stdout,
+        (await this.docker(["inspect", s.container], signal)).stdout,
       )[0];
       if (
         data.Config.Labels?.["missioncontrol.session"] !== id ||
@@ -497,7 +511,7 @@ export class DockerEnvironment implements ExecutionEnvironment {
     }
   }
   async execute(id: string, command: string[], signal: AbortSignal) {
-    const s = await this.acquire(id);
+    const s = await this.acquire(id, {}, signal);
     if (!command.length)
       throw new ControlError("environment_command", "Command is required");
     this.registry.save({ ...s, lastActivityAt: Date.now() });
@@ -507,30 +521,44 @@ export class DockerEnvironment implements ExecutionEnvironment {
         AbortSignal.any([signal, AbortSignal.timeout(s.spec.timeoutMs)]),
       );
     } catch (error) {
-      await this.stop(id);
+      // The caller owns the complete cleanup envelope. Do not allocate a fresh stop timeout here.
       throw error;
     } finally {
       const latest = this.registry.get(id);
       this.registry.save({ ...latest, lastActivityAt: Date.now() });
     }
   }
-  async checkpoint(id: string) {
-    await this.stop(id);
+  async checkpoint(id: string, signal?: AbortSignal) {
+    await this.stop(id, signal);
     return this.registry.save({
       ...this.registry.get(id),
       status: "checkpointed",
     });
   }
-  async stop(id: string) {
-    const s = await this.inspect(id);
+  async stop(id: string, signal?: AbortSignal) {
+    const s = await this.inspect(id, signal);
     if (!s.container) return s;
     this.registry.save({ ...s, status: "stopping" });
-    await this.docker(["stop", "--time", "10", s.container]);
-    return this.registry.save({ ...s, status: "stopped" });
+    try {
+      await this.docker(["stop", "--time", "10", s.container], signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      const inspected = await this.inspect(id, signal);
+      if (inspected.status === "active")
+        await this.docker(["kill", s.container], signal);
+    }
+    const stopped = await this.inspect(id, signal);
+    if (stopped.status === "active")
+      throw new ControlError(
+        "cleanup_blocked",
+        "Owned container is still running",
+        409,
+      );
+    return stopped;
   }
-  async reset(id: string) {
-    const s = await this.stop(id);
-    if (s.container) await this.docker(["rm", s.container]);
+  async reset(id: string, signal?: AbortSignal) {
+    const s = await this.stop(id, signal);
+    if (s.container) await this.docker(["rm", s.container], signal);
     this.registry.save({ ...s, container: undefined, status: "prepared" });
   }
   async destroy(id: string) {

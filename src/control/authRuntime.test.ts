@@ -183,7 +183,10 @@ test("Claude subscription status refuses unknown/API formats and strips account 
 test("failed auth teardown retains lock and owned recovery records instead of admitting another writer", async (t) => {
   const f = await fixture(t);
   f.failRemove();
-  await assert.rejects(f.runtime.run("status"), /daemon outage/);
+  await assert.rejects(
+    f.runtime.run("status"),
+    /could not be confirmed stopped/,
+  );
   assert.ok(
     (await inspectAuthEnvironment(f.config, join(f.root, "private"))).writer,
   );

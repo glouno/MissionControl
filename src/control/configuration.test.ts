@@ -172,7 +172,7 @@ test("cumulative installation admission is neutral across clients and never inve
   assert.equal(store.setting("admitted-cost-usd"), 6);
   const budget = store.canSpend(store.goals()[0].id);
   assert.equal(budget.reservedUsd, 0);
-  assert.match(budget.costMeaning, /not measured/);
+  assert.match(budget.costMeaning, /admission holds/);
   store.setting("instance-maintenance", true);
   assert.throws(
     () => store.createGoal({ ...config, maxCostUsd: 0 }, "connector"),

@@ -45,10 +45,14 @@ export class ControlClient {
           headersTimeout: timeoutMs,
           bodyTimeout: timeoutMs,
         });
-    const r = "statusCode" in response
-      ? { status: response.statusCode, ok: response.statusCode >= 200 && response.statusCode < 300,
-          json: () => response.body.json() }
-      : response;
+    const r =
+      "statusCode" in response
+        ? {
+            status: response.statusCode,
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            json: () => response.body.json(),
+          }
+        : response;
     const data = (await r.json()) as any;
     if (!r.ok)
       throw Object.assign(
@@ -80,7 +84,12 @@ export class ControlClient {
     return this.request<Task[]>(`/goals/${id}/tasks`);
   }
   claim(workerId: string, goalId?: string, key?: string) {
-    return this.request<Claim | null>("/claims", "POST", { workerId, goalId }, key);
+    return this.request<Claim | null>(
+      "/claims",
+      "POST",
+      { workerId, goalId },
+      key,
+    );
   }
   heartbeat(c: Claim) {
     return this.request(`/tasks/${c.task.id}/heartbeat`, "POST", {
@@ -143,6 +152,7 @@ export class ControlClient {
     reason: string,
     actualCost?: number,
     usage?: import("./usage.js").Usage,
+    failure?: import("./reliability.js").FailureRecord,
   ) {
     return this.request(`/tasks/${c.task.id}/release`, "POST", {
       workerId: c.workerId,
@@ -151,6 +161,7 @@ export class ControlClient {
       reason,
       actualCost,
       usage,
+      failure,
     });
   }
 }

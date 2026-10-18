@@ -258,6 +258,7 @@ test("portable runtime requires strict provider/authentication definitions and c
 
 import { subscriptionBinding } from "./isolatedRuntime.js";
 import { authEnvironmentSchema, authPolicyHash } from "./authEnvironment.js";
+import { executionRuntimeHash } from "./runtimeFingerprint.js";
 import { goalSchema } from "./schema.js";
 test("subscription binding pins admitted provider/model/image/auth policy and refuses widening or missing snapshots", () => {
   const auth = authEnvironmentSchema.parse({
@@ -301,6 +302,7 @@ test("subscription binding pins admitted provider/model/image/auth policy and re
     },
     admission: {
       configurationHash: "c".repeat(64),
+      runtimeHashVersion: 2,
       runtimeHash: "d".repeat(64),
       executionMode: "isolated",
       providerId: "cloud",
@@ -309,9 +311,11 @@ test("subscription binding pins admitted provider/model/image/auth policy and re
       prompts: [],
     },
   });
+  config.admission!.runtimeHash = executionRuntimeHash(config, runtime, [auth]);
+  const expected = { sample: config.admission!.runtimeHash };
   const goal = { id: "synthetic", config } as any;
   assert.equal(
-    subscriptionBinding(goal, runtime, [auth], "d".repeat(64)).image,
+    subscriptionBinding(goal, runtime, [auth], expected).image,
     auth.imageDigest,
   );
   for (const changed of [
@@ -335,22 +339,26 @@ test("subscription binding pins admitted provider/model/image/auth policy and re
           { ...goal, config: changed },
           runtime,
           [auth],
-          "d".repeat(64),
+          expected,
         ),
-      /differs/,
+      /differs|runtime changed/,
     );
   assert.throws(
     () =>
       subscriptionBinding(goal, runtime, [
         { ...auth, egress: { ...auth.egress, hosts: ["other.example"] } },
       ]),
-    /policy differs/,
+    /policy differs|runtime changed/,
   );
   assert.throws(
-    () => subscriptionBinding(goal, runtime, [auth], "e".repeat(64)),
-    /configuration changed/,
+    () =>
+      subscriptionBinding(goal, runtime, [auth], { sample: "e".repeat(64) }),
+    /runtime changed/,
   );
-  assert.throws(() => subscriptionBinding(goal, runtime, []), /policy differs/);
+  assert.throws(
+    () => subscriptionBinding(goal, runtime, []),
+    /policy differs|runtime changed/,
+  );
   assert.throws(() =>
     authEnvironmentSchema.parse({ ...auth, qualified: true }),
   );

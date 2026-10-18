@@ -1,3 +1,4 @@
+import { executionSignal, executionDeadline } from "./executionDeadline.js";
 import { createHash } from "node:crypto";
 import { readFile, lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
@@ -69,7 +70,15 @@ export function createLocalDeliveryGate(
           JSON.stringify(input.requiredChecks),
         ],
         {
-          timeout: config.timeoutMs,
+          timeout: Math.max(
+            1,
+            Math.min(
+              config.timeoutMs,
+              (executionDeadline() ?? Date.now() + config.timeoutMs) -
+                Date.now(),
+            ),
+          ),
+          signal: executionSignal(),
           maxBuffer: 65536,
           cwd: "/",
           env: { PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8" },

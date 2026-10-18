@@ -96,6 +96,24 @@ export function dashboardSnapshot(
     });
   return {
     goals,
+    incidents: store.reliability.actionableIncidents(),
+    inferenceDiagnostics: store.reliability.page(
+      "inference_diagnostics",
+      undefined,
+      undefined,
+      100,
+      "",
+      "desc",
+    ),
+    pauses: Object.fromEntries(
+      goals.map((g) => [g.id, store.setting(`pause:${g.id}`) ?? null]),
+    ),
+    allowance: {
+      admittedUsd: store.setting("admitted-cost-usd") ?? 0,
+      maximumUsd:
+        store.setting("configuration-snapshot")?.settings?.authority
+          ?.maxTotalAdmittedCostUsd ?? null,
+    },
     goalCursor: page.length === 500 ? page.at(-1)!.id : null,
     activeCursor: activeTruncated ? activeGoals.at(-1)!.id : null,
     activeTruncated,
@@ -130,6 +148,9 @@ export function dashboardSnapshot(
     questions: store.questions(),
     schedules: store.schedules(),
     executions,
+    familyBudgets: Object.fromEntries(
+      goals.map((g) => [g.id, store.familyBudget(g.id)]),
+    ),
     budgets: Object.fromEntries(
       goals.map((g) => [
         g.id,
@@ -173,6 +194,7 @@ export function dashboardSnapshot(
       storage: store.setting("storage-maintenance-preview"),
       maintenance: store.setting("instance-maintenance") ?? false,
       startupRecoveryFault: store.setting("startup-recovery-fault") ?? null,
+      scheduler: store.setting("scheduler-heartbeat") ?? null,
       qualification: "alpha_unqualified",
     },
   };

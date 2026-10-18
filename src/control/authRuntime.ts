@@ -1,3 +1,4 @@
+import { boundedCleanup, abortable, deadlineSignal } from "./reliability.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -16,7 +17,10 @@ import {
 } from "./authEnvironment.js";
 
 const exec = promisify(execFile);
-type Docker = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
+type Docker = (
+  args: string[],
+  signal?: AbortSignal,
+) => Promise<{ stdout: string; stderr: string }>;
 interface AuthRun {
   id: string;
   authId: string;
@@ -101,8 +105,12 @@ export class AuthRuntime {
     readonly stateDir: string,
     readonly secretsRoot: string,
     readonly config: AuthEnvironment,
-    readonly docker: Docker = (args) =>
-      exec("docker", args, { timeout: 60000, env: { PATH: process.env.PATH } }),
+    readonly docker: Docker = (args, signal) =>
+      exec("docker", args, {
+        signal,
+        timeout: 60000,
+        env: { PATH: process.env.PATH },
+      }),
     readonly startBridge = subscriptionEgress,
     readonly launch: typeof spawn = spawn,
   ) {
@@ -149,9 +157,11 @@ export class AuthRuntime {
       "missioncontrol.auth-run": run.id,
     };
   }
-  private async object(name: string) {
+  private async object(name: string, signal?: AbortSignal) {
     try {
-      return JSON.parse((await this.docker(["inspect", name])).stdout)[0];
+      return JSON.parse(
+        (await this.docker(["inspect", name], signal)).stdout,
+      )[0];
     } catch (error) {
       if (/No such (object|container)/i.test(String((error as any).stderr)))
         return null;
@@ -159,10 +169,13 @@ export class AuthRuntime {
     }
   }
   private async cleanup(run: AuthRun) {
+    return boundedCleanup((signal) => this.cleanupWithinDeadline(run, signal));
+  }
+  private async cleanupWithinDeadline(run: AuthRun, signal: AbortSignal) {
     this.active = false;
     this.save({ ...run, status: "stopping" });
-    await this.bridge?.stop();
-    const worker = await this.object(run.worker);
+    if (this.bridge) await abortable(this.bridge.stop(), signal);
+    const worker = await this.object(run.worker, signal);
     if (worker) {
       if (
         Object.entries(this.labels(run)).some(
@@ -170,7 +183,7 @@ export class AuthRuntime {
         )
       )
         throw new Error("Auth container ownership mismatch; cleanup refused");
-      await this.docker(["rm", "-f", run.worker]);
+      await this.docker(["rm", "-f", run.worker], signal);
     }
     if (run.executionSessionId) {
       const registry = new EnvironmentRegistry(
@@ -190,7 +203,7 @@ export class AuthRuntime {
     }
     const network = this.networks.records().find((r) => r.sessionId === run.id);
     if (network && network.status !== "stopped")
-      await this.networks.stop(run.id);
+      await this.networks.stop(run.id, signal);
     this.save({ ...run, status: "stopped" });
   }
   async recover(nonce: string) {
@@ -247,6 +260,14 @@ export class AuthRuntime {
       ) => ReturnType<typeof spawn>,
     ) => Promise<T>,
   ): Promise<T> {
+    signal = deadlineSignal(
+      Date.now() +
+        Math.min(
+          this.config.egress.timeoutMs,
+          session?.spec.timeoutMs ?? this.config.egress.timeoutMs,
+        ),
+      signal,
+    );
     const registry = new EnvironmentRegistry(
       join(this.stateDir, "sandbox"),
       this.store.db,
@@ -286,13 +307,16 @@ export class AuthRuntime {
       this.active = true;
       signal?.throwIfAborted();
       signal?.addEventListener("abort", abort, { once: true });
-      const network = await this.networks.acquire({
-        sessionId: id,
-        generation: 1,
-        imageDigest: this.config.imageDigest,
-        socketDirectory: join(this.stateDir, "unused-auth-socket"),
-        relayScript,
-      });
+      const network = await this.networks.acquire(
+        {
+          sessionId: id,
+          generation: 1,
+          imageDigest: this.config.imageDigest,
+          socketDirectory: join(this.stateDir, "unused-auth-socket"),
+          relayScript,
+        },
+        signal,
+      );
       if (!this.active) throw new Error("Authentication cancelled");
       if (session) {
         registry.save({
@@ -301,64 +325,67 @@ export class AuthRuntime {
           status: "starting",
         });
       }
-      await this.docker([
-        "create",
-        "--init",
-        "--name",
-        run.worker,
-        ...Object.entries(this.labels(run)).flatMap(([k, v]) => [
-          "--label",
-          `${k}=${v}`,
-        ]),
-        ...(session
-          ? [
-              "--label",
-              `missioncontrol.session=${session.id}`,
-              "--label",
-              `missioncontrol.generation=${session.generation}`,
-            ]
-          : []),
-        "--network",
-        network.network,
-        "--user",
-        `${process.getuid?.()}:${process.getgid?.()}`,
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--read-only",
-        "--pids-limit",
-        "256",
-        "--memory",
-        `${session?.spec.memoryMiB ?? 1024}m`,
-        "--memory-swap",
-        `${session?.spec.memoryMiB ?? 1024}m`,
-        "--cpus",
-        String(session?.spec.cpu ?? 1),
-        "--log-driver",
-        "none",
-        "--mount",
-        `type=bind,src=${owner.session},dst=/session`,
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
-        ...(this.config.harness === "codex"
-          ? [
-              "--tmpfs",
-              `/session/tmp:rw,nosuid,nodev,size=32m,uid=${process.getuid?.()},gid=${process.getgid?.()},mode=700`,
-            ]
-          : []),
-        ...(session
-          ? ["--mount", `type=bind,src=${session.path},dst=/workspace`]
-          : [
-              "--tmpfs",
-              `/workspace:rw,nosuid,nodev,size=64m,uid=${process.getuid?.()},gid=${process.getgid?.()},mode=700`,
-            ]),
-        "--entrypoint",
-        "sleep",
-        this.config.imageDigest,
-        "infinity",
-      ]);
-      await this.docker(["start", run.worker]);
+      await this.docker(
+        [
+          "create",
+          "--init",
+          "--name",
+          run.worker,
+          ...Object.entries(this.labels(run)).flatMap(([k, v]) => [
+            "--label",
+            `${k}=${v}`,
+          ]),
+          ...(session
+            ? [
+                "--label",
+                `missioncontrol.session=${session.id}`,
+                "--label",
+                `missioncontrol.generation=${session.generation}`,
+              ]
+            : []),
+          "--network",
+          network.network,
+          "--user",
+          `${process.getuid?.()}:${process.getgid?.()}`,
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges",
+          "--read-only",
+          "--pids-limit",
+          "256",
+          "--memory",
+          `${session?.spec.memoryMiB ?? 1024}m`,
+          "--memory-swap",
+          `${session?.spec.memoryMiB ?? 1024}m`,
+          "--cpus",
+          String(session?.spec.cpu ?? 1),
+          "--log-driver",
+          "none",
+          "--mount",
+          `type=bind,src=${owner.session},dst=/session`,
+          "--tmpfs",
+          "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
+          ...(this.config.harness === "codex"
+            ? [
+                "--tmpfs",
+                `/session/tmp:rw,nosuid,nodev,size=32m,uid=${process.getuid?.()},gid=${process.getgid?.()},mode=700`,
+              ]
+            : []),
+          ...(session
+            ? ["--mount", `type=bind,src=${session.path},dst=/workspace`]
+            : [
+                "--tmpfs",
+                `/workspace:rw,nosuid,nodev,size=64m,uid=${process.getuid?.()},gid=${process.getgid?.()},mode=700`,
+              ]),
+          "--entrypoint",
+          "sleep",
+          this.config.imageDigest,
+          "infinity",
+        ],
+        signal,
+      );
+      await this.docker(["start", run.worker], signal);
       this.save({ ...run, status: "running" });
       if (session)
         registry.save({ ...session, container: run.worker, status: "active" });
@@ -403,7 +430,7 @@ export class AuthRuntime {
           session?.spec.timeoutMs ?? this.config.egress.timeoutMs,
         ),
       );
-      const result = await use(execute);
+      const result = await abortable(use(execute), signal!);
       signal?.throwIfAborted();
       assertAuthority();
       if (!this.active)

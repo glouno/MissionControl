@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { failureRecord } from "./reliability.js";
 import { SqliteStore } from "../sqlite.js";
 import { ControlStore } from "./store.js";
 import { dashboardSnapshot } from "./dashboard.js";
@@ -259,4 +260,86 @@ test("backlog projection is independent of goals and reports same-project depend
   assert.equal(snapshot.backlog.filter((e) => e.projectId === "a").length, 2);
   assert.equal(store.goals().length, 0);
   assert.equal(store.attempts().length, 0);
+});
+
+test("dashboard shows recent actionable failures after more than one hundred historical records", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mc-dashboard-incidents-"));
+  const db = new SqliteStore(join(root, "db"));
+  t.after(async () => {
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  let now = Date.now();
+  const store = new ControlStore(db, () => now);
+  const goal = store.createGoal({
+    title: "Synthetic",
+    description: "Synthetic",
+    repoPath: root,
+    backend: { kind: "fake" },
+  });
+  for (let i = 0; i < 105; i++) {
+    now++;
+    store.reliability.incident(
+      goal.id,
+      failureRecord("service", { providerCode: "historical" + i }),
+      "attempt" + i,
+    );
+    store.reliability.diagnostic({
+      version: 1,
+      id: "inference_" + String(i).padStart(5, "0"),
+      goalId: goal.id,
+      provider: "synthetic",
+      model: "synthetic",
+      endpoint: "https://example.invalid",
+      startedAt: now,
+      phase: "body",
+      status: "failed",
+    });
+  }
+  now++;
+  const recent = store.reliability.incident(
+    goal.id,
+    failureRecord("policy_refusal"),
+    "current",
+  );
+  store.reliability.diagnostic({
+    version: 1,
+    id: "inference_99999",
+    goalId: goal.id,
+    provider: "synthetic",
+    model: "synthetic",
+    endpoint: "https://example.invalid",
+    startedAt: now,
+    phase: "body",
+    status: "failed",
+    requestIds: { "x-request-id": "current-request" },
+  });
+  const snapshot = dashboardSnapshot(store);
+  assert.equal(snapshot.incidents[0].id, recent.id);
+  assert.equal(
+    snapshot.inferenceDiagnostics[0].requestIds["x-request-id"],
+    "current-request",
+  );
+  const first = store.reliability.page(
+    "inference_diagnostics",
+    goal.id,
+    undefined,
+    100,
+    "",
+    "desc",
+  );
+  const next = store.reliability.page(
+    "inference_diagnostics",
+    goal.id,
+    undefined,
+    100,
+    first.at(-1)!.id,
+    "desc",
+  );
+  assert.equal(first.length + next.length, 106);
+  assert.equal(new Set([...first, ...next].map((d) => d.id)).size, 106);
+  assert.equal(
+    store.reliability.page("inference_diagnostics", goal.id)[0].id,
+    "inference_00000",
+  );
 });

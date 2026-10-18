@@ -114,6 +114,40 @@ test("stale lock recovery refuses living owners, wrong nonces and foreign hosts"
   await assert.rejects(inspectState(root), /identity differs/);
 });
 
+test("boot-aware recovery preserves state and fences legacy, same-boot and living owners", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mc-boot-lock-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const before = await initializeState(root);
+  const path = join(root, "controller.lock");
+  const oldBoot = "00000000-0000-0000-0000-000000000001";
+  const newBoot = "00000000-0000-0000-0000-000000000002";
+  const stale = {
+    pid: 2147483647,
+    hostname: hostname(),
+    nonce: "synthetic",
+    bootId: oldBoot,
+  };
+  for (const owner of [
+    { ...stale, bootId: undefined },
+    { ...stale, bootId: newBoot },
+    { ...stale, hostname: "foreign" },
+    { ...stale, pid: process.pid },
+  ]) {
+    await writeFile(path, JSON.stringify(owner), { mode: 0o600 });
+    await assert.rejects(lockInstance(root, newBoot), /locked|alive/);
+    assert.deepEqual(
+      JSON.parse(await readFile(path, "utf8")),
+      JSON.parse(JSON.stringify(owner)),
+    );
+  }
+  await writeFile(path, JSON.stringify(stale));
+  const unlock = await lockInstance(root, newBoot);
+  assert.equal(JSON.parse(await readFile(path, "utf8")).bootId, newBoot);
+  await assert.rejects(lockInstance(root, newBoot), /locked/);
+  assert.equal((await inspectState(root)).id, before.id);
+  await unlock();
+});
+
 test("instance artifacts record relative paths and reject traversal and symlinks", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mc-artifact-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -225,7 +259,7 @@ test("migration failure preserves its prior ledger/schema and retries transactio
   new ControlStore(db);
   assert.equal(
     db.one<{ user_version: number }>("PRAGMA user_version")!.user_version,
-    7,
+    8,
   );
   assert.equal(db.integrityCheck()[0], "ok");
 });

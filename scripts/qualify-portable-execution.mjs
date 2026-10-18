@@ -49,7 +49,18 @@ const config = goalSchema.parse({
     outputUsdPerMillion: 1,
   },
   estimatePerRunUsd: 1,
-  verificationCommands: ["test -f artifact.txt"],
+  siblingContracts: [
+    {
+      repositoryPath: source,
+      revision: await git(source, ["rev-parse", "HEAD"]),
+      files: ["README.md"],
+    },
+  ],
+  verificationCommands: [
+    "test -f artifact.txt",
+    "test -r /contracts/0/README.md",
+    "test $(cat /contracts/0/README.md | wc -c) -gt 0",
+  ],
 });
 const claim = {
   goal: { id: "goal", config },

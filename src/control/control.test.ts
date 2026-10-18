@@ -19,6 +19,7 @@ import { createControlServer } from "./api.js";
 import { validatePlan, type Claim, type Goal } from "./schema.js";
 import { git, WorkspaceManager } from "./workspaces.js";
 import { Scheduler } from "./scheduler.js";
+import { ProviderFailure, failureRecord } from "./reliability.js";
 import { executeClaim } from "./worker.js";
 import {
   FakeBackend,
@@ -223,7 +224,7 @@ test("evidence acceptance is tied to exact source and integration commits", asyn
     /immutable/,
   );
 });
-test("parallel claims reserve budget and provider waits do not consume attempts", async () => {
+test("parallel claims reserve budget and provider waits consume bounded replacement attempts", async () => {
   const f = await fixture();
   const g = f.store.createGoal({
     title: "Paid",
@@ -244,6 +245,7 @@ test("parallel claims reserve budget and provider waits do not consume attempts"
       inputUsdPerMillion: 1,
       outputUsdPerMillion: 1,
     },
+    verificationCommands: ["test -f one.txt", "test -f two.txt"],
     maxCostUsd: 1,
     estimatePerRunUsd: 1,
   });
@@ -258,7 +260,7 @@ test("parallel claims reserve budget and provider waits do not consume attempts"
     "quota",
     0,
   );
-  assert.equal(f.store.getTask(c.task.id).attempts, 0);
+  assert.equal(f.store.getTask(c.task.id).attempts, 1);
   assert.ok(f.store.claimNextTask("second"));
 });
 test("API authenticates, fences worker scope and replays idempotent goal submission", async (t) => {
@@ -571,9 +573,15 @@ test("isolated planning failure settles its reservation without host fallback", 
   }
 });
 
-test("independent review failure creates repair continuation and blocks acceptance", async (t) => {
+test("worker returns candidates for controller review; failed review preserves repair evidence", async (t) => {
   const f = await fixture();
-  const g = await planned(f, [spec("one")]);
+  const g = await planned(f, [
+    {
+      ...spec("one"),
+      description:
+        "Implement one, then obtain separate independent source review before integration",
+    },
+  ]);
   let reviews = 0;
   const fake = new FakeBackend();
   const backend: AgentBackend = {
@@ -605,7 +613,21 @@ test("independent review failure creates repair continuation and blocks acceptan
   t.after(() => s.server.close());
   let c = f.store.claimNextTask("builder")!;
   await scheduler.workspaces.prepareTask(g, c.task);
-  await executeClaim(s.client, c, f.root);
+  const worker: AgentBackend = {
+    run: async (context) => {
+      assert.equal(context.mode, "implement");
+      assert.match(
+        context.prompt,
+        /MissionControl then runs a separate independent reviewer/,
+      );
+      assert.match(
+        context.prompt,
+        /Do not start subagents or request reviewer infrastructure/,
+      );
+      return fake.run(context);
+    },
+  };
+  await executeClaim(s.client, c, f.root, worker);
   assert.equal(f.store.getTask(c.task.id).status, "retry_wait");
   assert.match(
     f.store.getTask(c.task.id).checkpoint!.summary,
@@ -613,8 +635,40 @@ test("independent review failure creates repair continuation and blocks acceptan
   );
   f.advance(30000);
   c = f.store.claimNextTask("repair")!;
-  await executeClaim(s.client, c, f.root);
+  await executeClaim(s.client, c, f.root, worker);
   assert.equal(f.store.getTask(c.task.id).status, "accepted");
+  assert.equal(reviews, 2);
+  assert.equal(f.store.operations().length, 0);
+});
+test("provider refusal during controller review immediately fences the parent candidate", async (t) => {
+  const f = await fixture(),
+    g = await planned(f, [spec("one")]);
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    spawnWorkers: false,
+    backend: () => ({
+      run: async () => {
+        throw new ProviderFailure(failureRecord("invalid_request"));
+      },
+    }),
+  });
+  const s = await serve(f, scheduler);
+  t.after(() => s.server.close());
+  const claim = f.store.claimNextTask("builder")!;
+  await scheduler.workspaces.prepareTask(g, claim.task);
+  await executeClaim(s.client, claim, f.root);
+  assert.equal(f.store.getGoal(g.id).status, "paused");
+  assert.equal(f.store.getTask(claim.task.id).status, "waiting_human");
+  assert.equal(
+    f.store.attempts(g.id).find((a) => a.taskId === claim.task.id)!.outcome,
+    "recovering",
+  );
+  assert.ok(f.store.getTask(claim.task.id).checkpoint?.commit);
+  assert.equal(
+    f.db.query(
+      "SELECT id FROM control_evidence WHERE kind='review' AND passed=1",
+    ).length,
+    0,
+  );
 });
 test("conflicting branches retain a conflict finding and never overwrite accepted work", async (t) => {
   const f = await fixture();

@@ -17,6 +17,13 @@ repositories, checks, models or publication policy. Credential values are not
 configuration fields: use `{ "kind": "file", "path": "credential-name" }` or an
 explicit environment reference. Secret files must be private regular files.
 
+Isolated Codex gateway execution accepts optional backend `reasoningEffort` values
+`low`, `medium` and `high`; omission preserves `medium`. The selected value is part
+of the admitted runtime binding. Inference diagnostics record the effective reasoning
+effort and output token limit, and distinguish token-limit exhaustion from transport
+truncation. Independent verification mounts the same pinned sibling contracts as
+worker execution; moving a sibling branch does not substitute different contract bytes.
+
 `config validate` reads configuration without changing state. `config apply`
 requires an authenticated running controller. Changed projects and prompts are
 activated explicitly and future goals record the new hash; admitted goals keep
@@ -165,3 +172,15 @@ See [API and CLI backlog commands](agents.md#durable-project-backlog).
 real scheduler and fake provider. It needs no credentials or additional packages.
 `node scripts/backlog-acceptance.mjs` runs that fixture after a build. The optional
 browser fixture is `scripts/dashboard-acceptance.mjs`; Playwright remains external.
+
+### Admitted runtime identity
+
+New goals record a version-2 runtime fingerprint scoped to their selected project
+and provider. It binds the execution harness, model, endpoint, authentication
+reference and policy, execution image, and independent verification image. Editing
+unrelated projects/providers or admission cost ceilings does not replace this
+identity. Goal budgets remain the immutable limits admitted when the goal was
+created; changing configuration does not increase an existing goal's allowance.
+Changing a selected execution identity requires a freshly reviewed goal. Legacy
+goals containing the former installation-wide runtime hash fail closed after this
+upgrade and must be retained as evidence, then replaced through fresh admission.

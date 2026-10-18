@@ -122,6 +122,7 @@ async function fixture(t: any, metered = false, clock = Date.now) {
     repoPath: root,
     maxCostUsd: 10,
     estimatePerRunUsd: 1,
+    verificationCommands: ["test -d ."],
     ...(metered
       ? {
           executionContract: {
@@ -392,7 +393,7 @@ test("cleanup failure retains fenced claims and resumes the same recovery intent
       networks,
       () => {},
     ),
-    /daemon/,
+    /Owned resources could not be confirmed stopped/,
   );
   assert.equal(store.getTask(claim.task.id).workerId, "worker");
   assert.throws(() =>
@@ -409,6 +410,125 @@ test("cleanup failure retains fenced claims and resumes the same recovery intent
   );
   assert.equal(store.questions().length, 1);
   assert.equal(store.setting("startup-recovery-fault"), null);
+});
+test("expired startup cleanup permits only bounded proof of absent resources", async (t) => {
+  let now = Date.now();
+  const { store, goal } = await fixture(t, true, () => now);
+  const registry = {
+    all: () => [{ id: "synthetic", status: "active" }],
+  } as any;
+  const networks = { records: () => [], reconcile: async () => {} } as any;
+  await assert.rejects(
+    reconcileRuntime(
+      store,
+      registry,
+      {
+        reset: async () => {
+          throw Error("daemon unavailable");
+        },
+      } as any,
+      networks,
+      () => {},
+    ),
+  );
+  const original = store.setting("startup-cleanup");
+  now += 61000;
+  let destructive = 0;
+  const environment = {
+    reset: async () => {
+      destructive++;
+    },
+    inspect: async () => ({
+      id: "synthetic",
+      container: "retained",
+      status: "active",
+    }),
+  } as any;
+  await assert.rejects(
+    reconcileRuntime(store, registry, environment, networks, () => {}),
+  );
+  assert.deepEqual(store.setting("startup-cleanup"), original);
+  assert.equal(destructive, 0);
+  environment.inspect = async () => {
+    throw Error("ownership mismatch");
+  };
+  await assert.rejects(
+    reconcileRuntime(store, registry, environment, networks, () => {}),
+  );
+  environment.inspect = async () => ({ id: "synthetic", status: "stopped" });
+  await reconcileRuntime(store, registry, environment, networks, () => {});
+  assert.equal(destructive, 0);
+  assert.equal(store.setting("startup-cleanup"), null);
+  assert.deepEqual(
+    store.setting("startup-cleanup-inspection").originalIntent,
+    original,
+  );
+  assert.equal(store.attempts(goal.id)[0].outcome, "interrupted");
+  assert.equal(store.canSpend(goal.id).unresolvedUsd, 1);
+});
+test("explicit spending approval increases family and installation authority atomically", async (t) => {
+  const { store, root } = await fixture(t);
+  store.setting("configuration-snapshot", {
+    settings: { authority: { maxTotalAdmittedCostUsd: 5 } },
+  });
+  const goal = store.createGoal({
+    title: "Budget",
+    description: "Synthetic",
+    repoPath: root,
+    backend: { kind: "fake" },
+    maxCostUsd: 1,
+    estimatePerRunUsd: 1,
+  });
+  const operation = store.reserveOperation(goal.id, "planning");
+  store.settleOperation(operation, 1, undefined, "completed");
+  store.requestGoalHuman(goal.id, {
+    question: "Increase?",
+    reason: "Synthetic",
+    category: "spending",
+    options: [
+      { id: "approve", label: "Approve" },
+      { id: "reject", label: "Reject" },
+    ],
+    requestedMaxCostUsd: 2,
+  });
+  const question = store.questions().find((q) => q.goalId === goal.id)!;
+  store.answer(question.id, "approve", question.revision, "operator");
+  assert.equal(store.familyBudget(goal.id).allowanceUsd, 2);
+  assert.equal(store.setting(`family-allowance:${goal.id}`), 1);
+  assert.equal(store.setting("admitted-cost-usd"), 2);
+  store.reserveOperation(goal.id, "review");
+  store.requestGoalHuman(goal.id, {
+    question: "Too much?",
+    reason: "Synthetic",
+    category: "spending",
+    options: [
+      { id: "approve", label: "Approve" },
+      { id: "reject", label: "Reject" },
+    ],
+    requestedMaxCostUsd: 6,
+  });
+  const rejected = store.questions().find((q) => q.goalId === goal.id)!;
+  await assert.rejects(
+    async () =>
+      store.answer(rejected.id, "approve", rejected.revision, "operator"),
+    /Cumulative/,
+  );
+  assert.equal(store.question(rejected.id).status, "pending");
+  assert.equal(store.familyBudget(goal.id).allowanceUsd, 2);
+  assert.equal(store.setting("admitted-cost-usd"), 2);
+  store.setting("configuration-snapshot", {
+    settings: {
+      authority: { maxTotalAdmittedCostUsd: 100, maxGoalCostUsd: 3 },
+    },
+  });
+  await assert.rejects(
+    async () =>
+      store.answer(rejected.id, "approve", rejected.revision, "operator"),
+    /installation goal allowance/,
+  );
+  assert.equal(store.question(rejected.id).status, "pending");
+  assert.equal(store.familyBudget(goal.id).allowanceUsd, 2);
+  assert.equal(store.setting("admitted-cost-usd"), 2);
 });
 test("missing Docker container preserves source record but daemon and ownership errors prevent cleanup", async (t) => {
   const { db, root } = await fixture(t),
@@ -549,5 +669,56 @@ test("attempt API is an authenticated operator read and excludes connector/worke
   }
   assert.ok(
     (openApi().paths["/api/v1/goals/{id}/attempts"] as { get?: unknown }).get,
+  );
+});
+
+test("successor spending approval extends shared allowance without refunding predecessor usage", async (t) => {
+  const { store, root } = await fixture(t);
+  const config = {
+    title: "Family",
+    description: "Synthetic",
+    repoPath: root,
+    backend: { kind: "fake" as const },
+    maxCostUsd: 3,
+    estimatePerRunUsd: 1,
+  };
+  const predecessor = store.createGoal(config);
+  const operation = store.reserveOperation(predecessor.id, "planning");
+  store.settleOperation(operation, 1, undefined, "completed");
+  store.setGoalState(
+    predecessor.id,
+    "paused",
+    predecessor.revision,
+    "operator",
+    "Synthetic",
+  );
+  const current = store.getGoal(predecessor.id);
+  const successor = store.replaceGoal(
+    predecessor.id,
+    { ...config, maxCostUsd: 2 },
+    current.revision,
+    "operator",
+  );
+  store.requestGoalHuman(successor.id, {
+    question: "Increase?",
+    reason: "Synthetic",
+    category: "spending",
+    options: [
+      { id: "approve", label: "Approve" },
+      { id: "reject", label: "Reject" },
+    ],
+    requestedMaxCostUsd: 3,
+  });
+  const question = store.questions().find((q) => q.goalId === successor.id)!;
+  store.answer(question.id, "approve", question.revision, "operator");
+  assert.equal(store.familyBudget(predecessor.id).allowanceUsd, 4);
+  assert.equal(store.familyBudget(successor.id).allowanceUsd, 4);
+  assert.equal(store.familyBudget(successor.id).consumedUsd, 1);
+  assert.equal(store.setting(`family-allowance:${predecessor.id}`), 3);
+  assert.equal(
+    store.db.one<{ allowance: number }>(
+      "SELECT allowance FROM goal_lineage WHERE goal_id='" + successor.id + "'",
+    )!.allowance,
+    3,
   );
 });

@@ -5,7 +5,11 @@ import {
   nativeOutputSchema,
   normalizeNativeOutput,
 } from "./nativeOutputSchema.js";
-import { workerResponseSchema, responseHandoff } from "./workerHandoff.js";
+import {
+  workerResponseSchema,
+  responseHandoff,
+  reviewOutputSchema,
+} from "./workerHandoff.js";
 import { planSchema } from "./schema.js";
 
 function assertStrict(schema: any) {
@@ -27,6 +31,23 @@ test("native worker and planning schemas satisfy recursive strict object require
     assertStrict(nativeOutputSchema(original));
     assert.equal(JSON.stringify(original), before);
   }
+});
+test("review wire schema requires nullable observations and restores absent observation claims", () => {
+  const wire = nativeOutputSchema(reviewOutputSchema);
+  assertStrict(wire);
+  assert.ok(wire.required.includes("resolvedObservations"));
+  assert.deepEqual(
+    normalizeNativeOutput(
+      {
+        commit: "synthetic",
+        verdict: "pass",
+        findings: [],
+        resolvedObservations: null,
+      },
+      reviewOutputSchema,
+    ),
+    { commit: "synthetic", verdict: "pass", findings: [] },
+  );
 });
 
 test("optional wire nulls preserve valid question handoffs and required nulls stay invalid", () => {
