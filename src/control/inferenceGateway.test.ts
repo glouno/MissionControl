@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteStore } from "../sqlite.js";
+import { SqliteStore, sql } from "../sqlite.js";
 import { InferenceGateway } from "./inferenceGateway.js";
 import { ReliabilityStore } from "./reliability.js";
 async function fixture(
@@ -471,3 +471,127 @@ for (const stream of [
     );
   });
 }
+
+test("larger output allowances require both deployment and session authority", async (t) => {
+  const f = await fixture(t);
+  f.gateway.upstreams.azure.maxOutputTokens = 65536;
+  const token = f.gateway.issue({ ...f.cap, maxOutputTokens: 65536 });
+  const response = await fetch(f.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ model: f.cap.model }),
+  });
+  await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(f.calls[0].options.body).max_output_tokens, 65536);
+  const denied = await fetch(f.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ model: f.cap.model, max_output_tokens: 65537 }),
+  });
+  assert.equal(denied.status, 400);
+  await denied.text();
+  assert.equal(f.calls.length, 1);
+});
+
+test("incomplete responses preserve provider usage without inventing a dollar cost", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":12,"output_tokens":32768}}}\n\n',
+  );
+  try {
+    const response = await fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    });
+    await response.text();
+  } catch {}
+  const record = JSON.parse(
+    f.db.one<{ record: string }>("SELECT record FROM inference_usage")!.record,
+  );
+  assert.equal(record.complete, false);
+  assert.deepEqual(record.usage, { input_tokens: 12, output_tokens: 32768 });
+  assert.equal(record.costUsd, null);
+  assert.deepEqual(f.gateway.sessionUsage(f.cap.sessionId), {
+    kind: "metered",
+    status: "unknown",
+    inputTokens: 12,
+    outputTokens: 32768,
+  });
+});
+
+test("session estimates use provider counters and cached rates, retaining unknown requests", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":80},"output_tokens":10}}}\n\n',
+  );
+  f.gateway.upstreams.azure.pricing = {
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    evidenceUrl: "https://example.invalid/pricing",
+  };
+  const response = await fetch(f.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${f.token}` },
+    body: JSON.stringify({ model: f.cap.model }),
+  });
+  await response.text();
+  const usage = f.gateway.sessionUsage(f.cap.sessionId);
+  assert.equal(usage.status, "estimated");
+  if (usage.status === "estimated") assert.equal(usage.costUsd, 0.000148);
+  assert.equal(f.gateway.sessionUsage("unreported").status, "unknown");
+  f.db.exec(
+    `INSERT INTO inference_diagnostics(id,attempt_id,record) VALUES('unfinished',NULL,${sql(JSON.stringify({ id: "unfinished", sessionId: f.cap.sessionId, phase: "body", status: "active", providerRequestStarted: true }))})`,
+  );
+  assert.deepEqual(f.gateway.sessionUsage(f.cap.sessionId), {
+    kind: "metered",
+    status: "unknown",
+  });
+  f.db.exec(
+    `UPDATE inference_diagnostics SET record=${sql(JSON.stringify({ id: "unfinished", sessionId: f.cap.sessionId, phase: "body", status: "completed" }))} WHERE id='unfinished'`,
+  );
+  assert.equal(f.gateway.sessionUsage(f.cap.sessionId).status, "unknown");
+});
+
+test("local retry denial retains billed provider counters and uncertain provider calls remain unknown", async (t) => {
+  const f = await fixture(
+    t,
+    "responses",
+    'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":100,"output_tokens":10}}}\n\n',
+  );
+  f.gateway.upstreams.azure.pricing = {
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 10,
+    evidenceUrl: "https://example.invalid/pricing",
+  };
+  const request = () =>
+    fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${f.token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    });
+  try {
+    await (await request()).text();
+  } catch {}
+  const before = f.gateway.sessionUsage(f.cap.sessionId);
+  assert.equal(before.status, "estimated");
+  const denied = await request();
+  assert.equal(denied.status, 400);
+  await denied.text();
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.gateway.sessionUsage(f.cap.sessionId), before);
+  const records = f.db
+    .query<{ record: string }>("SELECT record FROM inference_usage")
+    .map((row) => JSON.parse(row.record));
+  assert.equal(records[0].providerRequestStarted, true);
+  assert.equal(records.at(-1).providerRequestStarted, false);
+  f.db.exec(
+    `INSERT INTO inference_usage(capability_hash,record,created_at) VALUES('uncertain',${sql(JSON.stringify({ sessionId: f.cap.sessionId, providerRequestStarted: true, usage: null, costUsd: null }))},1)`,
+  );
+  assert.equal(f.gateway.sessionUsage(f.cap.sessionId).status, "unknown");
+});

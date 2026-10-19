@@ -9,6 +9,7 @@ export const backendSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("codex"),
+      maxOutputTokens: z.number().int().min(64).max(131072).optional(),
       model: z.string().optional(),
       reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
       command: z.literal("codex").default("codex"),
@@ -35,7 +36,7 @@ export const backendSchema = z.discriminatedUnion("kind", [
       model: z.string().min(1),
       endpoint: z.string().url(),
       reasoningEffort: z.enum(["low", "medium", "high"]).default("medium"),
-      maxOutputTokens: z.number().int().min(64).max(8192).default(8192),
+      maxOutputTokens: z.number().int().min(64).max(131072).default(65536),
       credential: z.enum(["identity", "key"]).default("identity"),
       inputUsdPerMillion: z.number().positive(),
       outputUsdPerMillion: z.number().positive(),
@@ -132,6 +133,13 @@ export const goalSchema = z
       })
       .strict()
       .optional(),
+    contextMaxCharacters: z
+      .number()
+      .int()
+      .min(1000)
+      .max(1048576)
+      .default(256000),
+    runtimeInstructions: z.string().max(20000).default(""),
     instructionFiles: z
       .array(z.string().min(1))
       .max(20)
@@ -143,6 +151,7 @@ export const goalSchema = z
             repositoryPath: z.string().min(1),
             revision: z.string().regex(/^[a-f0-9]{40,64}$/),
             files: z.array(z.string().min(1)).min(1).max(20),
+            injectedFiles: z.array(z.string().min(1)).max(20).optional(),
           })
           .strict(),
       )
@@ -170,6 +179,7 @@ export const goalSchema = z
     trustedAdditionalVerificationCommands: z
       .array(z.string().min(1))
       .default([]),
+    budgetAlertUsd: z.number().positive().optional(),
     maxCostUsd: z.number().nonnegative().default(0),
     estimatePerRunUsd: z.number().nonnegative().default(0),
     containerNetwork: z.enum(["none", "bridge"]).default("none"),

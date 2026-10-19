@@ -622,6 +622,45 @@ export class ControlStore {
       return this.usageReconciliation(attemptId);
     });
   }
+  recordFinalAttemptUsage(attemptId: string, usage: Usage, actor: string) {
+    return this.db.transaction(() => {
+      const attempt = this.db.one<{
+        configuration: string;
+        goal_id: string;
+        usage: string | null;
+      }>(
+        `SELECT configuration,goal_id,usage FROM control_attempts WHERE id=${sql(attemptId)}`,
+      );
+      if (!attempt)
+        throw new ControlError("not_found", "Attempt not found", 404);
+      const validated = executionUsage(
+        { usage },
+        JSON.parse(attempt.configuration),
+      );
+      // Accounting evidence cannot restore execution authority or settle ownership.
+      const previous = attempt.usage ? JSON.parse(attempt.usage) : undefined;
+      if (
+        previous?.kind === "metered" &&
+        previous?.status !== "unknown" &&
+        previous &&
+        JSON.stringify(previous) !== JSON.stringify(validated)
+      )
+        throw new ControlError(
+          "usage_conflict",
+          "Final accounting evidence changed",
+          409,
+        );
+      this.db.exec(
+        `UPDATE control_attempts SET usage=${this.encode(validated)} WHERE id=${sql(attemptId)}`,
+      );
+      this.event(
+        "FINAL_ATTEMPT_USAGE",
+        actor,
+        { attemptId, usage: validated },
+        attempt.goal_id,
+      );
+    });
+  }
   private closeAttempt(
     attemptId: string,
     outcome: string,
@@ -1442,6 +1481,9 @@ export class ControlStore {
         this.getGoal(t.goalId).status,
       ) ||
       t.workerId !== workerId ||
+      this.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
+      )?.outcome !== "active" ||
       t.generation !== generation ||
       !t.leaseUntil ||
       t.leaseUntil <= this.clock() ||
@@ -1797,8 +1839,9 @@ export class ControlStore {
         task_id: string | null;
         outcome: string;
         goal_id: string;
+        usage: string | null;
       }>(
-        `SELECT task_id,outcome,goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
+        `SELECT task_id,outcome,goal_id,usage FROM control_attempts WHERE id=${sql(attemptId)}`,
       );
       if (!attempt || attempt.task_id !== null)
         throw new ControlError(
@@ -1822,7 +1865,14 @@ export class ControlStore {
           "Controller resources require inspected cleanup",
           409,
         );
-      this.settleOperation(attemptId, undefined, undefined, "interrupted");
+      this.settleOperation(
+        attemptId,
+        undefined,
+        attempt.usage
+          ? usageSchema.parse(JSON.parse(attempt.usage))
+          : undefined,
+        "interrupted",
+      );
       this.event(
         "CONTROLLER_RESOURCES_RECONCILED",
         "controller",
@@ -1901,6 +1951,65 @@ export class ControlStore {
     failure?: FailureRecord,
   ) {
     return this.db.transaction(() => {
+      const retained = this.getTask(taskId);
+      const recovering = this.db.one<{ outcome: string; worker_id: string }>(
+        `SELECT outcome,worker_id FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
+      );
+      if (
+        recovering?.outcome === "active" &&
+        retained.workerId === workerId &&
+        retained.generation === generation &&
+        ((retained.leaseUntil ?? 0) <= this.clock() ||
+          (this.reliability.runtime(`${taskId}:${generation}`)?.deadlineAt ??
+            Infinity) <= this.clock() ||
+          ["paused", "cancelled", "failed", "completed"].includes(
+            this.getGoal(retained.goalId).status,
+          ))
+      ) {
+        this.fenceInterruptedTask(retained, workerId);
+        recovering.outcome = "recovering";
+      }
+      if (
+        recovering &&
+        ["recovering", "interrupted"].includes(recovering.outcome)
+      ) {
+        if (recovering.worker_id !== workerId)
+          throw new ControlError(
+            "stale_lease",
+            "Accounting evidence ownership changed",
+            409,
+          );
+        const validated = executionUsage(
+          { usage, costUsd: actualCost },
+          this.getGoal(retained.goalId).config,
+        );
+        this.recordFinalAttemptUsage(
+          `${taskId}:${generation}`,
+          validated,
+          workerId,
+        );
+        if (failure?.kind === "cleanup_blocked") {
+          this.recordFailure(
+            retained.goalId,
+            failureRecord("cleanup_blocked"),
+            `${taskId}:${generation}`,
+            workerId,
+          );
+          const runtime = this.reliability.runtime(`${taskId}:${generation}`);
+          if (runtime) {
+            runtime.cleanupState = "blocked";
+            this.reliability.saveRuntime(runtime);
+          }
+        }
+        this.event(
+          "FENCED_WORKER_USAGE",
+          workerId,
+          { generation, usage: validated },
+          retained.goalId,
+          taskId,
+        );
+        return retained;
+      }
       const t = this.assertLease(taskId, workerId, generation);
       if (usage)
         executionUsage(
@@ -1956,7 +2065,7 @@ export class ControlStore {
         this.db.exec(
           `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE id=${sql(taskId)}`,
         );
-        this.fenceInterruptedTask(this.getTask(taskId), workerId);
+        this.fenceInterruptedTask(this.getTask(taskId), workerId, usage);
         const runtime = this.reliability.runtime(`${taskId}:${generation}`);
         if (runtime) {
           runtime.cleanupState = "blocked";
@@ -2026,7 +2135,7 @@ export class ControlStore {
       return { taskId: entry, generation: attempt.generation };
     });
   }
-  private fenceInterruptedTask(task: Task, actor: string) {
+  private fenceInterruptedTask(task: Task, actor: string, finalUsage?: Usage) {
     const attemptId = `${task.id}:${task.generation}`;
     const attempt = this.db.one<{ outcome: string }>(
       `SELECT outcome FROM control_attempts WHERE id=${sql(attemptId)}`,
@@ -2043,7 +2152,7 @@ export class ControlStore {
         ["claimed", "running"].includes(task.status) &&
         config.backend.kind !== "fake";
       this.db.exec(
-        `UPDATE control_attempts SET outcome='recovering'${unknown ? `,usage=${this.encode(executionUsage({}, config))}` : ""} WHERE id=${sql(attemptId)}`,
+        `UPDATE control_attempts SET outcome='recovering'${finalUsage ? `,usage=${this.encode(executionUsage({ usage: finalUsage }, config))}` : unknown ? `,usage=${this.encode(executionUsage({}, config))}` : ""} WHERE id=${sql(attemptId)}`,
       );
       this.event(
         "OWNERSHIP_FENCED",
@@ -2053,6 +2162,9 @@ export class ControlStore {
         task.id,
       );
     }
+    this.db.exec(
+      `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE id=${sql(task.id)} AND generation=${task.generation}`,
+    );
     this.reliability.beginCleanup(attemptId);
     if (["accepted", "cancelled", "superseded"].includes(task.status)) return;
     if (task.status !== "waiting_human")
@@ -2196,7 +2308,7 @@ export class ControlStore {
         );
       }
       for (const attemptId of prior?.operations ?? []) {
-        this.settleOperation(attemptId, undefined, undefined, "interrupted");
+        this.finishOperationRecovery(attemptId);
         const r = this.db.one<Row>(
           `SELECT goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
         );
@@ -3346,21 +3458,24 @@ export class ControlStore {
   revokeToken(token: string) {
     this.db.exec(`DELETE FROM control_tokens WHERE hash=${sql(hash(token))}`);
   }
+  idempotentResponse(key: string, request: unknown) {
+    const old = this.db.one<Row>(
+      `SELECT * FROM control_idempotency WHERE key=${sql(key)}`,
+    );
+    if (!old) return undefined;
+    if (old.request_hash !== hash(JSON.stringify(request)))
+      throw new ControlError(
+        "idempotency_conflict",
+        "Key used for another request",
+        409,
+      );
+    return { response: JSON.parse(String(old.response)) };
+  }
   idempotent(key: string, request: unknown, operation: () => unknown) {
     return this.db.transaction(() => {
       const fingerprint = hash(JSON.stringify(request));
-      const old = this.db.one<Row>(
-        `SELECT * FROM control_idempotency WHERE key=${sql(key)}`,
-      );
-      if (old) {
-        if (old.request_hash !== fingerprint)
-          throw new ControlError(
-            "idempotency_conflict",
-            "Key used for another request",
-            409,
-          );
-        return JSON.parse(String(old.response));
-      }
+      const old = this.idempotentResponse(key, request);
+      if (old) return old.response;
       const response = operation();
       this.db.exec(
         `INSERT INTO control_idempotency VALUES(${sql(key)},${sql(fingerprint)},${this.encode(response)})`,

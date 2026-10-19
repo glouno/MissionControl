@@ -252,6 +252,32 @@ export class Scheduler {
       startedAt: this.store.clock(),
     });
     try {
+      for (const goal of this.store.goals(500)) {
+        const threshold = goal.config.budgetAlertUsd;
+        if (
+          threshold === undefined ||
+          this.store.setting(`budget-alert:${goal.id}`)
+        )
+          continue;
+        const budget = this.store.canSpend(goal.id);
+        if (budget.settledUsd >= threshold) {
+          this.store.setting(`budget-alert:${goal.id}`, {
+            thresholdUsd: threshold,
+            settledUsd: budget.settledUsd,
+          });
+          this.store.event(
+            "BUDGET_ALERT",
+            "scheduler",
+            {
+              thresholdUsd: threshold,
+              settledUsd: budget.settledUsd,
+              reportedUsd: budget.reportedUsd,
+              estimatedUsd: budget.estimatedUsd,
+            },
+            goal.id,
+          );
+        }
+      }
       for (const attempt of this.store.db
         .query<{ id: string; goal_id: string; task_id: string | null }>(
           "SELECT id,goal_id,task_id FROM control_attempts WHERE outcome='active'",
@@ -1023,25 +1049,42 @@ export class Scheduler {
         operationReservationId: budget,
       });
       let output;
+      let terminalError: unknown;
       try {
         output = await abortable(running, signal);
       } catch (error) {
         if (signal.aborted)
           await boundedCleanup(
             async (cleanup) => {
-              await abortable(
-                running.catch(() => {}),
+              const completion = await abortable(
+                running.then(
+                  (value) => ({ value }),
+                  (failure) => ({ failure }),
+                ),
                 cleanup,
               );
+              if ("failure" in completion) {
+                terminalError = completion.failure;
+                return;
+              }
+              cost = completion.value.costUsd;
+              usage = executionUsage(completion.value, g.config);
             },
             60000,
             cleanup(),
           );
+        if (terminalError) throw terminalError;
         throw error;
       }
-      signal.throwIfAborted();
       cost = output.costUsd;
       usage = executionUsage(output, g.config);
+      signal.throwIfAborted();
+      if (
+        this.store.db.one<{ outcome: string }>(
+          `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
+        )?.outcome !== "active"
+      )
+        throw new ProviderFailure(failureRecord("interrupted"));
       outcome = "completed";
       result = {
         executionSessionId: output.executionSessionId,
@@ -1052,23 +1095,35 @@ export class Scheduler {
       this.store.recordFailure(g.id, classifyFailure(e), budget);
       if (e instanceof Error)
         Object.assign(e, { reliabilityAttemptId: budget });
-      cost = (e as any).costUsd;
-      try {
-        usage = executionUsage(e as any, g.config);
-      } catch {
-        usage = executionUsage({}, g.config);
-        cost = undefined;
+      if (
+        !usage ||
+        (e as any).usage !== undefined ||
+        (e as any).costUsd !== undefined
+      ) {
+        cost = (e as any).costUsd;
+        try {
+          usage = executionUsage(e as any, g.config);
+        } catch {
+          usage = executionUsage({}, g.config);
+          cost = undefined;
+        }
       }
       throw e;
     } finally {
       this.operationAborts.delete(budget);
       const failure = this.store.reliability.runtime(budget)?.failure;
-      if (failure?.kind === "cleanup_blocked") {
+      const state = this.store.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
+      )?.outcome;
+      const fenced = state !== "active";
+      if (usage && state === "interrupted")
+        this.store.recordFinalAttemptUsage(budget, usage, "controller");
+      if (failure?.kind === "cleanup_blocked" || fenced) {
         this.store.db.exec(
-          `UPDATE control_attempts SET outcome='recovering' WHERE id=${sql(budget)} AND outcome='active'`,
+          `UPDATE control_attempts SET outcome='recovering',usage=COALESCE(${usage ? sql(JSON.stringify(usage)) : "NULL"},usage) WHERE id=${sql(budget)} AND outcome IN ('active','recovering')`,
         );
         const r = this.store.reliability.runtime(budget);
-        if (r) {
+        if (r && failure?.kind === "cleanup_blocked") {
           r.cleanupState = "blocked";
           this.store.reliability.saveRuntime(r);
         }
@@ -1097,7 +1152,7 @@ export class Scheduler {
           outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
           signal: controller.signal,
           onCheckpoint: async () => {},
-          prompt: `Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
+          prompt: `Produce the smallest useful task plan. For an explicitly defined single-task goal, return one task without rediscovering or redesigning the whole project. Limit investigation to files needed to identify scope, paths and checks; keep the final plan concise. Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
         },
         "planning",
       );

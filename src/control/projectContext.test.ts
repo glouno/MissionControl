@@ -160,3 +160,68 @@ test("owner operations checkpoint and release only affected work, reconcile inte
   assert.match(resumed.task.checkpoint!.summary, /scoped-endpoint/);
   assert.equal(store.operations().length, 0);
 });
+
+test("context preflight reports large legitimate bundles and never truncates authority", async (t) => {
+  const { writeFile } = await import("node:fs/promises");
+  const { instructionManifest } = await import("./projectContext.js");
+  const root = await mkdtemp(join(tmpdir(), "mc-context-budget-"));
+  t.after(() => rm(root, { recursive: true }));
+  await writeFile(join(root, "AGENTS.md"), "a".repeat(76521));
+  const store = new ControlStore(new SqliteStore(join(root, "state.db")));
+  t.after(() => store.db.close());
+  const goal = store.createGoal({
+    title: "context",
+    description: "context",
+    repoPath: root,
+  });
+  const context = await instructionManifest(goal, root);
+  assert.equal(context.contextBudget.injectedCharacters, 76521);
+  assert.equal(context.instructions[0].content.length, 76521);
+  assert.equal(context.instructions[0].truncated, false);
+  goal.config.contextMaxCharacters = 64000;
+  await assert.rejects(
+    instructionManifest(goal, root),
+    /76521 characters; configured limit 64000/,
+  );
+});
+
+test("preflight validates uninjected snapshot byte bounds and regular blob types", async (t) => {
+  const { writeFile, symlink } = await import("node:fs/promises");
+  const { git } = await import("./git.js");
+  const { instructionManifest } = await import("./projectContext.js");
+  const root = await mkdtemp(join(tmpdir(), "mc-snapshot-preflight-"));
+  t.after(() => rm(root, { recursive: true }));
+  await git(root, ["init", "-b", "main"]);
+  await writeFile(join(root, "large"), "x".repeat(1048577));
+  await symlink("large", join(root, "link"));
+  await git(root, ["add", "."]);
+  await git(root, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@localhost",
+    "commit",
+    "-m",
+    "contracts",
+  ]);
+  const revision = await git(root, ["rev-parse", "HEAD"]);
+  const store = new ControlStore(new SqliteStore(join(root, "state.db")));
+  t.after(() => store.db.close());
+  const goal = store.createGoal({
+    title: "preflight",
+    description: "preflight",
+    repoPath: root,
+  });
+  for (const [path, code] of [
+    ["large", "context_limit"],
+    ["link", "contract_type"],
+  ]) {
+    goal.config.siblingContracts = [
+      { repositoryPath: root, revision, files: [path], injectedFiles: [] },
+    ];
+    await assert.rejects(
+      instructionManifest(goal, root),
+      (error: any) => error.code === code,
+    );
+  }
+});

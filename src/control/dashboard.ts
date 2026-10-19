@@ -96,6 +96,17 @@ export function dashboardSnapshot(
     });
   return {
     goals,
+    budgetAlerts: goals
+      .filter(
+        (g) =>
+          g.config.budgetAlertUsd !== undefined &&
+          store.canSpend(g.id).settledUsd >= g.config.budgetAlertUsd,
+      )
+      .map((g) => ({
+        goalId: g.id,
+        thresholdUsd: g.config.budgetAlertUsd,
+        settledUsd: store.canSpend(g.id).settledUsd,
+      })),
     incidents: store.reliability.actionableIncidents(),
     inferenceDiagnostics: store.reliability.page(
       "inference_diagnostics",
@@ -133,8 +144,21 @@ export function dashboardSnapshot(
             completed: status === "completed",
           };
         });
+        let currentGoalId = entry.goalId;
+        const seen = new Set<string>();
+        while (currentGoalId && !seen.has(currentGoalId)) {
+          seen.add(currentGoalId);
+          const successor = store.setting(`replaced-by:${currentGoalId}`) as
+            string | undefined;
+          if (!successor) break;
+          currentGoalId = successor;
+        }
         return {
           ...entry,
+          currentGoalId,
+          currentGoalStatus: currentGoalId
+            ? store.getGoal(currentGoalId).status
+            : null,
           dependencyStatus: dependencies,
           blockedReasons: dependencies
             .filter((dependency) => !dependency.completed)

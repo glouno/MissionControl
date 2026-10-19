@@ -45,15 +45,14 @@ export function safeContractPath(path: string) {
       409,
     );
 }
-export async function prepareContractSnapshot(
-  root: string,
+export async function readContractSnapshot(
   inputs: SnapshotInput[],
   signal?: AbortSignal,
-): Promise<ContractSnapshot> {
+) {
   if (inputs.length > 10)
     throw new ControlError("context_limit", "Too many sibling contracts", 409);
   const files: ContractSnapshot["files"] = [],
-    contents: { path: string; content: string }[] = [];
+    contents: { path: string; content: Buffer }[] = [];
   let total = 0;
   for (const [index, input] of inputs.entries()) {
     if (
@@ -114,12 +113,19 @@ export async function prepareContractSnapshot(
           ],
           {
             cwd: input.repositoryPath,
+            encoding: "buffer",
             maxBuffer: 1024 * 1024,
             timeout: 60000,
             signal,
           },
         )
       ).stdout;
+      if (content.length !== bytes)
+        throw new ControlError(
+          "contract_integrity",
+          "Pinned blob size changed",
+          409,
+        );
       const path = `${index}/${file}`;
       if (files.some((f) => f.path === path))
         throw new ControlError("contract_path", "Duplicate contract file", 409);
@@ -132,6 +138,14 @@ export async function prepareContractSnapshot(
       contents.push({ path, content });
     }
   }
+  return { files, contents };
+}
+export async function prepareContractSnapshot(
+  root: string,
+  inputs: SnapshotInput[],
+  signal?: AbortSignal,
+): Promise<ContractSnapshot> {
+  const { files, contents } = await readContractSnapshot(inputs, signal);
   const digest = hash(JSON.stringify(files));
   await mkdir(root, { recursive: true, mode: 0o700 });
   if ((await realpath(root)) !== resolve(root))

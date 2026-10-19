@@ -328,3 +328,333 @@ test("progress warnings preserve native provider authority and recovered tools c
     runtime.nextRetryAt,
   );
 });
+
+test("controller cleanup recovery retains measured usage while reserved and settles after stopped evidence", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("measured-cleanup");
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        throw Object.assign(
+          new ProviderFailure(failureRecord("cleanup_blocked")),
+          {
+            costUsd: 0.25,
+            usage: {
+              kind: "metered",
+              status: "estimated",
+              costUsd: 0.25,
+              inputTokens: 100,
+              outputTokens: 10,
+            },
+          },
+        );
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.deepEqual(attempt.usage, {
+    kind: "metered",
+    status: "estimated",
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  });
+  assert.equal(f.store.canSpend(goal.id).reservedUsd, 1);
+  f.store.fenceStartup();
+  f.store.finishStartupRecovery();
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+  assert.equal(f.store.canSpend(goal.id).unresolvedUsd, 0);
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, attempt.usage);
+});
+
+test("cancellation retains eventual cleanup failure and measured controller usage", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("cancelled-cleanup");
+  const controller = new AbortController();
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        controller.abort(new Error("cancel"));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        throw Object.assign(
+          new ProviderFailure(failureRecord("cleanup_blocked")),
+          {
+            usage: {
+              kind: "metered",
+              status: "estimated",
+              costUsd: 0.25,
+              inputTokens: 100,
+              outputTokens: 10,
+            },
+            costUsd: 0.25,
+          },
+        );
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: controller.signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+    (error: any) => error.failure.kind === "cleanup_blocked",
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.equal(attempt.usage?.costUsd, 0.25);
+  assert.equal(f.store.canSpend(goal.id).activeReservedUsd, 1);
+});
+
+test("worker cleanup fencing retains explicit final measured usage", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("worker-cleanup");
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "one",
+          description: "one",
+          acceptanceCriteria: ["works"],
+          allowedPaths: ["**"],
+        },
+      ],
+    },
+    goal.revision,
+    "operator",
+  );
+  f.store.registerWorker("worker");
+  const claim = f.store.claimNextTask("worker")!;
+  f.store.transition(claim.task.id, "worker", claim.generation, "running");
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  f.store.release(
+    claim.task.id,
+    "worker",
+    claim.generation,
+    "failed",
+    "cleanup",
+    0.25,
+    usage,
+    failureRecord("cleanup_blocked"),
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.deepEqual(attempt.usage, usage);
+});
+
+test("cancellation retains measured eventual successful completion", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("cancelled-success");
+  const controller = new AbortController();
+  const measured = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        const result = { text: "done", costUsd: 0.25, usage: measured };
+        queueMicrotask(() =>
+          queueMicrotask(() => controller.abort(new Error("cancel"))),
+        );
+        return result;
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: controller.signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, measured);
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+});
+
+for (const cleanupBlocked of [false, true])
+  test(`startup-fenced controller completion retains ownership and usage ${cleanupBlocked}`, async (t) => {
+    const f = await fixture(t),
+      goal = await f.goal("fenced-final");
+    const usage = {
+      kind: "metered" as const,
+      status: "estimated" as const,
+      costUsd: 0.25,
+      inputTokens: 100,
+      outputTokens: 10,
+    };
+    let attemptId = "";
+    const scheduler = new Scheduler(f.store, f.root, "unused", {
+      backend: () => ({
+        run: async (context: any) => {
+          attemptId = context.operationReservationId;
+          f.db.exec(
+            `INSERT INTO execution_invocations(id,task_id,generation,record) VALUES('owned','planning',0,'{"id":"owned","spec":{"operationReservationId":"${attemptId}"},"container":"still-owned","status":"running"}')`,
+          );
+          f.store.fenceStartup();
+          if (cleanupBlocked)
+            throw Object.assign(
+              new ProviderFailure(failureRecord("cleanup_blocked")),
+              { usage, costUsd: 0.25 },
+            );
+          return {
+            text: "done",
+            usage,
+            costUsd: 0.25,
+            inputTokens: 100,
+            outputTokens: 10,
+          };
+        },
+      }),
+    } as any);
+    const run = (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    );
+    await assert.rejects(run);
+    assert.equal(f.store.attempts(goal.id)[0].outcome, "recovering");
+    assert.deepEqual(f.store.attempts(goal.id)[0].usage, usage);
+    assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+    assert.throws(
+      () => f.store.finishStartupRecovery(),
+      /resources require inspected cleanup/,
+    );
+    f.db.exec(
+      `UPDATE execution_invocations SET record='{"id":"owned","spec":{"operationReservationId":"${attemptId}"},"status":"stopped"}' WHERE id='owned'`,
+    );
+    f.store.finishStartupRecovery();
+    assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+  });
+
+test("controller completion after closed recovery retains evidence without restoring authority", async (t) => {
+  const f = await fixture(t),
+    goal = await f.goal("closed-controller");
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async (context: any) => {
+        f.store.fenceStartup();
+        f.store.finishOperationRecovery(context.operationReservationId);
+        return {
+          text: "done",
+          usage,
+          costUsd: 0.25,
+          inputTokens: 100,
+          outputTokens: 10,
+        };
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  assert.equal(f.store.attempts(goal.id)[0].outcome, "interrupted");
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, usage);
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+});
+
+test("fenced worker authority cannot revive after paused goal resumes", async (t) => {
+  const f = await fixture(t),
+    goal = await f.goal("pause-fence");
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "one",
+          description: "one",
+          acceptanceCriteria: ["works"],
+          allowedPaths: ["**"],
+        },
+      ],
+    },
+    goal.revision,
+  );
+  f.store.registerWorker("worker");
+  const claim = f.store.claimNextTask("worker")!;
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  f.store.setGoalState(
+    goal.id,
+    "paused",
+    f.store.getGoal(goal.id).revision,
+    "operator",
+  );
+  f.store.release(
+    claim.task.id,
+    "worker",
+    claim.generation,
+    "blocked",
+    "paused",
+    0.25,
+    usage,
+  );
+  f.store.setGoalState(
+    goal.id,
+    "running",
+    f.store.getGoal(goal.id).revision,
+    "operator",
+  );
+  assert.throws(
+    () => f.store.assertLease(claim.task.id, "worker", claim.generation),
+    /lease is no longer valid/,
+  );
+  assert.equal(f.store.attempts(goal.id)[0].outcome, "recovering");
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+});

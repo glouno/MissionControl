@@ -172,6 +172,8 @@ export class IsolatedBackend implements AgentBackend {
           provider: this.options.provider,
           protocol: config.kind === "codex" ? "responses" : "messages",
           model: config.model,
+          maxOutputTokens:
+            config.kind === "codex" ? (config.maxOutputTokens ?? 65536) : 32768,
           expiresAt:
             context.deadlineAt ??
             startedAt + context.claim.goal.config.timeoutMs,
@@ -242,6 +244,7 @@ export class IsolatedBackend implements AgentBackend {
             executionSessionId: session.id,
             prompt:
               context.prompt +
+              `\nRuntime instructions (operator-admitted): ${context.claim.goal.config.runtimeInstructions ?? ""}\nRequired verification commands: ${JSON.stringify(context.claim.goal.config.verificationCommands)}\nThese commands are authoritative for the admitted image. Repository development setup commands apply only when the declared runtime requires installation. Retain controller evidence and source checkpoints; disposable pytest fixtures in an ephemeral container may use a stable --basetemp for repeated runs. Do not delete production or retained controller databases. Final verification runs in a fresh isolated environment.` +
               (contracts
                 ? `\nPinned read-only sibling contracts at /contracts. Snapshot ${contracts.digest}; manifest.json maps numbered siblings to exact revisions. Do not modify these files; request owner coordination for contract changes.`
                 : ""),
@@ -361,19 +364,17 @@ export class IsolatedBackend implements AgentBackend {
       if (!result) throw new Error("Native harness ended without result");
       return {
         ...result,
-        // Responses usage has no dollar price. Reserve the configured estimate
-        // rather than treating unavailable provider billing as free inference.
+        // Provider counters and operator-pinned rates give an estimate, never an invoice.
         ...(config.kind === "codex"
-          ? {
-              costUsd: undefined,
-              usage: {
-                kind: "metered" as const,
-                status: "unknown" as const,
-                inputTokens: result.inputTokens,
-                outputTokens: result.outputTokens,
-              },
-              costStatus: "estimated_unknown" as const,
-            }
+          ? (() => {
+              const usage = this.gateway.sessionUsage(session.id);
+              return {
+                costUsd:
+                  usage.status === "estimated" ? usage.costUsd : undefined,
+                usage,
+                costStatus: "estimated_unknown" as const,
+              };
+            })()
           : {
               costStatus: portable
                 ? ("estimated_unknown" as const)
@@ -382,10 +383,7 @@ export class IsolatedBackend implements AgentBackend {
         usage:
           config.kind === "codex"
             ? {
-                kind: "metered",
-                status: "unknown",
-                inputTokens: result.inputTokens,
-                outputTokens: result.outputTokens,
+                ...this.gateway.sessionUsage(session.id),
                 elapsedMs: Date.now() - startedAt,
               }
             : result.usage
@@ -402,24 +400,38 @@ export class IsolatedBackend implements AgentBackend {
       };
     } catch (error) {
       failure = error;
-      if (config.kind === "codex" && error instanceof Error)
+      if (config.kind === "codex" && error instanceof Error) {
+        const usage = this.gateway.sessionUsage(session.id);
         Object.assign(error, {
-          costUsd: undefined,
-          usage: { kind: "metered", status: "unknown" },
+          costUsd: usage.status === "estimated" ? usage.costUsd : undefined,
+          usage: { ...usage, elapsedMs: Date.now() - startedAt },
           costStatus: "estimated_unknown",
         });
+      }
       throw error;
     } finally {
       this.gateway.revoke(session.id);
       // No destructive source cleanup: recovery/retention owns these records.
-      await boundedCleanup(
-        async (signal) => {
-          await this.environment.reset(session.id, signal);
-          if (network) await this.networks.stop(session.id, signal);
-        },
-        60000,
-        cleanup(),
-      );
+      try {
+        await boundedCleanup(
+          async (signal) => {
+            await this.environment.reset(session.id, signal);
+            if (network) await this.networks.stop(session.id, signal);
+          },
+          60000,
+          cleanup(),
+        );
+      } catch (error) {
+        if (config.kind === "codex" && error instanceof Error) {
+          const usage = this.gateway.sessionUsage(session.id);
+          Object.assign(error, {
+            costUsd: usage.status === "estimated" ? usage.costUsd : undefined,
+            usage: { ...usage, elapsedMs: Date.now() - startedAt },
+            costStatus: "estimated_unknown",
+          });
+        }
+        throw error;
+      }
       const saved = this.registry.get(session.id);
       this.registry.save({
         ...saved,

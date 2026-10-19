@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { git } from "./git.js";
+import { readContractSnapshot } from "./contractSnapshots.js";
 import { ControlError } from "./schema.js";
 import { resolve } from "node:path";
 import { repositoryIdentity } from "./repositories.js";
@@ -58,7 +58,15 @@ export function overlapEvidence(
 }
 
 export async function instructionManifest(goal: Goal, workspace: string) {
-  let remaining = 64000;
+  const limit = goal.config.contextMaxCharacters ?? 256000;
+  let remaining = limit;
+  const manifest: { path: string; characters: number; injected: boolean }[] =
+    [];
+  const account = (path: string, source: string, injected = true) => {
+    manifest.push({ path, characters: source.length, injected });
+    if (!injected) return;
+    remaining -= source.length;
+  };
   const instructions: { path: string; content: string; truncated: boolean }[] =
     [];
   const root = await realpath(workspace);
@@ -82,41 +90,63 @@ export async function instructionManifest(goal: Goal, workspace: string) {
     const source = await readFile(path, "utf8");
     instructions.push({
       path: file,
-      content: source.slice(0, remaining),
-      truncated: source.length > remaining,
+      content: source,
+      truncated: false,
     });
-    remaining = Math.max(0, remaining - source.length);
-    if (!remaining) break;
+    account(file, source);
   }
   const siblingContracts: {
     revision: string;
     files: { path: string; content: string }[];
   }[] = [];
-  for (const contract of goal.config.siblingContracts ?? []) {
+  const contracts = goal.config.siblingContracts ?? [];
+  const snapshot = await readContractSnapshot(contracts);
+  for (const [index, contract] of contracts.entries()) {
     const files = [];
+    if (contract.injectedFiles?.some((path) => !contract.files.includes(path)))
+      throw new ControlError(
+        "contract_path",
+        "Injected files must belong to the pinned snapshot",
+        409,
+      );
     for (const path of contract.files) {
-      if (
-        path.startsWith("/") ||
-        path.split("/").includes("..") ||
-        /(^|\/)(\.env|\.ssh|\.azure|credentials)/.test(path)
-      )
+      const bytes = snapshot.contents.find(
+        (file) => file.path === `${index}/${path}`,
+      )!.content;
+      const injected =
+        contract.injectedFiles === undefined ||
+        contract.injectedFiles.includes(path);
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: injected }).decode(bytes);
+      } catch {
         throw new ControlError(
-          "contract_path",
-          "Sibling snapshots require explicit non-secret paths",
+          "contract_text",
+          "Injected contract files require valid UTF-8",
+          409,
         );
-      const content = await git(contract.repositoryPath, [
-        "show",
-        `${contract.revision}:${path}`,
-      ]);
-      if (content.length > remaining)
-        throw new ControlError(
-          "context_limit",
-          "Declared contracts exceed bounded context",
-        );
-      remaining -= content.length;
-      files.push({ path, content });
+      }
+      account(`${contract.revision}:${path}`, content, injected);
+      if (injected) files.push({ path, content });
     }
     siblingContracts.push({ revision: contract.revision, files });
   }
-  return { instructions, siblingContracts, configuredPrompts: goal.config.admission?.prompts ?? [] };
+  account("runtimeInstructions", goal.config.runtimeInstructions ?? "");
+  if (remaining < 0)
+    throw new ControlError(
+      "context_limit",
+      `Effective instruction and contract context uses ${limit - remaining} characters; configured limit ${limit}. Files: ${JSON.stringify(manifest)}`,
+      409,
+    );
+  return {
+    contextBudget: {
+      limitCharacters: limit,
+      injectedCharacters: limit - remaining,
+      files: manifest,
+    },
+    runtimeInstructions: goal.config.runtimeInstructions ?? "",
+    instructions,
+    siblingContracts,
+    configuredPrompts: goal.config.admission?.prompts ?? [],
+  };
 }

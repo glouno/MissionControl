@@ -99,3 +99,31 @@ test("concurrent snapshot preparation publishes one complete verified directory"
     "contract: v1\n\n",
   );
 });
+
+test("contract transport preserves raw non-UTF8 bytes within the snapshot limit", async (t) => {
+  const f = await fixture(t);
+  const bytes = Buffer.alloc(400000, 0xff);
+  await writeFile(join(f.repo, "binary"), bytes);
+  await git(f.repo, ["add", "binary"]);
+  await git(f.repo, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@localhost",
+    "commit",
+    "-m",
+    "binary",
+  ]);
+  const snapshot = await prepareContractSnapshot(
+    join(f.root, "binary-snapshots"),
+    [
+      {
+        ...f.input,
+        revision: await git(f.repo, ["rev-parse", "HEAD"]),
+        files: ["binary"],
+      },
+    ],
+  );
+  assert.deepEqual(await readFile(join(snapshot.path, "0/binary")), bytes);
+  assert.equal(snapshot.files[0].bytes, bytes.length);
+});

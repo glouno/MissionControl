@@ -87,7 +87,7 @@ export const inferenceDiagnosticSchema = z.object({
   provider: z.string(),
   endpoint: z.string(),
   model: z.string(),
-  maxOutputTokens: z.number().int().min(1).max(32768).optional(),
+  maxOutputTokens: z.number().int().min(1).max(131072).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   startedAt: timestampSchema,
   endedAt: timestampSchema.optional(),
@@ -98,6 +98,7 @@ export const inferenceDiagnosticSchema = z.object({
   httpStatus: z.number().int().min(100).max(599).optional(),
   requestIds: failureSchema.shape.requestIds,
   usageStatus: z.enum(["reported", "unknown"]).optional(),
+  providerRequestStarted: z.boolean().optional(),
 });
 export const incidentSchema = z.object({
   version: z.literal(1),
@@ -157,6 +158,7 @@ export interface InferenceDiagnostic {
   taskId?: string;
   generation?: number;
   sessionId?: string;
+  providerRequestStarted?: boolean;
   provider: string;
   endpoint: string;
   model: string;

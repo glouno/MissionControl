@@ -30,6 +30,7 @@ export interface InferenceCapability {
   protocol: "responses" | "messages";
   model: string;
   expiresAt: number;
+  maxOutputTokens?: number;
   revoked?: boolean;
 }
 export interface TrustedUpstream {
@@ -37,6 +38,13 @@ export interface TrustedUpstream {
   endpoint: string;
   headers: () => Promise<Record<string, string>>;
   allowedBetaHeaders?: string[];
+  maxOutputTokens?: number;
+  pricing?: {
+    inputUsdPerMillion: number;
+    cachedInputUsdPerMillion: number;
+    outputUsdPerMillion: number;
+    evidenceUrl: string;
+  };
 }
 const hash = (token: string) =>
   createHash("sha256").update(token).digest("hex");
@@ -130,6 +138,7 @@ export class InferenceGateway {
     let admittedKey: string | undefined;
     let requestAdmitted = false;
     let providerRequestStarted = false;
+    let reportedUsage: any = null;
     const diagnostics = new ReliabilityStore(this.db, this.clock);
     req.on("aborted", () => abort.abort());
     res.on("close", () => {
@@ -169,6 +178,10 @@ export class InferenceGateway {
           "Requested model is outside the session capability",
           403,
         );
+      const outputLimit = Math.min(
+        capability.maxOutputTokens ?? 32768,
+        this.upstreams[capability.provider].maxOutputTokens ?? 32768,
+      );
       const requestedOutput =
         capability.protocol === "responses"
           ? body.max_output_tokens
@@ -177,15 +190,15 @@ export class InferenceGateway {
         requestedOutput !== undefined &&
         (!Number.isSafeInteger(requestedOutput) ||
           requestedOutput < 1 ||
-          requestedOutput > 32768)
+          requestedOutput > outputLimit)
       )
         throw new ControlError(
           "output_limit",
-          "Requested output must contain between 1 and 32768 tokens",
+          `Requested output must contain between 1 and ${outputLimit} tokens`,
           400,
         );
       if (capability.protocol === "responses" && requestedOutput === undefined)
-        body.max_output_tokens = 32768;
+        body.max_output_tokens = outputLimit;
       if (capability.protocol === "messages" && requestedOutput === undefined)
         throw new ControlError(
           "output_limit",
@@ -321,6 +334,7 @@ export class InferenceGateway {
       }
       this.authenticate(token);
       diagnostic.phase = "headers";
+      diagnostic.providerRequestStarted = true;
       diagnostics.diagnostic(diagnostic);
       providerRequestStarted = true;
       const response = await abortable(
@@ -363,6 +377,7 @@ export class InferenceGateway {
         usage: any = null,
         complete = false;
       const consume = (event: any) => {
+        if (event.response?.usage) reportedUsage = event.response.usage;
         if (event.type === "response.incomplete")
           throw new ProviderFailure(
             failureRecord("incomplete_stream", {
@@ -458,7 +473,15 @@ export class InferenceGateway {
         );
       if (!type.includes("text/event-stream")) {
         const data = JSON.parse(scan);
-        consume({ type: "response.completed", response: data });
+        consume({
+          type:
+            data.status === "incomplete"
+              ? "response.incomplete"
+              : data.status === "failed"
+                ? "response.failed"
+                : "response.completed",
+          response: data,
+        });
         usage = data.usage ?? null;
         complete = true;
       }
@@ -470,13 +493,20 @@ export class InferenceGateway {
         );
       this.usage(tokenHash, {
         ...capability,
+        providerRequestStarted: true,
+        diagnosticId: diagnostic.id,
         status: 200,
         usage,
-        costUsd: null,
+        costUsd: this.price(capability.provider, usage),
+        costStatus:
+          this.price(capability.provider, usage) === null
+            ? "unknown"
+            : "estimated",
+        pricingEvidence: upstream.pricing?.evidenceUrl,
         complete,
       });
       diagnostic.status = "completed";
-      diagnostic.usageStatus = "reported";
+      diagnostic.usageStatus = usage ? "reported" : "unknown";
       if (diagnostic.attemptId) {
         const runtime = diagnostics.runtime(diagnostic.attemptId);
         if (runtime) {
@@ -504,7 +534,7 @@ export class InferenceGateway {
       if (diagnostic) {
         diagnostic.status = "failed";
         diagnostic.failure = failure;
-        diagnostic.usageStatus = "unknown";
+        diagnostic.usageStatus = reportedUsage ? "reported" : "unknown";
         // Persist before closing a refused/failed stream: the native server can
         // submit another POST immediately. Local protocol errors grant no retry.
         if (requestAdmitted && diagnostic.attemptId) {
@@ -530,6 +560,8 @@ export class InferenceGateway {
       if (tokenHash)
         this.usage(tokenHash, {
           ...capability,
+          providerRequestStarted,
+          diagnosticId: diagnostic?.id,
           status: "failed",
           errorCode:
             error instanceof ControlError ? error.code : "gateway_failed",
@@ -540,8 +572,15 @@ export class InferenceGateway {
                   .filter(Boolean),
               }
             : {}),
-          usage: null,
-          costUsd: null,
+          usage: reportedUsage,
+          costUsd: capability
+            ? this.price(capability.provider, reportedUsage)
+            : null,
+          costStatus:
+            capability &&
+            this.price(capability.provider, reportedUsage) !== null
+              ? "estimated"
+              : "unknown",
           complete: false,
         });
       if (res.headersSent) {
@@ -587,6 +626,93 @@ export class InferenceGateway {
       }
     }
   }
+  private price(provider: string, usage: any): number | null {
+    const pricing = this.upstreams[provider]?.pricing;
+    if (
+      !pricing ||
+      !usage ||
+      !Number.isSafeInteger(usage.input_tokens) ||
+      !Number.isSafeInteger(usage.output_tokens) ||
+      usage.input_tokens < 0 ||
+      usage.output_tokens < 0
+    )
+      return null;
+    const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+    if (
+      !Number.isSafeInteger(cached) ||
+      cached < 0 ||
+      cached > usage.input_tokens
+    )
+      return null;
+    return (
+      ((usage.input_tokens - cached) * pricing.inputUsdPerMillion +
+        cached * pricing.cachedInputUsdPerMillion +
+        usage.output_tokens * pricing.outputUsdPerMillion) /
+      1e6
+    );
+  }
+  sessionUsage(sessionId: string) {
+    const records = this.db
+      .query<{ record: string }>("SELECT record FROM inference_usage")
+      .map((row) => JSON.parse(row.record))
+      .filter(
+        (row) =>
+          row.sessionId === sessionId && row.providerRequestStarted !== false,
+      );
+    const unmatched = this.db
+      .query<{ record: string }>("SELECT record FROM inference_diagnostics")
+      .map((row) => JSON.parse(row.record))
+      .some(
+        (diagnostic) =>
+          diagnostic.sessionId === sessionId &&
+          (diagnostic.providerRequestStarted === true ||
+            (diagnostic.providerRequestStarted === undefined &&
+              ["headers", "body"].includes(diagnostic.phase))) &&
+          !records.some((row) => row.diagnosticId === diagnostic.id),
+      );
+    const completeCounters =
+      !unmatched &&
+      records.length > 0 &&
+      records.every(
+        (row) =>
+          Number.isSafeInteger(row.usage?.input_tokens) &&
+          row.usage.input_tokens >= 0 &&
+          Number.isSafeInteger(row.usage?.output_tokens) &&
+          row.usage.output_tokens >= 0,
+      );
+    const counters = completeCounters
+      ? {
+          inputTokens: records.reduce(
+            (sum, row) => sum + row.usage.input_tokens,
+            0,
+          ),
+          outputTokens: records.reduce(
+            (sum, row) => sum + row.usage.output_tokens,
+            0,
+          ),
+        }
+      : {};
+    if (
+      unmatched ||
+      !records.length ||
+      records.some(
+        (row) =>
+          !row.usage || row.costUsd === null || row.costUsd === undefined,
+      )
+    )
+      return {
+        kind: "metered" as const,
+        status: "unknown" as const,
+        ...counters,
+      };
+    return {
+      kind: "metered" as const,
+      status: "estimated" as const,
+      costUsd: records.reduce((sum, row) => sum + row.costUsd, 0),
+      ...counters,
+    };
+  }
+
   private usage(tokenHash: string, record: unknown) {
     this.db.exec(
       `INSERT INTO inference_usage(capability_hash,record,created_at) VALUES(${sql(tokenHash)},${sql(JSON.stringify(record))},${this.clock()})`,

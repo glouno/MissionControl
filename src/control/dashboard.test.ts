@@ -19,6 +19,7 @@ test("dashboard reports blocked readiness and reserved budgets separately withou
     repoPath: root,
     backend: { kind: "fake" as const },
     maxCostUsd: 5,
+    budgetAlertUsd: 0.5,
     estimatePerRunUsd: 1,
     repository: { mode: "local" as const, branch: "main" },
     verificationCommands: ["true"],
@@ -34,7 +35,7 @@ test("dashboard reports blocked readiness and reserved budgets separately withou
     },
     "operator",
   );
-  store.reserveOperation(goal.id, "synthetic attempt");
+  const reservation = store.reserveOperation(goal.id, "synthetic attempt");
   db.exec(
     `INSERT INTO execution_invocations VALUES('synthetic','task',1,'{"id":"synthetic","taskId":"task","generation":1,"status":"stopped","image":"synthetic","spec":{"goalId":"${goal.id}","cpu":1,"memoryMiB":256,"timeoutMs":1000,"secret":"synthetic-sensitive"},"completion":{"outcome":"verified","commit":"synthetic-commit","secret":"synthetic-sensitive"}}')`,
   );
@@ -50,6 +51,10 @@ test("dashboard reports blocked readiness and reserved budgets separately withou
   assert.equal(JSON.stringify(snapshot).includes("synthetic-sensitive"), false);
   assert.equal(snapshot.executions[0].cpu, 1);
   assert.equal(dashboardSnapshot(store).projects[0].readiness.admissible, true);
+  assert.deepEqual(snapshot.budgetAlerts, []);
+  store.settleOperation(reservation, 0.75);
+  assert.equal(dashboardSnapshot(store).budgetAlerts[0].goalId, goal.id);
+  assert.equal(dashboardSnapshot(store).budgetAlerts[0].settledUsd, 0.75);
 });
 test("dashboard history cursor reaches older goals without duplicates or mismatched task budgets", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mc-dashboard-pages-"));

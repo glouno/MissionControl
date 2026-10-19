@@ -1,3 +1,5 @@
+import { effectiveGoal, type LoadedConfiguration } from "../config.js";
+import { instructionManifest } from "./projectContext.js";
 import { supportBundle } from "./supportBundle.js";
 import {
   failureSchema,
@@ -379,11 +381,11 @@ export function createControlServer(
             403,
           );
       };
-      const lease = (taskId: string) => {
+      const lease = (taskId: string, evidenceOnly = false) => {
         const l = leaseSchema.parse(body);
         if (principal.role === "worker" && l.workerId !== principal.workerId)
           throw new ControlError("forbidden", "Worker identity mismatch", 403);
-        store.assertLease(taskId, l.workerId, l.generation);
+        if (!evidenceOnly) store.assertLease(taskId, l.workerId, l.generation);
         return l;
       };
       const visible = (taskId: string) => {
@@ -752,6 +754,112 @@ export function createControlServer(
           ),
         );
       }
+      if (path === "/goal-drafts" && method === "POST") {
+        scopedRead();
+        if (!options.validateGoal)
+          throw new ControlError(
+            "configuration",
+            "Project configuration is unavailable",
+            409,
+          );
+        const config = options.validateGoal(
+          body as import("./schema.js").GoalInput,
+        );
+        const context = await instructionManifest(
+          { config } as import("./schema.js").Goal,
+          config.repoPath,
+        );
+        return send(res, 200, {
+          valid: true,
+          config,
+          contextBudget: context.contextBudget,
+        });
+      }
+      const key = req.headers["idempotency-key"];
+      if (
+        key !== undefined &&
+        (typeof key !== "string" || key.length < 1 || key.length > 200)
+      )
+        throw new ControlError(
+          "idempotency_key",
+          "Idempotency-Key must contain 1 to 200 characters",
+          400,
+        );
+      if (
+        method === "POST" &&
+        typeof key === "string" &&
+        (path === "/goals" || /^\/backlog\/[a-zA-Z0-9_-]+\/launch$/.test(path))
+      ) {
+        scopedRead();
+        const replay = store.idempotentResponse(
+          `${principal.role}:${principal.actor}:${key}`,
+          { path, body },
+        );
+        if (replay) return send(res, 200, replay.response);
+      }
+      // Read pinned contracts before admission, outside the SQLite transaction.
+      // Revalidate the effective configuration inside the transaction after the await.
+      let preflightConfig: import("./schema.js").GoalConfig | undefined;
+      const launchMatch = /^\/backlog\/([a-zA-Z0-9_-]+)\/launch$/.exec(path);
+      if (
+        method === "POST" &&
+        options.validateGoal &&
+        (path === "/goals" || launchMatch)
+      ) {
+        scopedRead();
+        let input = body as import("./schema.js").GoalInput;
+        if (launchMatch) {
+          const request = backlogRevisionSchema.parse(body);
+          if (automation && !automation.projectIds.includes(request.projectId))
+            throw new ControlError(
+              "forbidden",
+              "Project is outside automation scope",
+              403,
+            );
+          const entry = store.getBacklog(launchMatch[1], request.projectId);
+          if (entry.status === "backlog") {
+            if (entry.revision !== request.revision)
+              throw new ControlError(
+                "revision",
+                "Backlog revision changed",
+                409,
+              );
+            const snapshot = store.setting("configuration-snapshot") as
+              LoadedConfiguration | undefined;
+            if (!snapshot)
+              throw new ControlError(
+                "configuration",
+                "Trusted project configuration is unavailable",
+                409,
+              );
+            const description = `${entry.title}\n\n${entry.description}${entry.acceptanceCriteria.length ? "\n\nAcceptance criteria:\n" + entry.acceptanceCriteria.map((c) => "- " + c).join("\n") : ""}`;
+            input = effectiveGoal(snapshot, entry.projectId, description);
+          } else
+            input = undefined as unknown as import("./schema.js").GoalInput;
+        }
+        if (input) {
+          preflightConfig = options.validateGoal(input);
+          await instructionManifest(
+            { config: preflightConfig } as import("./schema.js").Goal,
+            preflightConfig.repoPath,
+          );
+        }
+      }
+      const admissionValidator = options.validateGoal
+        ? (input: import("./schema.js").GoalInput) => {
+            const current = options.validateGoal!(input);
+            if (
+              preflightConfig &&
+              JSON.stringify(current) !== JSON.stringify(preflightConfig)
+            )
+              throw new ControlError(
+                "configuration",
+                "Configuration changed during contract preflight; retry admission",
+                409,
+              );
+            return current;
+          }
+        : undefined;
       const mutation = () => {
         const maintenance = store.setting("instance-maintenance") as
           { phase?: string } | undefined;
@@ -819,7 +927,7 @@ export function createControlServer(
                 backlogMatch[1],
                 backlogRevisionSchema.parse(body),
                 principal.actor,
-                options.validateGoal,
+                admissionValidator,
               );
             if (backlogMatch[2] === "archive")
               return store.archiveBacklog(
@@ -837,19 +945,6 @@ export function createControlServer(
             "Backlog endpoint not found",
             404,
           );
-        }
-        if (path === "/goal-drafts" && method === "POST") {
-          scopedRead();
-          if (!options.validateGoal)
-            throw new ControlError(
-              "configuration",
-              "Project configuration is unavailable",
-              409,
-            );
-          const config = options.validateGoal(
-            body as import("./schema.js").GoalInput,
-          );
-          return { valid: true, config };
         }
         if (path === "/projects" && method === "GET") {
           scopedRead();
@@ -877,8 +972,8 @@ export function createControlServer(
         }
         if (method === "POST" && path === "/goals") {
           scopedRead();
-          const input = options.validateGoal
-            ? options.validateGoal(body as import("./schema.js").GoalInput)
+          const input = admissionValidator
+            ? admissionValidator(body as import("./schema.js").GoalInput)
             : goalSchema.parse(body);
           return store.createGoal(input, principal.actor);
         }
@@ -1104,7 +1199,7 @@ export function createControlServer(
                 })),
             };
           }
-          const l = lease(tid);
+          const l = lease(tid, tm[2] === "release");
           const v = body as any;
           switch (tm[2]) {
             case "operation":
@@ -1294,16 +1389,6 @@ export function createControlServer(
           ),
         );
       }
-      const key = req.headers["idempotency-key"];
-      if (
-        key !== undefined &&
-        (typeof key !== "string" || key.length < 1 || key.length > 200)
-      )
-        throw new ControlError(
-          "idempotency_key",
-          "Idempotency-Key must contain 1 to 200 characters",
-          400,
-        );
       const response =
         method === "POST" && typeof key === "string"
           ? store.idempotent(
