@@ -1079,6 +1079,12 @@ export class Scheduler {
       cost = output.costUsd;
       usage = executionUsage(output, g.config);
       signal.throwIfAborted();
+      if (
+        this.store.db.one<{ outcome: string }>(
+          `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
+        )?.outcome === "recovering"
+      )
+        throw new ProviderFailure(failureRecord("interrupted"));
       outcome = "completed";
       result = {
         executionSessionId: output.executionSessionId,
@@ -1106,12 +1112,16 @@ export class Scheduler {
     } finally {
       this.operationAborts.delete(budget);
       const failure = this.store.reliability.runtime(budget)?.failure;
-      if (failure?.kind === "cleanup_blocked") {
+      const fenced =
+        this.store.db.one<{ outcome: string }>(
+          `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
+        )?.outcome === "recovering";
+      if (failure?.kind === "cleanup_blocked" || fenced) {
         this.store.db.exec(
-          `UPDATE control_attempts SET outcome='recovering',usage=COALESCE(${usage ? sql(JSON.stringify(usage)) : "NULL"},usage) WHERE id=${sql(budget)} AND outcome='active'`,
+          `UPDATE control_attempts SET outcome='recovering',usage=COALESCE(${usage ? sql(JSON.stringify(usage)) : "NULL"},usage) WHERE id=${sql(budget)} AND outcome IN ('active','recovering')`,
         );
         const r = this.store.reliability.runtime(budget);
-        if (r) {
+        if (r && failure?.kind === "cleanup_blocked") {
           r.cleanupState = "blocked";
           this.store.reliability.saveRuntime(r);
         }

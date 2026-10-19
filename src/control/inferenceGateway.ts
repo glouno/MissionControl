@@ -668,9 +668,7 @@ export class InferenceGateway {
           (diagnostic.providerRequestStarted === true ||
             (diagnostic.providerRequestStarted === undefined &&
               ["headers", "body"].includes(diagnostic.phase))) &&
-          !records.some((row) => row.diagnosticId === diagnostic.id) &&
-          (diagnostic.status !== "completed" ||
-            diagnostic.providerRequestStarted === true),
+          !records.some((row) => row.diagnosticId === diagnostic.id),
       );
     const completeCounters =
       !unmatched &&

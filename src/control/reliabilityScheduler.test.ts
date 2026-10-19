@@ -502,3 +502,62 @@ test("cancellation retains measured eventual successful completion", async (t) =
   assert.deepEqual(f.store.attempts(goal.id)[0].usage, measured);
   assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
 });
+
+for (const cleanupBlocked of [false, true])
+  test(`startup-fenced controller completion retains ownership and usage ${cleanupBlocked}`, async (t) => {
+    const f = await fixture(t),
+      goal = await f.goal("fenced-final");
+    const usage = {
+      kind: "metered" as const,
+      status: "estimated" as const,
+      costUsd: 0.25,
+      inputTokens: 100,
+      outputTokens: 10,
+    };
+    let attemptId = "";
+    const scheduler = new Scheduler(f.store, f.root, "unused", {
+      backend: () => ({
+        run: async (context: any) => {
+          attemptId = context.operationReservationId;
+          f.db.exec(
+            `INSERT INTO execution_invocations(id,task_id,generation,record) VALUES('owned','planning',0,'{"id":"owned","spec":{"operationReservationId":"${attemptId}"},"container":"still-owned","status":"running"}')`,
+          );
+          f.store.fenceStartup();
+          if (cleanupBlocked)
+            throw Object.assign(
+              new ProviderFailure(failureRecord("cleanup_blocked")),
+              { usage, costUsd: 0.25 },
+            );
+          return {
+            text: "done",
+            usage,
+            costUsd: 0.25,
+            inputTokens: 100,
+            outputTokens: 10,
+          };
+        },
+      }),
+    } as any);
+    const run = (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    );
+    await assert.rejects(run);
+    assert.equal(f.store.attempts(goal.id)[0].outcome, "recovering");
+    assert.deepEqual(f.store.attempts(goal.id)[0].usage, usage);
+    assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+    assert.throws(
+      () => f.store.finishStartupRecovery(),
+      /resources require inspected cleanup/,
+    );
+    f.db.exec(
+      `UPDATE execution_invocations SET record='{"id":"owned","spec":{"operationReservationId":"${attemptId}"},"status":"stopped"}' WHERE id='owned'`,
+    );
+    f.store.finishStartupRecovery();
+    assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+  });

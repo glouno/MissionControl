@@ -551,6 +551,10 @@ test("session estimates use provider counters and cached rates, retaining unknow
     kind: "metered",
     status: "unknown",
   });
+  f.db.exec(
+    `UPDATE inference_diagnostics SET record=${sql(JSON.stringify({ id: "unfinished", sessionId: f.cap.sessionId, phase: "body", status: "completed" }))} WHERE id='unfinished'`,
+  );
+  assert.equal(f.gateway.sessionUsage(f.cap.sessionId).status, "unknown");
 });
 
 test("local retry denial retains billed provider counters and uncertain provider calls remain unknown", async (t) => {
