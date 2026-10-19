@@ -1022,6 +1022,20 @@ for (const blocked of [true, false])
       f.root,
       {
         run: async () => {
+          const current = f.store.getGoal(goal.id);
+          if (blocked)
+            f.store.setGoalState(
+              goal.id,
+              "cancelled",
+              current.revision,
+              "operator",
+            );
+          else {
+            f.db.exec(
+              `UPDATE control_tasks SET lease_until=0 WHERE id='${claim.task.id}'`,
+            );
+            f.store.reconcileExpired(claim.task.id, claim.generation);
+          }
           controller.abort(new Error("cancel"));
           await new Promise((resolve) => setTimeout(resolve, 30));
           if (blocked)
@@ -1043,5 +1057,7 @@ for (const blocked of [true, false])
     );
     const attempt = f.store.attempts(goal.id)[0];
     assert.deepEqual(attempt.usage, usage);
-    assert.equal(attempt.outcome, blocked ? "recovering" : "blocked");
+    assert.equal(attempt.outcome, "recovering");
+    if (blocked) assert.equal(f.store.getGoal(goal.id).status, "cancelled");
+    assert.equal(f.store.getTask(claim.task.id).workerId, "worker");
   });

@@ -381,11 +381,11 @@ export function createControlServer(
             403,
           );
       };
-      const lease = (taskId: string) => {
+      const lease = (taskId: string, evidenceOnly = false) => {
         const l = leaseSchema.parse(body);
         if (principal.role === "worker" && l.workerId !== principal.workerId)
           throw new ControlError("forbidden", "Worker identity mismatch", 403);
-        store.assertLease(taskId, l.workerId, l.generation);
+        if (!evidenceOnly) store.assertLease(taskId, l.workerId, l.generation);
         return l;
       };
       const visible = (taskId: string) => {
@@ -1199,7 +1199,7 @@ export function createControlServer(
                 })),
             };
           }
-          const l = lease(tid);
+          const l = lease(tid, tm[2] === "release");
           const v = body as any;
           switch (tm[2]) {
             case "operation":

@@ -1909,6 +1909,36 @@ export class ControlStore {
     failure?: FailureRecord,
   ) {
     return this.db.transaction(() => {
+      const retained = this.getTask(taskId);
+      const recovering = this.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
+      );
+      if (recovering?.outcome === "recovering") {
+        if (
+          retained.workerId !== workerId ||
+          retained.generation !== generation
+        )
+          throw new ControlError(
+            "stale_lease",
+            "Accounting evidence ownership changed",
+            409,
+          );
+        const validated = executionUsage(
+          { usage, costUsd: actualCost },
+          this.getGoal(retained.goalId).config,
+        );
+        this.db.exec(
+          `UPDATE control_attempts SET usage=${this.encode(validated)} WHERE id=${sql(`${taskId}:${generation}`)} AND outcome='recovering'`,
+        );
+        this.event(
+          "FENCED_WORKER_USAGE",
+          workerId,
+          { generation, usage: validated },
+          retained.goalId,
+          taskId,
+        );
+        return retained;
+      }
       const t = this.assertLease(taskId, workerId, generation);
       if (usage)
         executionUsage(
@@ -2204,7 +2234,7 @@ export class ControlStore {
         );
       }
       for (const attemptId of prior?.operations ?? []) {
-        this.settleOperation(attemptId, undefined, undefined, "interrupted");
+        this.finishOperationRecovery(attemptId);
         const r = this.db.one<Row>(
           `SELECT goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
         );

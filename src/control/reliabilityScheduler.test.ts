@@ -372,7 +372,8 @@ test("controller cleanup recovery retains measured usage while reserved and sett
     outputTokens: 10,
   });
   assert.equal(f.store.canSpend(goal.id).reservedUsd, 1);
-  f.store.finishOperationRecovery(attempt.id);
+  f.store.fenceStartup();
+  f.store.finishStartupRecovery();
   assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
   assert.equal(f.store.canSpend(goal.id).unresolvedUsd, 0);
   assert.deepEqual(f.store.attempts(goal.id)[0].usage, attempt.usage);
