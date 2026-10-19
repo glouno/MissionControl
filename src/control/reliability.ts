@@ -98,6 +98,7 @@ export const inferenceDiagnosticSchema = z.object({
   httpStatus: z.number().int().min(100).max(599).optional(),
   requestIds: failureSchema.shape.requestIds,
   usageStatus: z.enum(["reported", "unknown"]).optional(),
+  providerRequestStarted: z.boolean().optional(),
 });
 export const incidentSchema = z.object({
   version: z.literal(1),
@@ -157,6 +158,7 @@ export interface InferenceDiagnostic {
   taskId?: string;
   generation?: number;
   sessionId?: string;
+  providerRequestStarted?: boolean;
   provider: string;
   endpoint: string;
   model: string;

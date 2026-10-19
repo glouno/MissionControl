@@ -544,6 +544,13 @@ test("session estimates use provider counters and cached rates, retaining unknow
   assert.equal(usage.status, "estimated");
   if (usage.status === "estimated") assert.equal(usage.costUsd, 0.000148);
   assert.equal(f.gateway.sessionUsage("unreported").status, "unknown");
+  f.db.exec(
+    `INSERT INTO inference_diagnostics(id,attempt_id,record) VALUES('unfinished',NULL,${sql(JSON.stringify({ id: "unfinished", sessionId: f.cap.sessionId, phase: "body", status: "active", providerRequestStarted: true }))})`,
+  );
+  assert.deepEqual(f.gateway.sessionUsage(f.cap.sessionId), {
+    kind: "metered",
+    status: "unknown",
+  });
 });
 
 test("local retry denial retains billed provider counters and uncertain provider calls remain unknown", async (t) => {

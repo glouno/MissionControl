@@ -334,6 +334,7 @@ export class InferenceGateway {
       }
       this.authenticate(token);
       diagnostic.phase = "headers";
+      diagnostic.providerRequestStarted = true;
       diagnostics.diagnostic(diagnostic);
       providerRequestStarted = true;
       const response = await abortable(
@@ -493,6 +494,7 @@ export class InferenceGateway {
       this.usage(tokenHash, {
         ...capability,
         providerRequestStarted: true,
+        diagnosticId: diagnostic.id,
         status: 200,
         usage,
         costUsd: this.price(capability.provider, usage),
@@ -559,6 +561,7 @@ export class InferenceGateway {
         this.usage(tokenHash, {
           ...capability,
           providerRequestStarted,
+          diagnosticId: diagnostic?.id,
           status: "failed",
           errorCode:
             error instanceof ControlError ? error.code : "gateway_failed",
@@ -656,7 +659,21 @@ export class InferenceGateway {
         (row) =>
           row.sessionId === sessionId && row.providerRequestStarted !== false,
       );
+    const unmatched = this.db
+      .query<{ record: string }>("SELECT record FROM inference_diagnostics")
+      .map((row) => JSON.parse(row.record))
+      .some(
+        (diagnostic) =>
+          diagnostic.sessionId === sessionId &&
+          (diagnostic.providerRequestStarted === true ||
+            (diagnostic.providerRequestStarted === undefined &&
+              ["headers", "body"].includes(diagnostic.phase))) &&
+          !records.some((row) => row.diagnosticId === diagnostic.id) &&
+          (diagnostic.status !== "completed" ||
+            diagnostic.providerRequestStarted === true),
+      );
     const completeCounters =
+      !unmatched &&
       records.length > 0 &&
       records.every(
         (row) =>
@@ -678,6 +695,7 @@ export class InferenceGateway {
         }
       : {};
     if (
+      unmatched ||
       !records.length ||
       records.some(
         (row) =>
