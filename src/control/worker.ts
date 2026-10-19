@@ -133,19 +133,31 @@ export async function executeClaim(
         try {
           return await abortable(running, abort.signal);
         } catch (error) {
+          let terminalError: unknown;
           if (abort.signal.aborted)
             await boundedCleanup(
-              (signal) =>
-                abortable(
+              async (signal) => {
+                const completion = await abortable(
                   running.then(
-                    () => {},
-                    () => {},
+                    (value) => ({ value }),
+                    (failure) => ({ failure }),
                   ),
                   signal,
-                ),
+                );
+                if ("failure" in completion) {
+                  terminalError = completion.failure;
+                  return;
+                }
+                costUsd = completion.value.costUsd;
+                admittedUsage = executionUsage(
+                  completion.value,
+                  claim.goal.config,
+                );
+              },
               60000,
               cleanup(),
             );
+          if (terminalError) throw terminalError;
           throw error;
         }
       },
@@ -182,10 +194,16 @@ export async function executeClaim(
     // A partial checkpoint estimate cannot settle a later ambiguous inference.
     // Explicit unknown usage overrides any earlier numeric estimate.
     const failure = e as { usage?: Usage; costUsd?: number };
-    try {
-      admittedUsage = executionUsage(failure, claim.goal.config);
-    } catch {
-      admittedUsage = executionUsage({}, claim.goal.config);
+    if (
+      !admittedUsage ||
+      failure.usage !== undefined ||
+      failure.costUsd !== undefined
+    ) {
+      try {
+        admittedUsage = executionUsage(failure, claim.goal.config);
+      } catch {
+        admittedUsage = executionUsage({}, claim.goal.config);
+      }
     }
     costUsd = knownCost(admittedUsage);
     if (e instanceof HumanWait || e instanceof OwnerWait) {
