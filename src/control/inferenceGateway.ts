@@ -492,6 +492,7 @@ export class InferenceGateway {
         );
       this.usage(tokenHash, {
         ...capability,
+        providerRequestStarted: true,
         status: 200,
         usage,
         costUsd: this.price(capability.provider, usage),
@@ -557,6 +558,7 @@ export class InferenceGateway {
       if (tokenHash)
         this.usage(tokenHash, {
           ...capability,
+          providerRequestStarted,
           status: "failed",
           errorCode:
             error instanceof ControlError ? error.code : "gateway_failed",
@@ -650,7 +652,10 @@ export class InferenceGateway {
     const records = this.db
       .query<{ record: string }>("SELECT record FROM inference_usage")
       .map((row) => JSON.parse(row.record))
-      .filter((row) => row.sessionId === sessionId);
+      .filter(
+        (row) =>
+          row.sessionId === sessionId && row.providerRequestStarted !== false,
+      );
     const completeCounters =
       records.length > 0 &&
       records.every(
