@@ -1058,6 +1058,16 @@ for (const blocked of [true, false])
     const attempt = f.store.attempts(goal.id)[0];
     assert.deepEqual(attempt.usage, usage);
     assert.equal(attempt.outcome, "recovering");
+    if (blocked) {
+      assert.equal(
+        f.store.reliability.runtime(attempt.id)?.cleanupState,
+        "blocked",
+      );
+      assert.equal(
+        f.store.reliability.runtime(attempt.id)?.failure?.kind,
+        "cleanup_blocked",
+      );
+    }
     if (blocked) assert.equal(f.store.getGoal(goal.id).status, "cancelled");
     assert.equal(f.store.getTask(claim.task.id).workerId, "worker");
   });

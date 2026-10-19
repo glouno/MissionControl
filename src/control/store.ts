@@ -1930,6 +1930,19 @@ export class ControlStore {
         this.db.exec(
           `UPDATE control_attempts SET usage=${this.encode(validated)} WHERE id=${sql(`${taskId}:${generation}`)} AND outcome='recovering'`,
         );
+        if (failure?.kind === "cleanup_blocked") {
+          this.recordFailure(
+            retained.goalId,
+            failureRecord("cleanup_blocked"),
+            `${taskId}:${generation}`,
+            workerId,
+          );
+          const runtime = this.reliability.runtime(`${taskId}:${generation}`);
+          if (runtime) {
+            runtime.cleanupState = "blocked";
+            this.reliability.saveRuntime(runtime);
+          }
+        }
         this.event(
           "FENCED_WORKER_USAGE",
           workerId,

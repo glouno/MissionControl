@@ -162,9 +162,9 @@ export async function executeClaim(
         }
       },
     );
-    abort.signal.throwIfAborted();
     costUsd = result.costUsd;
     admittedUsage = executionUsage(result, claim.goal.config);
+    abort.signal.throwIfAborted();
     await checkpoint(result.text);
     const commit = await workspaces.commit(claim.task);
     await client.transition(claim, "verifying", {

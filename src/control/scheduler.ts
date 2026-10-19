@@ -1076,9 +1076,9 @@ export class Scheduler {
         if (terminalError) throw terminalError;
         throw error;
       }
-      signal.throwIfAborted();
       cost = output.costUsd;
       usage = executionUsage(output, g.config);
+      signal.throwIfAborted();
       outcome = "completed";
       result = {
         executionSessionId: output.executionSessionId,

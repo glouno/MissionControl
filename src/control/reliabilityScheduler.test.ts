@@ -480,9 +480,11 @@ test("cancellation retains measured eventual successful completion", async (t) =
   const scheduler = new Scheduler(f.store, f.root, "unused", {
     backend: () => ({
       run: async () => {
-        controller.abort(new Error("cancel"));
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        return { text: "done", costUsd: 0.25, usage: measured };
+        const result = { text: "done", costUsd: 0.25, usage: measured };
+        queueMicrotask(() =>
+          queueMicrotask(() => controller.abort(new Error("cancel"))),
+        );
+        return result;
       },
     }),
   } as any);
