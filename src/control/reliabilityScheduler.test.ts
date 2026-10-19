@@ -602,3 +602,59 @@ test("controller completion after closed recovery retains evidence without resto
   assert.deepEqual(f.store.attempts(goal.id)[0].usage, usage);
   assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
 });
+
+test("fenced worker authority cannot revive after paused goal resumes", async (t) => {
+  const f = await fixture(t),
+    goal = await f.goal("pause-fence");
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "one",
+          description: "one",
+          acceptanceCriteria: ["works"],
+          allowedPaths: ["**"],
+        },
+      ],
+    },
+    goal.revision,
+  );
+  f.store.registerWorker("worker");
+  const claim = f.store.claimNextTask("worker")!;
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  f.store.setGoalState(
+    goal.id,
+    "paused",
+    f.store.getGoal(goal.id).revision,
+    "operator",
+  );
+  f.store.release(
+    claim.task.id,
+    "worker",
+    claim.generation,
+    "blocked",
+    "paused",
+    0.25,
+    usage,
+  );
+  f.store.setGoalState(
+    goal.id,
+    "running",
+    f.store.getGoal(goal.id).revision,
+    "operator",
+  );
+  assert.throws(
+    () => f.store.assertLease(claim.task.id, "worker", claim.generation),
+    /lease is no longer valid/,
+  );
+  assert.equal(f.store.attempts(goal.id)[0].outcome, "recovering");
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+});

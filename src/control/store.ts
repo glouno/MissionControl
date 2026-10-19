@@ -1481,6 +1481,9 @@ export class ControlStore {
         this.getGoal(t.goalId).status,
       ) ||
       t.workerId !== workerId ||
+      this.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
+      )?.outcome !== "active" ||
       t.generation !== generation ||
       !t.leaseUntil ||
       t.leaseUntil <= this.clock() ||
@@ -2159,6 +2162,9 @@ export class ControlStore {
         task.id,
       );
     }
+    this.db.exec(
+      `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE id=${sql(task.id)} AND generation=${task.generation}`,
+    );
     this.reliability.beginCleanup(attemptId);
     if (["accepted", "cancelled", "superseded"].includes(task.status)) return;
     if (task.status !== "waiting_human")
