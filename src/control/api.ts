@@ -1,3 +1,4 @@
+import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { instructionManifest } from "./projectContext.js";
 import { supportBundle } from "./supportBundle.js";
 import {
@@ -774,6 +775,69 @@ export function createControlServer(
           contextBudget: context.contextBudget,
         });
       }
+      // Read pinned contracts before admission, outside the SQLite transaction.
+      // Revalidate the effective configuration inside the transaction after the await.
+      let preflightConfig: import("./schema.js").GoalConfig | undefined;
+      const launchMatch = /^\/backlog\/([a-zA-Z0-9_-]+)\/launch$/.exec(path);
+      if (
+        method === "POST" &&
+        options.validateGoal &&
+        (path === "/goals" || launchMatch)
+      ) {
+        scopedRead();
+        let input = body as import("./schema.js").GoalInput;
+        if (launchMatch) {
+          const request = backlogRevisionSchema.parse(body);
+          if (automation && !automation.projectIds.includes(request.projectId))
+            throw new ControlError(
+              "forbidden",
+              "Project is outside automation scope",
+              403,
+            );
+          const entry = store.getBacklog(launchMatch[1], request.projectId);
+          if (entry.status === "backlog") {
+            if (entry.revision !== request.revision)
+              throw new ControlError(
+                "revision",
+                "Backlog revision changed",
+                409,
+              );
+            const snapshot = store.setting("configuration-snapshot") as
+              LoadedConfiguration | undefined;
+            if (!snapshot)
+              throw new ControlError(
+                "configuration",
+                "Trusted project configuration is unavailable",
+                409,
+              );
+            const description = `${entry.title}\n\n${entry.description}${entry.acceptanceCriteria.length ? "\n\nAcceptance criteria:\n" + entry.acceptanceCriteria.map((c) => "- " + c).join("\n") : ""}`;
+            input = effectiveGoal(snapshot, entry.projectId, description);
+          } else
+            input = undefined as unknown as import("./schema.js").GoalInput;
+        }
+        if (input) {
+          preflightConfig = options.validateGoal(input);
+          await instructionManifest(
+            { config: preflightConfig } as import("./schema.js").Goal,
+            preflightConfig.repoPath,
+          );
+        }
+      }
+      const admissionValidator = options.validateGoal
+        ? (input: import("./schema.js").GoalInput) => {
+            const current = options.validateGoal!(input);
+            if (
+              preflightConfig &&
+              JSON.stringify(current) !== JSON.stringify(preflightConfig)
+            )
+              throw new ControlError(
+                "configuration",
+                "Configuration changed during contract preflight; retry admission",
+                409,
+              );
+            return current;
+          }
+        : undefined;
       const mutation = () => {
         const maintenance = store.setting("instance-maintenance") as
           { phase?: string } | undefined;
@@ -841,7 +905,7 @@ export function createControlServer(
                 backlogMatch[1],
                 backlogRevisionSchema.parse(body),
                 principal.actor,
-                options.validateGoal,
+                admissionValidator,
               );
             if (backlogMatch[2] === "archive")
               return store.archiveBacklog(
@@ -886,8 +950,8 @@ export function createControlServer(
         }
         if (method === "POST" && path === "/goals") {
           scopedRead();
-          const input = options.validateGoal
-            ? options.validateGoal(body as import("./schema.js").GoalInput)
+          const input = admissionValidator
+            ? admissionValidator(body as import("./schema.js").GoalInput)
             : goalSchema.parse(body);
           return store.createGoal(input, principal.actor);
         }

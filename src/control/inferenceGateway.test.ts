@@ -514,6 +514,12 @@ test("incomplete responses preserve provider usage without inventing a dollar co
   assert.equal(record.complete, false);
   assert.deepEqual(record.usage, { input_tokens: 12, output_tokens: 32768 });
   assert.equal(record.costUsd, null);
+  assert.deepEqual(f.gateway.sessionUsage(f.cap.sessionId), {
+    kind: "metered",
+    status: "unknown",
+    inputTokens: 12,
+    outputTokens: 32768,
+  });
 });
 
 test("session estimates use provider counters and cached rates, retaining unknown requests", async (t) => {

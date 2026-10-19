@@ -2,7 +2,7 @@
 
 `contextMaxCharacters` is a configurable instruction/contract injection safeguard,
 not the model's context window. Its default is 256,000 characters, bounded to one
-MiB. Authority documents are never silently truncated. Goal draft validation uses
+MiB. Authority documents are never silently truncated. Goal draft, direct goal and backlog launch validation use
 the same instruction assembly as execution and returns `contextBudget`, including
 per-file characters and injected status. Final prompt tools, goal descriptions and
 private context also occupy model context; this report is not an exact tokenizer.

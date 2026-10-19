@@ -651,6 +651,27 @@ export class InferenceGateway {
       .query<{ record: string }>("SELECT record FROM inference_usage")
       .map((row) => JSON.parse(row.record))
       .filter((row) => row.sessionId === sessionId);
+    const completeCounters =
+      records.length > 0 &&
+      records.every(
+        (row) =>
+          Number.isSafeInteger(row.usage?.input_tokens) &&
+          row.usage.input_tokens >= 0 &&
+          Number.isSafeInteger(row.usage?.output_tokens) &&
+          row.usage.output_tokens >= 0,
+      );
+    const counters = completeCounters
+      ? {
+          inputTokens: records.reduce(
+            (sum, row) => sum + row.usage.input_tokens,
+            0,
+          ),
+          outputTokens: records.reduce(
+            (sum, row) => sum + row.usage.output_tokens,
+            0,
+          ),
+        }
+      : {};
     if (
       !records.length ||
       records.some(
@@ -658,21 +679,19 @@ export class InferenceGateway {
           !row.usage || row.costUsd === null || row.costUsd === undefined,
       )
     )
-      return { kind: "metered" as const, status: "unknown" as const };
+      return {
+        kind: "metered" as const,
+        status: "unknown" as const,
+        ...counters,
+      };
     return {
       kind: "metered" as const,
       status: "estimated" as const,
       costUsd: records.reduce((sum, row) => sum + row.costUsd, 0),
-      inputTokens: records.reduce(
-        (sum, row) => sum + row.usage.input_tokens,
-        0,
-      ),
-      outputTokens: records.reduce(
-        (sum, row) => sum + row.usage.output_tokens,
-        0,
-      ),
+      ...counters,
     };
   }
+
   private usage(tokenHash: string, record: unknown) {
     this.db.exec(
       `INSERT INTO inference_usage(capability_hash,record,created_at) VALUES(${sql(tokenHash)},${sql(JSON.stringify(record))},${this.clock()})`,

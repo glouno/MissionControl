@@ -383,10 +383,7 @@ export class IsolatedBackend implements AgentBackend {
         usage:
           config.kind === "codex"
             ? {
-                kind: "metered",
-                status: "unknown",
-                inputTokens: result.inputTokens,
-                outputTokens: result.outputTokens,
+                ...this.gateway.sessionUsage(session.id),
                 elapsedMs: Date.now() - startedAt,
               }
             : result.usage

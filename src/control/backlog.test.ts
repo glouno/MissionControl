@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { once } from "node:events";
@@ -360,4 +360,39 @@ test("API enforces identity, stored project scope, dependencies and explicit rev
     launches.map((r) => r.json() as Promise<Goal>),
   );
   assert.equal(goals[0].id, goals[1].id);
+});
+
+test("draft, direct and backlog admission reject excessive pinned instructions without admitting work", async (t) => {
+  const f = await fixture(t);
+  const root = f.config.projects[0].config.repoPath!;
+  await writeFile(join(root, "AGENTS.md"), "x".repeat(256001));
+  const entry = f.store.addBacklog(input());
+  const before = executionState(f.db);
+  const server = createControlServer(f.store, {
+    token: "synthetic-contract-preflight",
+    validateGoal: (body) =>
+      effectiveGoal(f.config, body.projectId!, body.description, body),
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  for (const [path, body] of [
+    ["/goal-drafts", { projectId: "a", description: "Draft" }],
+    ["/goals", { projectId: "a", description: "Direct" }],
+    [`/backlog/${entry.id}/launch`, { projectId: "a", revision: 1 }],
+  ] as const) {
+    const response = await fetch(base + path, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer synthetic-contract-preflight",
+        "Content-Type": "application/json",
+        "Idempotency-Key": path,
+      },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 409, await response.text());
+    assert.deepEqual(executionState(f.db), before);
+  }
+  assert.equal(f.store.getBacklog(entry.id, "a").status, "backlog");
 });
