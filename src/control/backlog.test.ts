@@ -401,7 +401,7 @@ test("admission retries return stored goals after contract drift but reject chan
   const f = await fixture(t);
   const root = f.config.projects[0].config.repoPath!;
   const server = createControlServer(f.store, {
-    token: "synthetic-replay",
+    token: "synthetic-admission-replay-tests",
     validateGoal: (body) =>
       effectiveGoal(f.config, body.projectId!, body.description, body),
   });
@@ -413,7 +413,7 @@ test("admission retries return stored goals after contract drift but reject chan
     path: string,
     body: unknown,
     key: string,
-    token = "synthetic-replay",
+    token = "synthetic-admission-replay-tests",
   ) =>
     fetch(base + path, {
       method: "POST",
