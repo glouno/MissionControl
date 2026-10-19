@@ -1797,8 +1797,9 @@ export class ControlStore {
         task_id: string | null;
         outcome: string;
         goal_id: string;
+        usage: string | null;
       }>(
-        `SELECT task_id,outcome,goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
+        `SELECT task_id,outcome,goal_id,usage FROM control_attempts WHERE id=${sql(attemptId)}`,
       );
       if (!attempt || attempt.task_id !== null)
         throw new ControlError(
@@ -1822,7 +1823,14 @@ export class ControlStore {
           "Controller resources require inspected cleanup",
           409,
         );
-      this.settleOperation(attemptId, undefined, undefined, "interrupted");
+      this.settleOperation(
+        attemptId,
+        undefined,
+        attempt.usage
+          ? usageSchema.parse(JSON.parse(attempt.usage))
+          : undefined,
+        "interrupted",
+      );
       this.event(
         "CONTROLLER_RESOURCES_RECONCILED",
         "controller",

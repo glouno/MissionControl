@@ -1091,7 +1091,7 @@ export class Scheduler {
       const failure = this.store.reliability.runtime(budget)?.failure;
       if (failure?.kind === "cleanup_blocked") {
         this.store.db.exec(
-          `UPDATE control_attempts SET outcome='recovering' WHERE id=${sql(budget)} AND outcome='active'`,
+          `UPDATE control_attempts SET outcome='recovering',usage=COALESCE(${usage ? sql(JSON.stringify(usage)) : "NULL"},usage) WHERE id=${sql(budget)} AND outcome='active'`,
         );
         const r = this.store.reliability.runtime(budget);
         if (r) {

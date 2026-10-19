@@ -328,3 +328,52 @@ test("progress warnings preserve native provider authority and recovered tools c
     runtime.nextRetryAt,
   );
 });
+
+test("controller cleanup recovery retains measured usage while reserved and settles after stopped evidence", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("measured-cleanup");
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        throw Object.assign(
+          new ProviderFailure(failureRecord("cleanup_blocked")),
+          {
+            costUsd: 0.25,
+            usage: {
+              kind: "metered",
+              status: "estimated",
+              costUsd: 0.25,
+              inputTokens: 100,
+              outputTokens: 10,
+            },
+          },
+        );
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.deepEqual(attempt.usage, {
+    kind: "metered",
+    status: "estimated",
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  });
+  assert.equal(f.store.canSpend(goal.id).reservedUsd, 1);
+  f.store.finishOperationRecovery(attempt.id);
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+  assert.equal(f.store.canSpend(goal.id).unresolvedUsd, 0);
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, attempt.usage);
+});
