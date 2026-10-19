@@ -1964,7 +1964,7 @@ export class ControlStore {
         this.db.exec(
           `UPDATE control_tasks SET lease_until=${this.clock() - 1} WHERE id=${sql(taskId)}`,
         );
-        this.fenceInterruptedTask(this.getTask(taskId), workerId);
+        this.fenceInterruptedTask(this.getTask(taskId), workerId, usage);
         const runtime = this.reliability.runtime(`${taskId}:${generation}`);
         if (runtime) {
           runtime.cleanupState = "blocked";
@@ -2034,7 +2034,7 @@ export class ControlStore {
       return { taskId: entry, generation: attempt.generation };
     });
   }
-  private fenceInterruptedTask(task: Task, actor: string) {
+  private fenceInterruptedTask(task: Task, actor: string, finalUsage?: Usage) {
     const attemptId = `${task.id}:${task.generation}`;
     const attempt = this.db.one<{ outcome: string }>(
       `SELECT outcome FROM control_attempts WHERE id=${sql(attemptId)}`,
@@ -2051,7 +2051,7 @@ export class ControlStore {
         ["claimed", "running"].includes(task.status) &&
         config.backend.kind !== "fake";
       this.db.exec(
-        `UPDATE control_attempts SET outcome='recovering'${unknown ? `,usage=${this.encode(executionUsage({}, config))}` : ""} WHERE id=${sql(attemptId)}`,
+        `UPDATE control_attempts SET outcome='recovering'${finalUsage ? `,usage=${this.encode(executionUsage({ usage: finalUsage }, config))}` : unknown ? `,usage=${this.encode(executionUsage({}, config))}` : ""} WHERE id=${sql(attemptId)}`,
       );
       this.event(
         "OWNERSHIP_FENCED",

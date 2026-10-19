@@ -1049,20 +1049,31 @@ export class Scheduler {
         operationReservationId: budget,
       });
       let output;
+      let terminalError: unknown;
       try {
         output = await abortable(running, signal);
       } catch (error) {
         if (signal.aborted)
           await boundedCleanup(
             async (cleanup) => {
-              await abortable(
-                running.catch(() => {}),
+              const completion = await abortable(
+                running.then(
+                  (value) => ({ value }),
+                  (failure) => ({ failure }),
+                ),
                 cleanup,
               );
+              if ("failure" in completion) {
+                terminalError = completion.failure;
+                return;
+              }
+              cost = completion.value.costUsd;
+              usage = executionUsage(completion.value, g.config);
             },
             60000,
             cleanup(),
           );
+        if (terminalError) throw terminalError;
         throw error;
       }
       signal.throwIfAborted();

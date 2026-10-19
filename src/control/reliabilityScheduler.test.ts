@@ -377,3 +377,95 @@ test("controller cleanup recovery retains measured usage while reserved and sett
   assert.equal(f.store.canSpend(goal.id).unresolvedUsd, 0);
   assert.deepEqual(f.store.attempts(goal.id)[0].usage, attempt.usage);
 });
+
+test("cancellation retains eventual cleanup failure and measured controller usage", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("cancelled-cleanup");
+  const controller = new AbortController();
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        controller.abort(new Error("cancel"));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        throw Object.assign(
+          new ProviderFailure(failureRecord("cleanup_blocked")),
+          {
+            usage: {
+              kind: "metered",
+              status: "estimated",
+              costUsd: 0.25,
+              inputTokens: 100,
+              outputTokens: 10,
+            },
+            costUsd: 0.25,
+          },
+        );
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: controller.signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+    (error: any) => error.failure.kind === "cleanup_blocked",
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.equal(attempt.usage?.costUsd, 0.25);
+  assert.equal(f.store.canSpend(goal.id).activeReservedUsd, 1);
+});
+
+test("worker cleanup fencing retains explicit final measured usage", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("worker-cleanup");
+  f.store.installPlan(
+    goal.id,
+    {
+      tasks: [
+        {
+          key: "one",
+          title: "one",
+          description: "one",
+          acceptanceCriteria: ["works"],
+          allowedPaths: ["**"],
+        },
+      ],
+    },
+    goal.revision,
+    "operator",
+  );
+  f.store.registerWorker({
+    id: "worker",
+    capabilities: ["developer"],
+    cpuUnits: 2,
+    memoryMiB: 4096,
+  });
+  const claim = f.store.claimNextTask("worker")!;
+  f.store.transition(claim.task.id, "worker", claim.generation, "running");
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  f.store.release(
+    claim.task.id,
+    "worker",
+    claim.generation,
+    "failed",
+    "cleanup",
+    0.25,
+    usage,
+    failureRecord("cleanup_blocked"),
+  );
+  const attempt = f.store.attempts(goal.id)[0];
+  assert.equal(attempt.outcome, "recovering");
+  assert.deepEqual(attempt.usage, usage);
+});
