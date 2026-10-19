@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { git } from "./git.js";
+import { readContractSnapshot } from "./contractSnapshots.js";
 import { ControlError } from "./schema.js";
 import { resolve } from "node:path";
 import { repositoryIdentity } from "./repositories.js";
@@ -99,7 +99,9 @@ export async function instructionManifest(goal: Goal, workspace: string) {
     revision: string;
     files: { path: string; content: string }[];
   }[] = [];
-  for (const contract of goal.config.siblingContracts ?? []) {
+  const contracts = goal.config.siblingContracts ?? [];
+  const snapshot = await readContractSnapshot(contracts);
+  for (const [index, contract] of contracts.entries()) {
     const files = [];
     if (contract.injectedFiles?.some((path) => !contract.files.includes(path)))
       throw new ControlError(
@@ -108,19 +110,9 @@ export async function instructionManifest(goal: Goal, workspace: string) {
         409,
       );
     for (const path of contract.files) {
-      if (
-        path.startsWith("/") ||
-        path.split("/").includes("..") ||
-        /(^|\/)(\.env|\.ssh|\.azure|credentials)/.test(path)
-      )
-        throw new ControlError(
-          "contract_path",
-          "Sibling snapshots require explicit non-secret paths",
-        );
-      const content = await git(contract.repositoryPath, [
-        "show",
-        `${contract.revision}:${path}`,
-      ]);
+      const content = snapshot.contents.find(
+        (file) => file.path === `${index}/${path}`,
+      )!.content;
       const injected =
         contract.injectedFiles === undefined ||
         contract.injectedFiles.includes(path);
