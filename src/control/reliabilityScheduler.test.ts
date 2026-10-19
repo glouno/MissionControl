@@ -440,12 +440,7 @@ test("worker cleanup fencing retains explicit final measured usage", async (t) =
     goal.revision,
     "operator",
   );
-  f.store.registerWorker({
-    id: "worker",
-    capabilities: ["developer"],
-    cpuUnits: 2,
-    memoryMiB: 4096,
-  });
+  f.store.registerWorker("worker");
   const claim = f.store.claimNextTask("worker")!;
   f.store.transition(claim.task.id, "worker", claim.generation, "running");
   const usage = {
