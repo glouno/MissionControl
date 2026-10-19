@@ -110,12 +110,22 @@ export async function instructionManifest(goal: Goal, workspace: string) {
         409,
       );
     for (const path of contract.files) {
-      const content = snapshot.contents.find(
+      const bytes = snapshot.contents.find(
         (file) => file.path === `${index}/${path}`,
       )!.content;
       const injected =
         contract.injectedFiles === undefined ||
         contract.injectedFiles.includes(path);
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: injected }).decode(bytes);
+      } catch {
+        throw new ControlError(
+          "contract_text",
+          "Injected contract files require valid UTF-8",
+          409,
+        );
+      }
       account(`${contract.revision}:${path}`, content, injected);
       if (injected) files.push({ path, content });
     }
