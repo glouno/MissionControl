@@ -412,14 +412,26 @@ export class IsolatedBackend implements AgentBackend {
     } finally {
       this.gateway.revoke(session.id);
       // No destructive source cleanup: recovery/retention owns these records.
-      await boundedCleanup(
-        async (signal) => {
-          await this.environment.reset(session.id, signal);
-          if (network) await this.networks.stop(session.id, signal);
-        },
-        60000,
-        cleanup(),
-      );
+      try {
+        await boundedCleanup(
+          async (signal) => {
+            await this.environment.reset(session.id, signal);
+            if (network) await this.networks.stop(session.id, signal);
+          },
+          60000,
+          cleanup(),
+        );
+      } catch (error) {
+        if (config.kind === "codex" && error instanceof Error) {
+          const usage = this.gateway.sessionUsage(session.id);
+          Object.assign(error, {
+            costUsd: usage.status === "estimated" ? usage.costUsd : undefined,
+            usage: { ...usage, elapsedMs: Date.now() - startedAt },
+            costStatus: "estimated_unknown",
+          });
+        }
+        throw error;
+      }
       const saved = this.registry.get(session.id);
       this.registry.save({
         ...saved,

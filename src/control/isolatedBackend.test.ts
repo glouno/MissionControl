@@ -369,34 +369,41 @@ test("portable isolation avoids worker inference network and persists continuati
   assert.equal(f.db.query("SELECT * FROM inference_capabilities").length, 0);
 });
 
-for (const priced of [true, false])
-  test(`failed Codex invocation retains provider counters with ${priced ? "estimated" : "unknown"} billing`, async (t) => {
-    const f = await fixture(t, "review");
-    f.context.claim.goal.config.backend = {
-      kind: "codex",
-      model: "gpt-6.1-sol",
-    };
-    f.gateway.upstreams.fixture.protocol = "responses";
-    const b = f.backend(async () => {
-      const sessionId = f.registry.all().at(-1)!.id;
-      const record = {
-        sessionId,
-        complete: false,
-        usage: { input_tokens: 100, output_tokens: 10 },
-        costUsd: priced ? 0.0003 : null,
+for (const cleanupFails of [false, true])
+  for (const priced of [true, false])
+    test(`failed Codex invocation retains provider counters with ${priced ? "estimated" : "unknown"} billing and cleanup ${cleanupFails ? "fails" : "succeeds"}`, async (t) => {
+      const f = await fixture(t, "review");
+      f.context.claim.goal.config.backend = {
+        kind: "codex",
+        model: "gpt-6.1-sol",
       };
-      f.db.exec(
-        `INSERT INTO inference_usage(capability_hash,record,created_at) VALUES('fixture',${sql(JSON.stringify(record))},1)`,
-      );
-      throw new Error("incomplete provider response");
+      f.gateway.upstreams.fixture.protocol = "responses";
+      if (cleanupFails)
+        f.env.reset = async () => {
+          throw new Error("synthetic reset failure");
+        };
+      const b = f.backend(async () => {
+        const sessionId = f.registry.all().at(-1)!.id;
+        const record = {
+          sessionId,
+          complete: false,
+          usage: { input_tokens: 100, output_tokens: 10 },
+          costUsd: priced ? 0.0003 : null,
+        };
+        f.db.exec(
+          `INSERT INTO inference_usage(capability_hash,record,created_at) VALUES('fixture',${sql(JSON.stringify(record))},1)`,
+        );
+        throw new Error("incomplete provider response");
+      });
+      await assert.rejects(b.run(f.context), (error: any) => {
+        if (cleanupFails)
+          assert.equal(error.failure.kind, "cleanup_blocked");
+        else assert.equal(error.message, "incomplete provider response");
+        assert.equal(error.usage.status, priced ? "estimated" : "unknown");
+        assert.equal(error.usage.inputTokens, 100);
+        assert.equal(error.usage.outputTokens, 10);
+        assert.equal(error.costUsd, priced ? 0.0003 : undefined);
+        assert.equal(error.usage.costUsd, error.costUsd);
+        return true;
+      });
     });
-    await assert.rejects(b.run(f.context), (error: any) => {
-      assert.equal(error.message, "incomplete provider response");
-      assert.equal(error.usage.status, priced ? "estimated" : "unknown");
-      assert.equal(error.usage.inputTokens, 100);
-      assert.equal(error.usage.outputTokens, 10);
-      assert.equal(error.costUsd, priced ? 0.0003 : undefined);
-      assert.equal(error.usage.costUsd, error.costUsd);
-      return true;
-    });
-  });
