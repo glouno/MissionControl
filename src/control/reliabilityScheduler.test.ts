@@ -464,3 +464,38 @@ test("worker cleanup fencing retains explicit final measured usage", async (t) =
   assert.equal(attempt.outcome, "recovering");
   assert.deepEqual(attempt.usage, usage);
 });
+
+test("cancellation retains measured eventual successful completion", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("cancelled-success");
+  const controller = new AbortController();
+  const measured = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async () => {
+        controller.abort(new Error("cancel"));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { text: "done", costUsd: 0.25, usage: measured };
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: controller.signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, measured);
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
+});

@@ -1089,12 +1089,18 @@ export class Scheduler {
       this.store.recordFailure(g.id, classifyFailure(e), budget);
       if (e instanceof Error)
         Object.assign(e, { reliabilityAttemptId: budget });
-      cost = (e as any).costUsd;
-      try {
-        usage = executionUsage(e as any, g.config);
-      } catch {
-        usage = executionUsage({}, g.config);
-        cost = undefined;
+      if (
+        !usage ||
+        (e as any).usage !== undefined ||
+        (e as any).costUsd !== undefined
+      ) {
+        cost = (e as any).costUsd;
+        try {
+          usage = executionUsage(e as any, g.config);
+        } catch {
+          usage = executionUsage({}, g.config);
+          cost = undefined;
+        }
       }
       throw e;
     } finally {
