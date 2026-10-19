@@ -1082,7 +1082,7 @@ export class Scheduler {
       if (
         this.store.db.one<{ outcome: string }>(
           `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
-        )?.outcome === "recovering"
+        )?.outcome !== "active"
       )
         throw new ProviderFailure(failureRecord("interrupted"));
       outcome = "completed";
@@ -1112,10 +1112,12 @@ export class Scheduler {
     } finally {
       this.operationAborts.delete(budget);
       const failure = this.store.reliability.runtime(budget)?.failure;
-      const fenced =
-        this.store.db.one<{ outcome: string }>(
-          `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
-        )?.outcome === "recovering";
+      const state = this.store.db.one<{ outcome: string }>(
+        `SELECT outcome FROM control_attempts WHERE id=${sql(budget)}`,
+      )?.outcome;
+      const fenced = state !== "active";
+      if (usage && state === "interrupted")
+        this.store.recordFinalAttemptUsage(budget, usage, "controller");
       if (failure?.kind === "cleanup_blocked" || fenced) {
         this.store.db.exec(
           `UPDATE control_attempts SET outcome='recovering',usage=COALESCE(${usage ? sql(JSON.stringify(usage)) : "NULL"},usage) WHERE id=${sql(budget)} AND outcome IN ('active','recovering')`,

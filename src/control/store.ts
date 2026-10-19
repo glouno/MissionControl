@@ -622,6 +622,45 @@ export class ControlStore {
       return this.usageReconciliation(attemptId);
     });
   }
+  recordFinalAttemptUsage(attemptId: string, usage: Usage, actor: string) {
+    return this.db.transaction(() => {
+      const attempt = this.db.one<{
+        configuration: string;
+        goal_id: string;
+        usage: string | null;
+      }>(
+        `SELECT configuration,goal_id,usage FROM control_attempts WHERE id=${sql(attemptId)}`,
+      );
+      if (!attempt)
+        throw new ControlError("not_found", "Attempt not found", 404);
+      const validated = executionUsage(
+        { usage },
+        JSON.parse(attempt.configuration),
+      );
+      // Accounting evidence cannot restore execution authority or settle ownership.
+      const previous = attempt.usage ? JSON.parse(attempt.usage) : undefined;
+      if (
+        previous?.kind === "metered" &&
+        previous?.status !== "unknown" &&
+        previous &&
+        JSON.stringify(previous) !== JSON.stringify(validated)
+      )
+        throw new ControlError(
+          "usage_conflict",
+          "Final accounting evidence changed",
+          409,
+        );
+      this.db.exec(
+        `UPDATE control_attempts SET usage=${this.encode(validated)} WHERE id=${sql(attemptId)}`,
+      );
+      this.event(
+        "FINAL_ATTEMPT_USAGE",
+        actor,
+        { attemptId, usage: validated },
+        attempt.goal_id,
+      );
+    });
+  }
   private closeAttempt(
     attemptId: string,
     outcome: string,
@@ -1910,14 +1949,28 @@ export class ControlStore {
   ) {
     return this.db.transaction(() => {
       const retained = this.getTask(taskId);
-      const recovering = this.db.one<{ outcome: string }>(
-        `SELECT outcome FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
+      const recovering = this.db.one<{ outcome: string; worker_id: string }>(
+        `SELECT outcome,worker_id FROM control_attempts WHERE id=${sql(`${taskId}:${generation}`)}`,
       );
-      if (recovering?.outcome === "recovering") {
-        if (
-          retained.workerId !== workerId ||
-          retained.generation !== generation
-        )
+      if (
+        recovering?.outcome === "active" &&
+        retained.workerId === workerId &&
+        retained.generation === generation &&
+        ((retained.leaseUntil ?? 0) <= this.clock() ||
+          (this.reliability.runtime(`${taskId}:${generation}`)?.deadlineAt ??
+            Infinity) <= this.clock() ||
+          ["paused", "cancelled", "failed", "completed"].includes(
+            this.getGoal(retained.goalId).status,
+          ))
+      ) {
+        this.fenceInterruptedTask(retained, workerId);
+        recovering.outcome = "recovering";
+      }
+      if (
+        recovering &&
+        ["recovering", "interrupted"].includes(recovering.outcome)
+      ) {
+        if (recovering.worker_id !== workerId)
           throw new ControlError(
             "stale_lease",
             "Accounting evidence ownership changed",
@@ -1927,8 +1980,10 @@ export class ControlStore {
           { usage, costUsd: actualCost },
           this.getGoal(retained.goalId).config,
         );
-        this.db.exec(
-          `UPDATE control_attempts SET usage=${this.encode(validated)} WHERE id=${sql(`${taskId}:${generation}`)} AND outcome='recovering'`,
+        this.recordFinalAttemptUsage(
+          `${taskId}:${generation}`,
+          validated,
+          workerId,
         );
         if (failure?.kind === "cleanup_blocked") {
           this.recordFailure(

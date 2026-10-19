@@ -561,3 +561,44 @@ for (const cleanupBlocked of [false, true])
     f.store.finishStartupRecovery();
     assert.equal(f.store.canSpend(goal.id).settledUsd, 0.25);
   });
+
+test("controller completion after closed recovery retains evidence without restoring authority", async (t) => {
+  const f = await fixture(t),
+    goal = await f.goal("closed-controller");
+  const usage = {
+    kind: "metered" as const,
+    status: "estimated" as const,
+    costUsd: 0.25,
+    inputTokens: 100,
+    outputTokens: 10,
+  };
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async (context: any) => {
+        f.store.fenceStartup();
+        f.store.finishOperationRecovery(context.operationReservationId);
+        return {
+          text: "done",
+          usage,
+          costUsd: 0.25,
+          inputTokens: 100,
+          outputTokens: 10,
+        };
+      },
+    }),
+  } as any);
+  await assert.rejects(
+    (scheduler as any).runBackend(
+      goal,
+      {
+        claim: { goal, task: { id: "planning" }, generation: 0 },
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      },
+      "planning",
+    ),
+  );
+  assert.equal(f.store.attempts(goal.id)[0].outcome, "interrupted");
+  assert.deepEqual(f.store.attempts(goal.id)[0].usage, usage);
+  assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
+});

@@ -998,76 +998,85 @@ test("local delivery with required checks cannot complete without a trusted exac
   assert.equal(f.store.getGoal(goal.id).status, "completed");
 });
 
-for (const blocked of [true, false])
-  test(`worker cancellation preserves eventual ${blocked ? "cleanup failure" : "success"} measurement`, async (t) => {
-    const f = await fixture();
-    t.after(() => f.db.close());
-    const goal = await planned(f, [spec("one")]);
-    const s = await serve(f);
-    t.after(() => s.server.close());
-    const claim = f.store.claimNextTask("worker")!;
-    const workspaces = new WorkspaceManager(f.root);
-    await workspaces.prepareTask(goal, claim.task);
-    const controller = new AbortController();
-    const usage = {
-      kind: "metered" as const,
-      status: "estimated" as const,
-      costUsd: 0.25,
-      inputTokens: 100,
-      outputTokens: 10,
-    };
-    await executeClaim(
-      s.client,
-      claim,
-      f.root,
-      {
-        run: async () => {
-          const current = f.store.getGoal(goal.id);
-          if (blocked)
-            f.store.setGoalState(
-              goal.id,
-              "cancelled",
-              current.revision,
-              "operator",
-            );
-          else {
-            f.db.exec(
-              `UPDATE control_tasks SET lease_until=0 WHERE id='${claim.task.id}'`,
-            );
-            f.store.reconcileExpired(claim.task.id, claim.generation);
-          }
-          controller.abort(new Error("cancel"));
-          await new Promise((resolve) => setTimeout(resolve, 30));
-          if (blocked)
-            throw Object.assign(
-              new ProviderFailure(failureRecord("cleanup_blocked")),
-              { usage, costUsd: 0.25 },
-            );
-          return {
-            text: "done",
-            costUsd: 0.25,
-            inputTokens: 100,
-            outputTokens: 10,
-            usage,
-          };
+for (const closed of [false, true])
+  for (const blocked of [true, false])
+    test(`worker ${closed ? "closed recovery" : "cancellation"} preserves eventual ${blocked ? "cleanup failure" : "success"} measurement`, async (t) => {
+      const f = await fixture();
+      t.after(() => f.db.close());
+      const goal = await planned(f, [spec("one")]);
+      const s = await serve(f);
+      t.after(() => s.server.close());
+      const claim = f.store.claimNextTask("worker")!;
+      const workspaces = new WorkspaceManager(f.root);
+      await workspaces.prepareTask(goal, claim.task);
+      const controller = new AbortController();
+      const usage = {
+        kind: "metered" as const,
+        status: "estimated" as const,
+        costUsd: 0.25,
+        inputTokens: 100,
+        outputTokens: 10,
+      };
+      await executeClaim(
+        s.client,
+        claim,
+        f.root,
+        {
+          run: async () => {
+            const current = f.store.getGoal(goal.id);
+            if (blocked)
+              f.store.setGoalState(
+                goal.id,
+                "cancelled",
+                current.revision,
+                "operator",
+              );
+            else {
+              f.db.exec(
+                `UPDATE control_tasks SET lease_until=0 WHERE id='${claim.task.id}'`,
+              );
+              // Report directly after expiry, before scheduler reconciliation.
+            }
+            if (closed) {
+              if (!blocked)
+                f.store.reconcileExpired(claim.task.id, claim.generation);
+              f.store.finishAttemptRecovery(claim.task.id, claim.generation);
+            }
+            controller.abort(new Error("cancel"));
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            if (blocked)
+              throw Object.assign(
+                new ProviderFailure(failureRecord("cleanup_blocked")),
+                { usage, costUsd: 0.25 },
+              );
+            return {
+              text: "done",
+              costUsd: 0.25,
+              inputTokens: 100,
+              outputTokens: 10,
+              usage,
+            };
+          },
         },
-      },
-      controller.signal,
-      workspaces,
-    );
-    const attempt = f.store.attempts(goal.id)[0];
-    assert.deepEqual(attempt.usage, usage);
-    assert.equal(attempt.outcome, "recovering");
-    if (blocked) {
-      assert.equal(
-        f.store.reliability.runtime(attempt.id)?.cleanupState,
-        "blocked",
+        controller.signal,
+        workspaces,
       );
+      const attempt = f.store.attempts(goal.id)[0];
+      assert.deepEqual(attempt.usage, usage);
+      assert.equal(attempt.outcome, closed ? "interrupted" : "recovering");
+      if (blocked) {
+        assert.equal(
+          f.store.reliability.runtime(attempt.id)?.cleanupState,
+          "blocked",
+        );
+        assert.equal(
+          f.store.reliability.runtime(attempt.id)?.failure?.kind,
+          "cleanup_blocked",
+        );
+      }
+      if (blocked) assert.equal(f.store.getGoal(goal.id).status, "cancelled");
       assert.equal(
-        f.store.reliability.runtime(attempt.id)?.failure?.kind,
-        "cleanup_blocked",
+        f.store.getTask(claim.task.id).workerId,
+        closed ? null : "worker",
       );
-    }
-    if (blocked) assert.equal(f.store.getGoal(goal.id).status, "cancelled");
-    assert.equal(f.store.getTask(claim.task.id).workerId, "worker");
-  });
+    });
