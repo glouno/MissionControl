@@ -252,6 +252,32 @@ export class Scheduler {
       startedAt: this.store.clock(),
     });
     try {
+      for (const goal of this.store.goals(500)) {
+        const threshold = goal.config.budgetAlertUsd;
+        if (
+          threshold === undefined ||
+          this.store.setting(`budget-alert:${goal.id}`)
+        )
+          continue;
+        const budget = this.store.canSpend(goal.id);
+        if (budget.settledUsd >= threshold) {
+          this.store.setting(`budget-alert:${goal.id}`, {
+            thresholdUsd: threshold,
+            settledUsd: budget.settledUsd,
+          });
+          this.store.event(
+            "BUDGET_ALERT",
+            "scheduler",
+            {
+              thresholdUsd: threshold,
+              settledUsd: budget.settledUsd,
+              reportedUsd: budget.reportedUsd,
+              estimatedUsd: budget.estimatedUsd,
+            },
+            goal.id,
+          );
+        }
+      }
       for (const attempt of this.store.db
         .query<{ id: string; goal_id: string; task_id: string | null }>(
           "SELECT id,goal_id,task_id FROM control_attempts WHERE outcome='active'",
@@ -1097,7 +1123,7 @@ export class Scheduler {
           outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
           signal: controller.signal,
           onCheckpoint: async () => {},
-          prompt: `Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
+          prompt: `Produce the smallest useful task plan. For an explicitly defined single-task goal, return one task without rediscovering or redesigning the whole project. Limit investigation to files needed to identify scope, paths and checks; keep the final plan concise. Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
         },
         "planning",
       );

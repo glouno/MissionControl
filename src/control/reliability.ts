@@ -87,7 +87,7 @@ export const inferenceDiagnosticSchema = z.object({
   provider: z.string(),
   endpoint: z.string(),
   model: z.string(),
-  maxOutputTokens: z.number().int().min(1).max(32768).optional(),
+  maxOutputTokens: z.number().int().min(1).max(131072).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   startedAt: timestampSchema,
   endedAt: timestampSchema.optional(),

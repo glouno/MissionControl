@@ -1,3 +1,4 @@
+import { instructionManifest } from "./projectContext.js";
 import { supportBundle } from "./supportBundle.js";
 import {
   failureSchema,
@@ -752,6 +753,27 @@ export function createControlServer(
           ),
         );
       }
+      if (path === "/goal-drafts" && method === "POST") {
+        scopedRead();
+        if (!options.validateGoal)
+          throw new ControlError(
+            "configuration",
+            "Project configuration is unavailable",
+            409,
+          );
+        const config = options.validateGoal(
+          body as import("./schema.js").GoalInput,
+        );
+        const context = await instructionManifest(
+          { config } as import("./schema.js").Goal,
+          config.repoPath,
+        );
+        return send(res, 200, {
+          valid: true,
+          config,
+          contextBudget: context.contextBudget,
+        });
+      }
       const mutation = () => {
         const maintenance = store.setting("instance-maintenance") as
           { phase?: string } | undefined;
@@ -837,19 +859,6 @@ export function createControlServer(
             "Backlog endpoint not found",
             404,
           );
-        }
-        if (path === "/goal-drafts" && method === "POST") {
-          scopedRead();
-          if (!options.validateGoal)
-            throw new ControlError(
-              "configuration",
-              "Project configuration is unavailable",
-              409,
-            );
-          const config = options.validateGoal(
-            body as import("./schema.js").GoalInput,
-          );
-          return { valid: true, config };
         }
         if (path === "/projects" && method === "GET") {
           scopedRead();

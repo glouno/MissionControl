@@ -84,6 +84,21 @@ export const isolatedRuntimeSchema = z
                 .strict(),
             ]),
             allowedBetaHeaders: z.array(z.string()).default([]),
+            maxOutputTokens: z
+              .number()
+              .int()
+              .min(64)
+              .max(131072)
+              .default(32768),
+            pricing: z
+              .object({
+                inputUsdPerMillion: z.number().positive(),
+                cachedInputUsdPerMillion: z.number().nonnegative(),
+                outputUsdPerMillion: z.number().positive(),
+                evidenceUrl: z.string().url(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
         z
@@ -341,6 +356,8 @@ export async function createIsolatedRuntime(
       protocol: p.protocol,
       endpoint: p.endpoint,
       allowedBetaHeaders: p.allowedBetaHeaders,
+      maxOutputTokens: p.maxOutputTokens,
+      pricing: p.pricing,
       headers,
     };
   }

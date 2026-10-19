@@ -545,6 +545,17 @@
                         ],
                         "additionalProperties": false
                       },
+                      "contextMaxCharacters": {
+                        "default": 256000,
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 1048576
+                      },
+                      "runtimeInstructions": {
+                        "default": "",
+                        "type": "string",
+                        "maxLength": 20000
+                      },
                       "instructionFiles": {
                         "default": [
                           "AGENTS.md",
@@ -574,6 +585,14 @@
                             },
                             "files": {
                               "minItems": 1,
+                              "maxItems": 20,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "injectedFiles": {
                               "maxItems": 20,
                               "type": "array",
                               "items": {
@@ -839,6 +858,11 @@
                                 "type": "string",
                                 "const": "codex"
                               },
+                              "maxOutputTokens": {
+                                "type": "integer",
+                                "minimum": 64,
+                                "maximum": 131072
+                              },
                               "model": {
                                 "type": "string"
                               },
@@ -938,10 +962,10 @@
                                 ]
                               },
                               "maxOutputTokens": {
-                                "default": 8192,
+                                "default": 65536,
                                 "type": "integer",
                                 "minimum": 64,
-                                "maximum": 8192
+                                "maximum": 131072
                               },
                               "credential": {
                                 "default": "identity",
@@ -1022,6 +1046,10 @@
                           "type": "string",
                           "minLength": 1
                         }
+                      },
+                      "budgetAlertUsd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
                       },
                       "maxCostUsd": {
                         "default": 0,
@@ -1149,6 +1177,8 @@
                       "title",
                       "description",
                       "repoPath",
+                      "contextMaxCharacters",
+                      "runtimeInstructions",
                       "instructionFiles",
                       "siblingContracts",
                       "backend",
@@ -3812,7 +3842,7 @@
           "maxOutputTokens": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 32768
+            "maximum": 131072
           },
           "reasoningEffort": {
             "type": "string",
@@ -4285,6 +4315,17 @@
             ],
             "additionalProperties": false
           },
+          "contextMaxCharacters": {
+            "default": 256000,
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 1048576
+          },
+          "runtimeInstructions": {
+            "default": "",
+            "type": "string",
+            "maxLength": 20000
+          },
           "instructionFiles": {
             "default": [
               "AGENTS.md",
@@ -4314,6 +4355,14 @@
                 },
                 "files": {
                   "minItems": 1,
+                  "maxItems": 20,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "injectedFiles": {
                   "maxItems": 20,
                   "type": "array",
                   "items": {
@@ -4581,6 +4630,11 @@
                     "type": "string",
                     "const": "codex"
                   },
+                  "maxOutputTokens": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 131072
+                  },
                   "model": {
                     "type": "string"
                   },
@@ -4676,10 +4730,10 @@
                     ]
                   },
                   "maxOutputTokens": {
-                    "default": 8192,
+                    "default": 65536,
                     "type": "integer",
                     "minimum": 64,
-                    "maximum": 8192
+                    "maximum": 131072
                   },
                   "credential": {
                     "default": "identity",
@@ -4757,6 +4811,10 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "budgetAlertUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0
           },
           "maxCostUsd": {
             "default": 0,
@@ -5122,6 +5180,17 @@
                 ],
                 "additionalProperties": false
               },
+              "contextMaxCharacters": {
+                "default": 256000,
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 1048576
+              },
+              "runtimeInstructions": {
+                "default": "",
+                "type": "string",
+                "maxLength": 20000
+              },
               "instructionFiles": {
                 "default": [
                   "AGENTS.md",
@@ -5151,6 +5220,14 @@
                     },
                     "files": {
                       "minItems": 1,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "injectedFiles": {
                       "maxItems": 20,
                       "type": "array",
                       "items": {
@@ -5418,6 +5495,11 @@
                         "type": "string",
                         "const": "codex"
                       },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 131072
+                      },
                       "model": {
                         "type": "string"
                       },
@@ -5513,10 +5595,10 @@
                         ]
                       },
                       "maxOutputTokens": {
-                        "default": 8192,
+                        "default": 65536,
                         "type": "integer",
                         "minimum": 64,
-                        "maximum": 8192
+                        "maximum": 131072
                       },
                       "credential": {
                         "default": "identity",
@@ -5594,6 +5676,10 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "budgetAlertUsd": {
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "maxCostUsd": {
                 "default": 0,
@@ -5767,6 +5853,11 @@
                     "type": "string",
                     "const": "codex"
                   },
+                  "maxOutputTokens": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 131072
+                  },
                   "model": {
                     "type": "string"
                   },
@@ -5862,10 +5953,10 @@
                     ]
                   },
                   "maxOutputTokens": {
-                    "default": 8192,
+                    "default": 65536,
                     "type": "integer",
                     "minimum": 64,
-                    "maximum": 8192
+                    "maximum": 131072
                   },
                   "credential": {
                     "default": "identity",
@@ -6091,6 +6182,17 @@
                 ],
                 "additionalProperties": false
               },
+              "contextMaxCharacters": {
+                "default": 256000,
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 1048576
+              },
+              "runtimeInstructions": {
+                "default": "",
+                "type": "string",
+                "maxLength": 20000
+              },
               "instructionFiles": {
                 "default": [
                   "AGENTS.md",
@@ -6120,6 +6222,14 @@
                     },
                     "files": {
                       "minItems": 1,
+                      "maxItems": 20,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "injectedFiles": {
                       "maxItems": 20,
                       "type": "array",
                       "items": {
@@ -6387,6 +6497,11 @@
                         "type": "string",
                         "const": "codex"
                       },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 131072
+                      },
                       "model": {
                         "type": "string"
                       },
@@ -6482,10 +6597,10 @@
                         ]
                       },
                       "maxOutputTokens": {
-                        "default": 8192,
+                        "default": 65536,
                         "type": "integer",
                         "minimum": 64,
-                        "maximum": 8192
+                        "maximum": 131072
                       },
                       "credential": {
                         "default": "identity",
@@ -6563,6 +6678,10 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "budgetAlertUsd": {
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "maxCostUsd": {
                 "default": 0,

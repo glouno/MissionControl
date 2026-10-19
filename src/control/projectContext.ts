@@ -58,7 +58,15 @@ export function overlapEvidence(
 }
 
 export async function instructionManifest(goal: Goal, workspace: string) {
-  let remaining = 64000;
+  const limit = goal.config.contextMaxCharacters ?? 256000;
+  let remaining = limit;
+  const manifest: { path: string; characters: number; injected: boolean }[] =
+    [];
+  const account = (path: string, source: string, injected = true) => {
+    manifest.push({ path, characters: source.length, injected });
+    if (!injected) return;
+    remaining -= source.length;
+  };
   const instructions: { path: string; content: string; truncated: boolean }[] =
     [];
   const root = await realpath(workspace);
@@ -82,11 +90,10 @@ export async function instructionManifest(goal: Goal, workspace: string) {
     const source = await readFile(path, "utf8");
     instructions.push({
       path: file,
-      content: source.slice(0, remaining),
-      truncated: source.length > remaining,
+      content: source,
+      truncated: false,
     });
-    remaining = Math.max(0, remaining - source.length);
-    if (!remaining) break;
+    account(file, source);
   }
   const siblingContracts: {
     revision: string;
@@ -94,6 +101,12 @@ export async function instructionManifest(goal: Goal, workspace: string) {
   }[] = [];
   for (const contract of goal.config.siblingContracts ?? []) {
     const files = [];
+    if (contract.injectedFiles?.some((path) => !contract.files.includes(path)))
+      throw new ControlError(
+        "contract_path",
+        "Injected files must belong to the pinned snapshot",
+        409,
+      );
     for (const path of contract.files) {
       if (
         path.startsWith("/") ||
@@ -108,15 +121,30 @@ export async function instructionManifest(goal: Goal, workspace: string) {
         "show",
         `${contract.revision}:${path}`,
       ]);
-      if (content.length > remaining)
-        throw new ControlError(
-          "context_limit",
-          "Declared contracts exceed bounded context",
-        );
-      remaining -= content.length;
-      files.push({ path, content });
+      const injected =
+        contract.injectedFiles === undefined ||
+        contract.injectedFiles.includes(path);
+      account(`${contract.revision}:${path}`, content, injected);
+      if (injected) files.push({ path, content });
     }
     siblingContracts.push({ revision: contract.revision, files });
   }
-  return { instructions, siblingContracts, configuredPrompts: goal.config.admission?.prompts ?? [] };
+  account("runtimeInstructions", goal.config.runtimeInstructions ?? "");
+  if (remaining < 0)
+    throw new ControlError(
+      "context_limit",
+      `Effective instruction and contract context uses ${limit - remaining} characters; configured limit ${limit}. Files: ${JSON.stringify(manifest)}`,
+      409,
+    );
+  return {
+    contextBudget: {
+      limitCharacters: limit,
+      injectedCharacters: limit - remaining,
+      files: manifest,
+    },
+    runtimeInstructions: goal.config.runtimeInstructions ?? "",
+    instructions,
+    siblingContracts,
+    configuredPrompts: goal.config.admission?.prompts ?? [],
+  };
 }
