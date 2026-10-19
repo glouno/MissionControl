@@ -3346,21 +3346,24 @@ export class ControlStore {
   revokeToken(token: string) {
     this.db.exec(`DELETE FROM control_tokens WHERE hash=${sql(hash(token))}`);
   }
+  idempotentResponse(key: string, request: unknown) {
+    const old = this.db.one<Row>(
+      `SELECT * FROM control_idempotency WHERE key=${sql(key)}`,
+    );
+    if (!old) return undefined;
+    if (old.request_hash !== hash(JSON.stringify(request)))
+      throw new ControlError(
+        "idempotency_conflict",
+        "Key used for another request",
+        409,
+      );
+    return { response: JSON.parse(String(old.response)) };
+  }
   idempotent(key: string, request: unknown, operation: () => unknown) {
     return this.db.transaction(() => {
       const fingerprint = hash(JSON.stringify(request));
-      const old = this.db.one<Row>(
-        `SELECT * FROM control_idempotency WHERE key=${sql(key)}`,
-      );
-      if (old) {
-        if (old.request_hash !== fingerprint)
-          throw new ControlError(
-            "idempotency_conflict",
-            "Key used for another request",
-            409,
-          );
-        return JSON.parse(String(old.response));
-      }
+      const old = this.idempotentResponse(key, request);
+      if (old) return old.response;
       const response = operation();
       this.db.exec(
         `INSERT INTO control_idempotency VALUES(${sql(key)},${sql(fingerprint)},${this.encode(response)})`,

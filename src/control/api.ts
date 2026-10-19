@@ -775,6 +775,28 @@ export function createControlServer(
           contextBudget: context.contextBudget,
         });
       }
+      const key = req.headers["idempotency-key"];
+      if (
+        key !== undefined &&
+        (typeof key !== "string" || key.length < 1 || key.length > 200)
+      )
+        throw new ControlError(
+          "idempotency_key",
+          "Idempotency-Key must contain 1 to 200 characters",
+          400,
+        );
+      if (
+        method === "POST" &&
+        typeof key === "string" &&
+        (path === "/goals" || /^\/backlog\/[a-zA-Z0-9_-]+\/launch$/.test(path))
+      ) {
+        scopedRead();
+        const replay = store.idempotentResponse(
+          `${principal.role}:${principal.actor}:${key}`,
+          { path, body },
+        );
+        if (replay) return send(res, 200, replay.response);
+      }
       // Read pinned contracts before admission, outside the SQLite transaction.
       // Revalidate the effective configuration inside the transaction after the await.
       let preflightConfig: import("./schema.js").GoalConfig | undefined;
@@ -1367,16 +1389,6 @@ export function createControlServer(
           ),
         );
       }
-      const key = req.headers["idempotency-key"];
-      if (
-        key !== undefined &&
-        (typeof key !== "string" || key.length < 1 || key.length > 200)
-      )
-        throw new ControlError(
-          "idempotency_key",
-          "Idempotency-Key must contain 1 to 200 characters",
-          400,
-        );
       const response =
         method === "POST" && typeof key === "string"
           ? store.idempotent(

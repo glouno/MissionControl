@@ -396,3 +396,62 @@ test("draft, direct and backlog admission reject excessive pinned instructions w
   }
   assert.equal(f.store.getBacklog(entry.id, "a").status, "backlog");
 });
+
+test("admission retries return stored goals after contract drift but reject changed requests and unauthorized callers", async (t) => {
+  const f = await fixture(t);
+  const root = f.config.projects[0].config.repoPath!;
+  const server = createControlServer(f.store, {
+    token: "synthetic-replay",
+    validateGoal: (body) =>
+      effectiveGoal(f.config, body.projectId!, body.description, body),
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const request = (
+    path: string,
+    body: unknown,
+    key: string,
+    token = "synthetic-replay",
+  ) =>
+    fetch(base + path, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: JSON.stringify(body),
+    });
+  const body = { projectId: "a", description: "Direct" };
+  const direct = await request("/goals", body, "direct");
+  assert.equal(direct.status, 200);
+  const goal = await direct.json();
+  const entry = f.store.addBacklog(input());
+  const launchPath = `/backlog/${entry.id}/launch`;
+  const launchBody = { projectId: "a", revision: 1 };
+  const launched = await request(launchPath, launchBody, "launch");
+  assert.equal(launched.status, 200);
+  const backlogGoal = await launched.json();
+  await writeFile(join(root, "AGENTS.md"), "x".repeat(256001));
+  assert.deepEqual(
+    await (await request("/goals", body, "direct")).json(),
+    goal,
+  );
+  assert.deepEqual(
+    await (await request(launchPath, launchBody, "launch")).json(),
+    backlogGoal,
+  );
+  const changed = await request(
+    "/goals",
+    { ...body, description: "Changed" },
+    "direct",
+  );
+  assert.equal(changed.status, 409);
+  assert.equal((await changed.json()).error.code, "idempotency_conflict");
+  const denied = await request("/goals", body, "direct", "invalid");
+  assert.equal(denied.status, 401);
+  await denied.text();
+  assert.equal(f.store.goals().length, 2);
+});
