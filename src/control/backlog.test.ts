@@ -64,6 +64,19 @@ async function fixture(t: test.TestContext) {
     },
   };
 }
+const reviewedPlan = {
+  tasks: [
+    {
+      key: "one",
+      title: "One",
+      description: "One bounded change",
+      dependencies: [],
+      acceptanceCriteria: ["Works"],
+      allowedPaths: ["**"],
+      verificationCommands: ["true"],
+    },
+  ],
+};
 const input = (projectId = "a", dependencies: string[] = []) => ({
   projectId,
   title: "Durable work",
@@ -362,7 +375,7 @@ test("API enforces identity, stored project scope, dependencies and explicit rev
   assert.equal(goals[0].id, goals[1].id);
 });
 
-test("draft, direct and backlog admission reject excessive pinned instructions without admitting work", async (t) => {
+test("draft, direct, reviewed and backlog admission reject excessive pinned instructions without admitting work", async (t) => {
   const f = await fixture(t);
   const root = f.config.projects[0].config.repoPath!;
   await writeFile(join(root, "AGENTS.md"), "x".repeat(256001));
@@ -380,6 +393,10 @@ test("draft, direct and backlog admission reject excessive pinned instructions w
   for (const [path, body] of [
     ["/goal-drafts", { projectId: "a", description: "Draft" }],
     ["/goals", { projectId: "a", description: "Direct" }],
+    [
+      "/reviewed-goals",
+      { goal: { projectId: "a", description: "Reviewed" }, plan: reviewedPlan },
+    ],
     [`/backlog/${entry.id}/launch`, { projectId: "a", revision: 1 }],
   ] as const) {
     const response = await fetch(base + path, {
@@ -434,6 +451,13 @@ test("admission retries return stored goals after contract drift but reject chan
   const launched = await request(launchPath, launchBody, "launch");
   assert.equal(launched.status, 200);
   const backlogGoal = await launched.json();
+  const reviewedBody = {
+    goal: { projectId: "a", description: "Reviewed" },
+    plan: reviewedPlan,
+  };
+  const admitted = await request("/reviewed-goals", reviewedBody, "reviewed");
+  assert.equal(admitted.status, 200);
+  const reviewedGoal = await admitted.json();
   await writeFile(join(root, "AGENTS.md"), "x".repeat(256001));
   assert.deepEqual(
     await (await request("/goals", body, "direct")).json(),
@@ -443,6 +467,18 @@ test("admission retries return stored goals after contract drift but reject chan
     await (await request(launchPath, launchBody, "launch")).json(),
     backlogGoal,
   );
+  assert.deepEqual(
+    await (await request("/reviewed-goals", reviewedBody, "reviewed")).json(),
+    reviewedGoal,
+  );
+  const unauthorizedReviewed = await request(
+    "/reviewed-goals",
+    reviewedBody,
+    "reviewed",
+    "invalid",
+  );
+  assert.equal(unauthorizedReviewed.status, 401);
+  await unauthorizedReviewed.text();
   const changed = await request(
     "/goals",
     { ...body, description: "Changed" },
@@ -453,5 +489,5 @@ test("admission retries return stored goals after contract drift but reject chan
   const denied = await request("/goals", body, "direct", "invalid");
   assert.equal(denied.status, 401);
   await denied.text();
-  assert.equal(f.store.goals().length, 2);
+  assert.equal(f.store.goals().length, 3);
 });

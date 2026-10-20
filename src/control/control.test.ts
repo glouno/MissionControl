@@ -15,7 +15,7 @@ import { once } from "node:events";
 import { SqliteStore, sql } from "../sqlite.js";
 import { ControlStore } from "./store.js";
 import { ControlClient } from "./client.js";
-import { createControlServer } from "./api.js";
+import { createControlServer, openApi } from "./api.js";
 import { validatePlan, type Claim, type Goal } from "./schema.js";
 import { git, WorkspaceManager } from "./workspaces.js";
 import { Scheduler } from "./scheduler.js";
@@ -1080,3 +1080,106 @@ for (const closed of [false, true])
         closed ? null : "worker",
       );
     });
+
+test("reviewed admission atomically installs a plan and replays without a planner charge", async () => {
+  const f = await fixture();
+  const s = await serve(f);
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: "Bearer operator-test-token-0123456789",
+    "Idempotency-Key": "reviewed-once",
+  };
+  const body = {
+    goal: {
+      title: "Reviewed goal",
+      description: "One bounded source change",
+      repoPath: f.repo,
+      repository: { mode: "local", branch: "development" },
+      backend: { kind: "fake" },
+    },
+    plan: { tasks: [spec("one")] },
+  };
+  try {
+    const request = () =>
+      fetch(s.url + "/api/v1/reviewed-goals", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+    const first = await request();
+    assert.equal(first.status, 200);
+    const goal = (await first.json()) as Goal;
+    assert.equal(goal.planRevision, 1);
+    assert.equal(f.store.tasks(goal.id).length, 1);
+    const replay = await request();
+    assert.equal(replay.status, 200);
+    assert.equal(((await replay.json()) as Goal).id, goal.id);
+    assert.equal(f.store.goals(100).length, 1);
+    // The queued plan job is harmless even if the scheduler sees it immediately.
+    const scheduler = new Scheduler(f.store, f.root, "unused", {
+      backend: () => {
+        throw new Error("Reviewed admission must not invoke a planner");
+      },
+    });
+    await scheduler.plan(goal.id);
+    assert.equal(f.store.getGoal(goal.id).planRevision, 1);
+    assert.equal(f.store.attempts(goal.id).length, 0);
+  } finally {
+    s.server.closeAllConnections();
+    s.server.close();
+    f.db.close();
+  }
+});
+
+test("rejected reviewed plan rolls back goal, jobs, events and admission allowance", async () => {
+  const f = await fixture();
+  f.store.setting("configuration-snapshot", {
+    settings: { authority: { maxTotalAdmittedCostUsd: 100 } },
+  });
+  const s = await serve(f);
+  const before = f.db
+    .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    .map((row: any) => [
+      row.name,
+      f.db.query('SELECT * FROM "' + row.name + '"'),
+    ]);
+  try {
+    const response = await fetch(s.url + "/api/v1/reviewed-goals", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer operator-test-token-0123456789",
+      },
+      body: JSON.stringify({
+        goal: {
+          title: "Rejected",
+          description: "Invalid path",
+          repoPath: f.repo,
+          backend: { kind: "fake" },
+          policy: { approvedPaths: ["docs/**"] },
+          maxCostUsd: 5,
+        },
+        plan: { tasks: [spec("one")] },
+      }),
+    });
+    assert.equal(response.status, 409);
+    assert.match(await response.text(), /scope exceeds/);
+    const after = f.db
+      .query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .map((row: any) => [
+        row.name,
+        f.db.query('SELECT * FROM "' + row.name + '"'),
+      ]);
+    assert.deepEqual(after, before);
+  } finally {
+    s.server.closeAllConnections();
+    s.server.close();
+    f.db.close();
+  }
+});
+
+test("reviewed admission OpenAPI matches the required application prefix", () => {
+  const paths = openApi().paths;
+  assert.ok(paths["/api/v1/reviewed-goals"]?.post);
+  assert.equal(paths["/reviewed-goals"], undefined);
+});

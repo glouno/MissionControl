@@ -45,3 +45,21 @@ when settled reported/estimated charges reach the threshold. Holds do not trigge
 that charge alert; they remain visible separately. The alert does not stop execution.
 Backlog snapshots expose `currentGoalId`/`currentGoalStatus` across replacements while
 preserving the original launch link.
+
+## Admit a reviewed plan atomically
+
+For an operator-defined task, `POST /api/v1/reviewed-goals` accepts
+`{"goal": <ordinary goal admission input>, "plan": {"tasks": [...]}}`.
+Use an `Idempotency-Key` for safe response-loss replay. The endpoint requires
+operator authority, runs the ordinary configuration and instruction preflight,
+and validates task paths, verification commands, resources and dependencies.
+Goal creation, budget admission and plan installation commit together. An invalid
+plan leaves no goal, task, job, event or admission charge behind. The scheduler
+observes the installed plan and skips native planning; independent worker
+verification, review and integration remain unchanged.
+
+This removes the scheduling-delay race of creating a goal and installing its plan
+in a second request. It also avoids spending a native planner invocation on a
+fully specified task. It does not recover a refused or output-exhausted existing
+goal, refund previous admissions, change output limits or certify free-form native
+planning. Retained failures still require their normal inspected recovery path.
