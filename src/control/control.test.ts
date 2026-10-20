@@ -15,7 +15,7 @@ import { once } from "node:events";
 import { SqliteStore, sql } from "../sqlite.js";
 import { ControlStore } from "./store.js";
 import { ControlClient } from "./client.js";
-import { createControlServer } from "./api.js";
+import { createControlServer, openApi } from "./api.js";
 import { validatePlan, type Claim, type Goal } from "./schema.js";
 import { git, WorkspaceManager } from "./workspaces.js";
 import { Scheduler } from "./scheduler.js";
@@ -1176,4 +1176,10 @@ test("rejected reviewed plan rolls back goal, jobs, events and admission allowan
     s.server.close();
     f.db.close();
   }
+});
+
+test("reviewed admission OpenAPI matches the required application prefix", () => {
+  const paths = openApi().paths;
+  assert.ok(paths["/api/v1/reviewed-goals"]?.post);
+  assert.equal(paths["/reviewed-goals"], undefined);
 });

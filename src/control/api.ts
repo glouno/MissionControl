@@ -1817,7 +1817,7 @@ export function openApi() {
       },
     },
   };
-  paths["/reviewed-goals"] = {
+  paths["/api/v1/reviewed-goals"] = {
     post: {
       summary: "Atomically admit a goal with an operator-reviewed task plan",
       requestBody: {

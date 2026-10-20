@@ -1387,7 +1387,7 @@
         }
       }
     },
-    "/reviewed-goals": {
+    "/api/v1/reviewed-goals": {
       "post": {
         "summary": "Atomically admit a goal with an operator-reviewed task plan",
         "requestBody": {
