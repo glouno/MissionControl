@@ -61,6 +61,12 @@ import {
   automationPolicy,
   automationPolicySchema,
 } from "./automationAuth.js";
+const reviewedGoalSchema = z
+  .object({
+    goal: z.unknown(),
+    plan: planSchema,
+  })
+  .strict();
 const claimSchema = z.object({
   workerId: z.string().min(1),
   goalId: z.string().optional(),
@@ -788,7 +794,9 @@ export function createControlServer(
       if (
         method === "POST" &&
         typeof key === "string" &&
-        (path === "/goals" || /^\/backlog\/[a-zA-Z0-9_-]+\/launch$/.test(path))
+        (path === "/goals" ||
+          path === "/reviewed-goals" ||
+          /^\/backlog\/[a-zA-Z0-9_-]+\/launch$/.test(path))
       ) {
         scopedRead();
         const replay = store.idempotentResponse(
@@ -797,6 +805,11 @@ export function createControlServer(
         );
         if (replay) return send(res, 200, replay.response);
       }
+      // Reviewed admission is operator-only; validate its envelope before preflight.
+      const reviewed =
+        path === "/reviewed-goals" && method === "POST"
+          ? (operator(), reviewedGoalSchema.parse(body))
+          : undefined;
       // Read pinned contracts before admission, outside the SQLite transaction.
       // Revalidate the effective configuration inside the transaction after the await.
       let preflightConfig: import("./schema.js").GoalConfig | undefined;
@@ -804,10 +817,12 @@ export function createControlServer(
       if (
         method === "POST" &&
         options.validateGoal &&
-        (path === "/goals" || launchMatch)
+        (path === "/goals" || path === "/reviewed-goals" || launchMatch)
       ) {
         scopedRead();
-        let input = body as import("./schema.js").GoalInput;
+        let input = (
+          reviewed ? reviewed.goal : body
+        ) as import("./schema.js").GoalInput;
         if (launchMatch) {
           const request = backlogRevisionSchema.parse(body);
           if (automation && !automation.projectIds.includes(request.projectId))
@@ -969,6 +984,24 @@ export function createControlServer(
             url.searchParams.get("after") ?? "",
             automation?.projectIds,
           );
+        }
+        if (reviewed) {
+          const input = admissionValidator
+            ? admissionValidator(
+                reviewed.goal as import("./schema.js").GoalInput,
+              )
+            : goalSchema.parse(reviewed.goal);
+          // No scheduler-visible goal or admission charge survives a rejected plan.
+          return store.db.transaction(() => {
+            const goal = store.createGoal(input, principal.actor);
+            store.installPlan(
+              goal.id,
+              reviewed.plan,
+              goal.revision,
+              principal.actor,
+            );
+            return store.getGoal(goal.id);
+          });
         }
         if (method === "POST" && path === "/goals") {
           scopedRead();
@@ -1780,6 +1813,39 @@ export function openApi() {
         409: {
           description:
             "Active attempt, missing evidence, or conflicting reconciliation",
+        },
+      },
+    },
+  };
+  paths["/reviewed-goals"] = {
+    post: {
+      summary: "Atomically admit a goal with an operator-reviewed task plan",
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["goal", "plan"],
+              properties: {
+                goal: { type: "object" },
+                plan: { $ref: "#/components/schemas/Plan" },
+              },
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description:
+            "Goal and validated plan admitted atomically; idempotent replay supported",
+        },
+        400: { description: "Invalid goal or plan; nothing admitted" },
+        403: { description: "Operator authority required" },
+        409: {
+          description:
+            "Admission policy, budget or task scope rejected; nothing admitted",
         },
       },
     },
