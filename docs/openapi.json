@@ -1387,6 +1387,48 @@
         }
       }
     },
+    "/reviewed-goals": {
+      "post": {
+        "summary": "Atomically admit a goal with an operator-reviewed task plan",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "goal",
+                  "plan"
+                ],
+                "properties": {
+                  "goal": {
+                    "type": "object"
+                  },
+                  "plan": {
+                    "$ref": "#/components/schemas/Plan"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Goal and validated plan admitted atomically; idempotent replay supported"
+          },
+          "400": {
+            "description": "Invalid goal or plan; nothing admitted"
+          },
+          "403": {
+            "description": "Operator authority required"
+          },
+          "409": {
+            "description": "Admission policy, budget or task scope rejected; nothing admitted"
+          }
+        }
+      }
+    },
     "/api/v1/goals": {
       "get": {
         "responses": {
@@ -3971,6 +4013,9 @@
               "reported",
               "unknown"
             ]
+          },
+          "providerRequestStarted": {
+            "type": "boolean"
           }
         },
         "required": [
