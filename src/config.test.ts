@@ -498,6 +498,18 @@ test("configuration preserves precedence and resolves repositories from their de
     () => effectiveGoal(c, "sample", "Task", { policy: { publish: true } }),
     /override/,
   );
+  c.projects[0].config.executionResources = { cpuUnits: 2, memoryMiB: 8192 };
+  assert.deepEqual(effectiveGoal(c, "sample", "Task").executionResources, {
+    cpuUnits: 2,
+    memoryMiB: 8192,
+  });
+  assert.throws(
+    () =>
+      effectiveGoal(c, "sample", "Task", {
+        executionResources: { cpuUnits: 1, memoryMiB: 512 },
+      }),
+    /override/,
+  );
 });
 test("goal planning overrides can reduce allowances but cannot remove project limits", async (t) => {
   const f = await fixture(t),

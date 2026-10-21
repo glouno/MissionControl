@@ -182,6 +182,13 @@ export const goalSchema = z
     trustedAdditionalVerificationCommands: z
       .array(z.string().min(1))
       .default([]),
+    executionResources: z
+      .object({
+        cpuUnits: z.number().int().min(1).max(16),
+        memoryMiB: z.number().int().min(128).max(32768),
+      })
+      .strict()
+      .optional(),
     budgetAlertUsd: z.number().positive().optional(),
     maxCostUsd: z.number().nonnegative().default(0),
     estimatePerRunUsd: z.number().nonnegative().default(0),

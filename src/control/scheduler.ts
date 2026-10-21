@@ -1,5 +1,6 @@
 import { repositoryIdentity } from "./repositories.js";
 import { planningLimits, planningRecovery } from "./planningLimits.js";
+import { planningContract, plannerOutputSchema } from "./planningContract.js";
 import {
   withExecutionDeadline,
   executionDeadline,
@@ -1173,10 +1174,10 @@ export class Scheduler {
           claim,
           workspace,
           mode: "plan",
-          outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
+          outputSchema: plannerOutputSchema(g.config),
           signal: controller.signal,
           onCheckpoint: async () => {},
-          prompt: `Produce the smallest useful task plan. For an explicitly defined single-task goal, return one task without rediscovering or redesigning the whole project. Limit investigation to files needed to identify scope, paths and checks; keep the final plan concise. Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
+          prompt: `Produce the smallest useful task plan. For an explicitly defined single-task goal, return one task without rediscovering or redesigning the whole project. Limit investigation to files needed to identify scope, paths and checks; keep the final plan concise. Investigate this repository and decompose the goal into a bounded DAG. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Preserve required repository checks. Return only JSON {"tasks":[{"key":"...","title":"...","description":"...","dependencies":[],"acceptanceCriteria":["..."],"allowedPaths":["..."],"verificationCommands":[]}]}. Goal: ${g.config.description}\nTrusted execution contract: ${JSON.stringify(planningContract(g.config))}\nRequired checks: ${JSON.stringify(g.config.verificationCommands)}\nProject context: ${JSON.stringify(context)}`,
         },
         "planning",
       );
@@ -1227,8 +1228,7 @@ export class Scheduler {
           capability: "researcher",
           priority: 0,
           resources: [],
-          cpuUnits: 2,
-          memoryMiB: 2048,
+          ...planningContract(g.config).minimumResources,
         },
       },
     };
@@ -1252,10 +1252,10 @@ export class Scheduler {
         claim: c,
         workspace: this.workspaces.goalPath(g),
         mode: "plan",
-        outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
+        outputSchema: plannerOutputSchema(g.config),
         signal: AbortSignal.timeout(g.config.timeoutMs),
         onCheckpoint: async () => {},
-        prompt: `Revise the goal plan after these events: ${JSON.stringify(this.store.events(0, g.id).slice(-20))}. Preserve these accepted contracts exactly: ${JSON.stringify(prior)}. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Return JSON {tasks:[...]} with bounded tasks, dependencies, acceptanceCriteria, allowedPaths, verificationCommands. Goal: ${g.config.description}`,
+        prompt: `Revise the goal plan after these events: ${JSON.stringify(this.store.events(0, g.id).slice(-20))}. Preserve these accepted contracts exactly: ${JSON.stringify(prior)}. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Return JSON {tasks:[...]} with bounded tasks, dependencies, acceptanceCriteria, allowedPaths, verificationCommands. Trusted execution contract: ${JSON.stringify(planningContract(g.config))}. Goal: ${g.config.description}`,
       },
       "replanning",
     );

@@ -83,8 +83,14 @@ export class IsolatedVerifier {
           ? { path: contracts.path, digest: contracts.digest }
           : undefined,
         image: this.imageDigest,
-        cpu: claim.task.spec.cpuUnits,
-        memoryMiB: claim.task.spec.memoryMiB,
+        cpu: Math.max(
+          claim.task.spec.cpuUnits,
+          claim.goal.config.executionResources?.cpuUnits ?? 1,
+        ),
+        memoryMiB: Math.max(
+          claim.task.spec.memoryMiB,
+          claim.goal.config.executionResources?.memoryMiB ?? 128,
+        ),
         timeoutMs: claim.goal.config.timeoutMs,
       },
       signal,

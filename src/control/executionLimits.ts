@@ -57,6 +57,7 @@ export function executionLimits(config: GoalConfig, snapshot?: any) {
             ? "Gateway attempts including retries and locally refused attempts"
             : "Portable model turns; provider retries are bounded separately",
     maxWorkers: config.maxWorkers,
+    executionResources: config.executionResources ?? null,
     maxAttempts: config.maxAttempts,
     maxReplans: config.maxReplans,
     noProgressWarningMs: config.noProgressWarningMs,
