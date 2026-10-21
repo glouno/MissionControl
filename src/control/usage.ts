@@ -7,6 +7,8 @@ export const usageSchema = z.discriminatedUnion("kind", [
       kind: z.literal("metered"),
       status: z.enum(["reported", "estimated", "unknown"]),
       costUsd: z.number().finite().nonnegative().optional(),
+      thinkingTokens: z.number().int().nonnegative().optional(),
+      cachedInputTokens: z.number().int().nonnegative().optional(),
       inputTokens: z.number().int().nonnegative().optional(),
       outputTokens: z.number().int().nonnegative().optional(),
       elapsedMs: z.number().finite().nonnegative().optional(),

@@ -58,6 +58,12 @@ export const installationSchema = z
         autoMerge: z.boolean().default(false),
         maxGoalCostUsd: z.number().nonnegative().default(0),
         maxTotalAdmittedCostUsd: z.number().nonnegative().default(0),
+        maxConcurrentMeteredRuns: z
+          .number()
+          .int()
+          .positive()
+          .max(100)
+          .optional(),
       })
       .strict()
       .prefault({}),
@@ -505,6 +511,14 @@ export async function loadConfiguration(
         );
       if (definition.protocol === "tool-loop") {
         if (
+          provider.backend.kind === "vertex" &&
+          (!settings.authority.maxConcurrentMeteredRuns ||
+            settings.authority.maxTotalAdmittedCostUsd <= 0)
+        )
+          throw Error(
+            "Vertex requires explicit installation spending and metered concurrency caps",
+          );
+        if (
           JSON.stringify(definition.backend) !==
           JSON.stringify(provider.backend)
         )
@@ -512,12 +526,14 @@ export async function loadConfiguration(
             `Provider ${provider.id} runtime backend differs from its admitted configuration`,
           );
         if (
-          provider.backend.kind === "bedrock"
-            ? definition.authentication.kind !== "aws-session"
-            : provider.backend.kind !== "azure" ||
-              (provider.backend.credential === "key"
-                ? definition.authentication.kind !== "secret"
-                : definition.authentication.kind !== "azure-cli")
+          provider.backend.kind === "vertex"
+            ? definition.authentication.kind !== "google-adc"
+            : provider.backend.kind === "bedrock"
+              ? definition.authentication.kind !== "aws-session"
+              : provider.backend.kind !== "azure" ||
+                (provider.backend.credential === "key"
+                  ? definition.authentication.kind !== "secret"
+                  : definition.authentication.kind !== "azure-cli")
         )
           throw Error(
             `Provider ${provider.id} runtime authentication differs from its backend`,

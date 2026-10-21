@@ -945,6 +945,16 @@ export class ControlStore {
             "Admissions paused during complete backup",
             409,
           );
+        if (
+          config.backend.kind === "vertex" &&
+          (!installation.authority.maxConcurrentMeteredRuns ||
+            installation.authority.maxTotalAdmittedCostUsd <= 0)
+        )
+          throw new ControlError(
+            "vertex_caps",
+            "Vertex requires explicit installation spending and concurrency caps",
+            409,
+          );
         const admitted = Number(this.setting("admitted-cost-usd") ?? 0);
         if (
           admitted + config.maxCostUsd >
@@ -957,6 +967,12 @@ export class ControlStore {
           );
         this.setting("admitted-cost-usd", admitted + config.maxCostUsd);
       }
+      if (config.backend.kind === "vertex" && !installation)
+        throw new ControlError(
+          "vertex_caps",
+          "Vertex requires applied installation spending and concurrency caps",
+          409,
+        );
       const goalId = id("goal");
       this.db.exec(
         `INSERT INTO control_goals(id,status,created_at,config) VALUES(${sql(goalId)},'planning',${sql(this.now())},${this.encode(config)});`,
@@ -1062,7 +1078,9 @@ export class ControlStore {
       );
     if (
       config.executionContract?.usagePolicy.kind !== "subscription" &&
-      ["azure", "bedrock", "claude-code"].includes(config.backend.kind) &&
+      ["azure", "bedrock", "vertex", "claude-code"].includes(
+        config.backend.kind,
+      ) &&
       (config.maxCostUsd <= 0 || config.estimatePerRunUsd <= 0)
     )
       throw new ControlError(
@@ -1133,7 +1151,7 @@ export class ControlStore {
           409,
         );
       if (
-        ["azure", "bedrock", "claude-code"].includes(backend.kind) &&
+        ["azure", "bedrock", "vertex", "claude-code"].includes(backend.kind) &&
         (g.config.maxCostUsd <= 0 || g.config.estimatePerRunUsd <= 0)
       )
         throw new ControlError(
@@ -1439,6 +1457,8 @@ export class ControlStore {
           goal.config.executionContract?.usagePolicy.kind === "subscription" &&
           !this.subscriptionCapacity(goal.id)?.admissionAllowed
         )
+          continue;
+        if (goal.config.estimatePerRunUsd > 0 && !this.meteredCapacity())
           continue;
         const generation = task.generation + 1;
         this.db.exec(
@@ -3186,6 +3206,55 @@ export class ControlStore {
     const result = JSON.parse(String(r.value));
     return pathSetting ? transform(result, false) : result;
   }
+  private meteredCapacity() {
+    const limit = this.setting("configuration-snapshot")?.settings?.authority
+      ?.maxConcurrentMeteredRuns;
+    if (limit === undefined) return true;
+    const active = this.db
+      .query<{
+        task_id: string | null;
+        generation: number | null;
+        outcome: string | null;
+        result: string | null;
+        usage: string | null;
+      }>(
+        "SELECT a.task_id,a.generation,a.outcome,a.result,a.usage FROM control_budgets b LEFT JOIN control_attempts a ON a.id=b.id WHERE b.status='reserved' AND b.amount>0",
+      )
+      .filter((attempt) => {
+        if (
+          !attempt.task_id ||
+          attempt.outcome !== "active" ||
+          !attempt.result ||
+          !attempt.usage
+        )
+          return true;
+        const task = this.getTask(attempt.task_id);
+        if (
+          task.generation !== attempt.generation ||
+          !["verifying", "integrating"].includes(task.status)
+        )
+          return true;
+        // A final coding result is distinct from an interim checkpoint. Its
+        // spending reservation remains intact, but stopped execution must not
+        // occupy the concurrency slot needed by independent review.
+        const result = JSON.parse(attempt.result);
+        if (!result.usage) return true;
+        const usage = executionUsage(result, this.getGoal(task.goalId).config);
+        if (knownCost(usage) === undefined) return true;
+        try {
+          this.assertInterruptedResourcesStopped(task);
+          return false;
+        } catch (error) {
+          if (
+            error instanceof ControlError &&
+            error.code === "active_resources"
+          )
+            return true;
+          throw error;
+        }
+      }).length;
+    return active < limit;
+  }
   reserveOperation(goalId: string, label: string, parent?: Claim): string {
     return this.db.transaction(() => {
       const g = this.getGoal(goalId),
@@ -3251,6 +3320,12 @@ export class ControlStore {
         );
         return attemptId;
       }
+      if (amount > 0 && !this.meteredCapacity())
+        throw new ControlError(
+          "capacity",
+          "Installation metered concurrency cap reached",
+          409,
+        );
       const spent = Number(
         this.db.one<Row>(
           `SELECT COALESCE(SUM(CASE WHEN status='settled' THEN actual ELSE amount END),0) n FROM control_budgets WHERE goal_id=${sql(goalId)} AND status!='released'`,

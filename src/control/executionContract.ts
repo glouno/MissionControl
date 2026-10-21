@@ -8,6 +8,7 @@ export const executionContractSchema = z
       "fake",
       "azure",
       "bedrock",
+      "vertex",
       "codex-subscription",
       "claude-subscription",
     ]),
@@ -77,9 +78,14 @@ export const executionContractSchema = z
         issue(
           "Metered provider requires controller authentication, approved harness and dollar limits",
         );
-      if (c.provider === "bedrock" && c.harness !== "tool-loop")
+      if (
+        ["bedrock", "vertex"].includes(c.provider) &&
+        c.harness !== "tool-loop"
+      )
         issue(
-          "Native Bedrock execution is unsupported; select the Bedrock tool-loop harness",
+          c.provider === "bedrock"
+            ? "Native Bedrock execution is unsupported; select the Bedrock tool-loop harness"
+            : "Vertex requires the controller tool-loop harness",
         );
     }
   });
@@ -90,7 +96,9 @@ export function validateBackendContract(
 ) {
   const c = executionContractSchema.parse(contract);
   const harness =
-    backend.kind === "azure" || backend.kind === "bedrock"
+    backend.kind === "azure" ||
+    backend.kind === "bedrock" ||
+    backend.kind === "vertex"
       ? "tool-loop"
       : backend.kind;
   if (c.harness !== harness)

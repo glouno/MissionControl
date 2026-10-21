@@ -396,8 +396,7 @@ for (const cleanupFails of [false, true])
         throw new Error("incomplete provider response");
       });
       await assert.rejects(b.run(f.context), (error: any) => {
-        if (cleanupFails)
-          assert.equal(error.failure.kind, "cleanup_blocked");
+        if (cleanupFails) assert.equal(error.failure.kind, "cleanup_blocked");
         else assert.equal(error.message, "incomplete provider response");
         assert.equal(error.usage.status, priced ? "estimated" : "unknown");
         assert.equal(error.usage.inputTokens, 100);
@@ -407,3 +406,182 @@ for (const cleanupFails of [false, true])
         return true;
       });
     });
+
+for (const boundary of [
+  "success",
+  "expired-entry",
+  "reset-deadline",
+  "reset-authority",
+  "reset-cancellation",
+  "reset-context-authority",
+  "reset-failure",
+  "reset-failure-authority",
+  "reset-failure-context-authority",
+  "reset-failure-deadline",
+  "reset-failure-cancellation",
+])
+test(`native Vertex isolated completion fences ${boundary} after controller tool execution`, async (t) => {
+  const { VertexProvider } = await import("./vertexProvider.js");
+  const { vertexBackendSchema } = await import("./vertexConfig.js");
+  const f = await fixture(t);
+  const config = vertexBackendSchema.parse({
+    kind: "vertex",
+    project: "fixture-project",
+    quotaProject: "fixture-quota",
+    location: "global",
+    model: "gemini-4-argon",
+    thinkingLevel: "low",
+    maxInputTokens: 8192,
+    maxOutputTokens: 1024,
+    maxRequestCostUsd: 1,
+    pricing: [
+      {
+        version: "fixture",
+        currency: "USD",
+        effectiveFrom: "2026-01-01T00:00:00Z",
+        effectiveUntil: "2027-01-01T00:00:00Z",
+        inputUsdPerMillion: 1,
+        cachedInputUsdPerMillion: 0.1,
+        outputUsdPerMillion: 2,
+        thinkingUsdPerMillion: 2,
+        evidenceUrl: "https://example.invalid/pricing",
+      },
+    ],
+  });
+  f.context.claim.goal.config.backend = config;
+  let calls = 0,
+    auth = 0,
+    tools = 0;
+  const provider = new VertexProvider(
+    config,
+    (async (_url, init) => {
+      calls++;
+      assert.equal(
+        (init?.headers as any).Authorization,
+        "Bearer controller-only-fixture",
+      );
+      const body = JSON.parse(String(init?.body));
+      if (calls === 2)
+        assert.equal(
+          body.contents.at(-1).parts[0].functionResponse.name,
+          "read_file",
+        );
+      return new Response(
+        `data: ${JSON.stringify({ modelVersion: "gemini-4-argon", candidates: [{ content: { role: "model", parts: calls === 1 ? [{ functionCall: { name: "read_file", args: { path: "base" } }, thoughtSignature: "opaque-fixture" }] : [{ text: "done" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, thoughtsTokenCount: 0, totalTokenCount: 110 } })}\n\n`,
+      );
+    }) as typeof fetch,
+    async () => {
+      auth++;
+      return { Authorization: "Bearer controller-only-fixture" };
+    },
+    undefined,
+    "fixture",
+    () => Date.parse("2026-10-21T00:00:00Z"),
+  );
+  const b = f.backend(async () => {
+    throw Error("must use portable provider");
+  });
+  delete b.options.backend;
+  b.options.portableProvider = provider;
+  let wall = Date.now(),
+    revoked = false;
+  t.mock.method(Date, "now", () => wall);
+  f.context.deadlineAt = boundary === "expired-entry" ? wall : wall + 60000;
+  const reason = new Error("synthetic completion authority revoked");
+  b.options.assertContext = () => {
+    if (
+      revoked &&
+      (boundary === "reset-authority" ||
+        boundary === "reset-failure-authority")
+    )
+      throw reason;
+  };
+  f.context.assertAuthority = () => {
+    if (
+      revoked &&
+      (boundary === "reset-context-authority" ||
+        boundary === "reset-failure-context-authority")
+    )
+      throw reason;
+  };
+  const controller = new AbortController();
+  f.context.signal = controller.signal;
+  const reset = f.env.reset.bind(f.env);
+  let resets = 0;
+  f.env.reset = async (id, signal) => {
+    await reset(id, signal);
+    resets++;
+    if (
+      boundary === "reset-deadline" ||
+      boundary === "reset-failure-deadline"
+    )
+      wall = f.context.deadlineAt;
+    if (boundary.includes("authority")) revoked = true;
+    if (boundary.includes("cancellation")) controller.abort(reason);
+    if (boundary.startsWith("reset-failure"))
+      throw new Error("synthetic reset failure");
+  };
+  f.env.execute = async (_id, command, signal) => {
+    signal.throwIfAborted();
+    tools++;
+    assert.equal(command[0], "python3");
+    assert.equal(
+      command.join(" ").includes("controller-only-fixture"),
+      false,
+    );
+    assert.equal(JSON.parse(command[3]!).name, "read_file");
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ result: "base" }),
+      stderr: "",
+    };
+  };
+  if (boundary === "success") {
+    const result = await b.run(f.context);
+    assert.equal(result.text, "done");
+  } else {
+    await assert.rejects(b.run(f.context), (error: any) => {
+      if (boundary.includes("deadline") || boundary === "expired-entry")
+        assert.equal(error.failure?.kind, "deadline");
+      else if (boundary === "reset-failure")
+        assert.equal(error.failure?.kind, "cleanup_blocked");
+      else assert.equal(error, reason);
+      if (
+        boundary !== "reset-failure" &&
+        (boundary.startsWith("reset-failure") ||
+          boundary === "reset-cancellation")
+      )
+        assert.equal(error.cleanupFailure.failure.kind, "cleanup_blocked");
+      if (boundary !== "expired-entry") {
+        assert.equal(error.usage.status, "estimated");
+        assert.equal(error.usage.inputTokens, 200);
+        assert.equal(error.usage.outputTokens, 20);
+        assert.equal(error.costUsd, 0.00024);
+        assert.equal(error.inputTokens, 200);
+        assert.equal(error.outputTokens, 20);
+        assert.equal(error.costStatus, "estimated_unknown");
+        assert.equal(error.executionSessionId, f.registry.all()[0].id);
+      }
+      return true;
+    });
+  }
+  if (boundary === "expired-entry") {
+    assert.deepEqual([auth, calls, tools, resets], [0, 0, 0, 0]);
+    assert.equal(f.registry.all().length, 0);
+    return;
+  }
+  assert.equal(auth, 2);
+  assert.equal(calls, 2);
+  assert.equal(tools, 1);
+  assert.equal(resets, 1);
+  assert.equal(
+    f.registry.all()[0].status,
+    boundary === "reset-cancellation" || boundary.startsWith("reset-failure")
+      ? "prepared"
+      : "checkpointed",
+  );
+  assert.equal(f.registry.all()[0].container, undefined);
+  assert.equal(f.registry.all()[0].spec.gatewayNetwork, undefined);
+  assert.equal(f.registry.all()[0].spec.gatewayEnv, undefined);
+  assert.equal(f.db.query("SELECT * FROM inference_capabilities").length, 0);
+});

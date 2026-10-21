@@ -2,6 +2,7 @@ import type { RunContext } from "./backend.js";
 import type { ExecutionEnvironment } from "./environments.js";
 import type { ToolCall, ModelProvider } from "./providers.js";
 import { PortableBackend } from "./backends.js";
+import { invocationFence, abortable } from "./reliability.js";
 // Trusted tool implementation executes only against the invocation's private
 // container source. The controller's tool loop never reads/writes worker paths.
 const tools = `import os,json,sys,pathlib,fnmatch,subprocess,selectors,time
@@ -54,11 +55,47 @@ export class IsolatedPortableTools extends PortableBackend {
   ) {
     super(provider);
   }
-  override async tool(context: RunContext, call: ToolCall): Promise<string> {
-    context.signal.throwIfAborted();
+  protected override assertInferenceAuthority(context: RunContext) {
+    super.assertInferenceAuthority(context);
     this.assertAuthority();
+  }
+  override async run(context: RunContext) {
+    const { signal, check } = invocationFence(
+      context.signal,
+      context.deadlineAt,
+      () => {
+        context.assertAuthority?.();
+        this.assertAuthority();
+      },
+    );
+    check();
+    // The watcher terminates pending operations; every dispatch and acceptance
+    // also checks synchronously, including authentication's internal stages.
+    const watch = setInterval(() => {
+      try {
+        check();
+      } catch {
+        /* check aborts the invocation signal */
+      }
+    }, 25);
+    watch.unref();
+    try {
+      const result = await super.run({
+        ...context,
+        signal,
+        assertAuthority: check,
+      });
+      check();
+      return result;
+    } finally {
+      clearInterval(watch);
+    }
+  }
+  override async tool(context: RunContext, call: ToolCall): Promise<string> {
+    this.assertInferenceAuthority(context);
     if (call.name === "checkpoint") {
       await context.onCheckpoint(String(call.arguments.summary));
+      this.assertInferenceAuthority(context);
       return "Checkpoint saved";
     }
     const payload = {
@@ -68,12 +105,15 @@ export class IsolatedPortableTools extends PortableBackend {
       allowedPaths: context.claim.task.spec.allowedPaths,
       timeoutMs: context.claim.goal.config.timeoutMs,
     };
-    const output = await this.environment.execute(
-      this.sessionId,
-      ["python3", "-c", tools, JSON.stringify(payload)],
+    const output = await abortable(
+      this.environment.execute(
+        this.sessionId,
+        ["python3", "-c", tools, JSON.stringify(payload)],
+        context.signal,
+      ),
       context.signal,
     );
-    this.assertAuthority();
+    this.assertInferenceAuthority(context);
     const result = JSON.parse(output.stdout);
     if (typeof result.result === "string") return result.result;
     if (typeof result.error === "string")
