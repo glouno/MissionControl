@@ -127,6 +127,7 @@ test("Vertex text, nonstream and cumulative usage price prompt/cache/thinking ex
   assert.equal(p.cost(result), (60 * 2 + 40 * 0.5 + 20 * 10 + 30 * 12) / 1e6);
   assert.equal(result.vertexUsage?.modelVersion, "gemini-4-argon");
   assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "HIGH");
+  assert.equal("candidateCount" in request.generationConfig, false);
   const nonstream = provider(
     (async (url) => {
       assert.match(String(url), /:generateContent$/);
@@ -138,6 +139,65 @@ test("Vertex text, nonstream and cumulative usage price prompt/cache/thinking ex
     (await nonstream.generate(messages, [], new AbortController().signal)).text,
     "answer",
   );
+});
+
+test("Vertex accepts live metadata-only chunks but requires complete final token evidence", async () => {
+  const metadata = { trafficType: "ON_DEMAND" };
+  const first = {
+    modelVersion: "gemini-4-argon",
+    responseId: "live-shape-fixture",
+    candidates: [
+      {
+        content: {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                name: "read_file",
+                args: { path: "file" },
+                id: "call-one",
+              },
+              thoughtSignature: "opaque-fixture",
+            },
+          ],
+        },
+      },
+    ],
+    usageMetadata: metadata,
+  };
+  const last = {
+    modelVersion: "gemini-4-argon",
+    responseId: "live-shape-fixture",
+    candidates: [
+      {
+        content: { role: "model", parts: [{ text: "" }] },
+        finishReason: "STOP",
+      },
+    ],
+    usageMetadata: { ...usage, ...metadata },
+  };
+  const p = provider((async () => stream([first, last])) as typeof fetch);
+  const r = await p.generate(messages, [tool], new AbortController().signal);
+  assert.equal(r.calls[0]?.id, "call-one");
+  assert.equal(r.nativeParts?.[0]?.thoughtSignature, "opaque-fixture");
+  assert.equal(r.inputTokens, usage.promptTokenCount);
+  assert.equal(
+    r.outputTokens,
+    usage.candidatesTokenCount + usage.thoughtsTokenCount,
+  );
+  for (const finalMetadata of [
+    metadata,
+    { ...metadata, promptTokenCount: 100 },
+  ]) {
+    const bad = provider((async () =>
+      stream([
+        first,
+        { ...last, usageMetadata: finalMetadata },
+      ])) as typeof fetch);
+    await assert.rejects(
+      bad.generate(messages, [tool], new AbortController().signal),
+    );
+  }
 });
 
 test("Vertex existing tool loop preserves native thought signatures and function responses", async () => {

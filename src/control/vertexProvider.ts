@@ -85,7 +85,9 @@ const eventSchema = z
       )
       .max(1)
       .optional(),
-    usageMetadata: usageSchema.optional(),
+    // Live Vertex emits metadata-only interim chunks (for example trafficType)
+    // before supplying a complete cumulative token snapshot at STOP.
+    usageMetadata: z.record(z.string(), z.unknown()).optional(),
     modelVersion: z
       .string()
       .regex(/^[a-zA-Z0-9_.-]{1,128}$/)
@@ -218,7 +220,6 @@ export class VertexProvider implements ModelProvider {
           }
         : {}),
       generationConfig: {
-        candidateCount: 1,
         maxOutputTokens: this.config.maxOutputTokens,
         thinkingConfig: {
           thinkingLevel: this.config.thinkingLevel.toUpperCase(),
@@ -338,18 +339,26 @@ export class VertexProvider implements ModelProvider {
             throw Error("Inconsistent Vertex response ID");
           responseId = e.responseId;
         }
-        if (e.usageMetadata) {
+        const hasTokenSnapshot =
+          e.usageMetadata &&
+          [
+            "promptTokenCount",
+            "candidatesTokenCount",
+            "thoughtsTokenCount",
+            "cachedContentTokenCount",
+            "totalTokenCount",
+          ].some((key) => key in e.usageMetadata!);
+        if (hasTokenSnapshot) {
+          const snapshot = usageSchema.parse(e.usageMetadata);
           if (
             usage &&
-            (e.usageMetadata.promptTokenCount < usage.promptTokenCount ||
-              e.usageMetadata.candidatesTokenCount <
-                usage.candidatesTokenCount ||
-              e.usageMetadata.thoughtsTokenCount < usage.thoughtsTokenCount ||
-              e.usageMetadata.cachedContentTokenCount <
-                usage.cachedContentTokenCount)
+            (snapshot.promptTokenCount < usage.promptTokenCount ||
+              snapshot.candidatesTokenCount < usage.candidatesTokenCount ||
+              snapshot.thoughtsTokenCount < usage.thoughtsTokenCount ||
+              snapshot.cachedContentTokenCount < usage.cachedContentTokenCount)
           )
             throw Error("Vertex usage decreased");
-          usage = e.usageMetadata; // cumulative snapshots, never sum them
+          usage = snapshot; // cumulative snapshots, never sum them
           diagnostic.tokenUsage = {
             prompt: usage.promptTokenCount,
             candidates: usage.candidatesTokenCount,
@@ -388,7 +397,7 @@ export class VertexProvider implements ModelProvider {
         }
         // An interim snapshot cannot settle later output. Vertex may supply
         // final cumulative usage on STOP or in a subsequent usage-only event.
-        if (finished && e.usageMetadata) finalUsage = true;
+        if (finished && hasTokenSnapshot) finalUsage = true;
       }
       check();
       if (!finished || !finalUsage || !usage || !modelVersion)

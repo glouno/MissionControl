@@ -1,3 +1,44 @@
+# Direct live Vertex review and repair
+
+On 2026-10-21 the operator authenticated a dedicated WSL authorized-user ADC for
+the existing test project. OAuth refresh, project access, inference and quota
+permissions, and enabled Vertex service were verified. Billing-account inspection
+was unavailable to this identity; live authenticated inference returned HTTP 200.
+No API key, IAM change or service enablement was required.
+
+Live streaming revealed an incompatibility absent from the synthetic fixtures:
+an interim `usageMetadata` object contained only `trafficType`. The provider now
+accepts metadata-only chunks, while any token-bearing snapshot must validate in
+full and final token evidence remains mandatory. The current Argon guide also
+rejects `candidate_count`; the request now omits `candidateCount`. Regression
+coverage uses the observed signed-call/metadata-only/STOP shape and refuses
+metadata-only or partial final usage.
+
+The repaired actual VertexProvider and IsolatedPortableTools passed a direct
+live Docker qualification: one harmless `read_file` call, signed native history
+and matching function response, then the expected final file contents. The
+worker had network `none` and no Google credential mount. Two requests reported
+460 prompt and 37 candidate tokens total, with zero cached/thinking tokens;
+the estimate at full global input/output rates was USD0.00258. A separate live
+stream was cancelled after its first output event: the request signal aborted,
+no later inference or tool ran, and its USD0.073728 conservative request hold
+remains unresolved. All test containers were reset and removed.
+
+Five inference POSTs in total include two pre-repair diagnostic failures. The
+private test journal retains those two holds and the cancelled-request hold;
+settled estimates plus unresolved upper bounds total USD0.223764, below the
+approved USD5 cap. No POST was automatically retried. This journal is separate
+from the installed mission ledger, whose earlier holds were preserved.
+The dependency worker image was rebuilt locally with SDK 1.32.1; its image ID is
+`sha256:fa7023a47a1362e070affa10bce7a1bb58e6f24b0ff988330c67e70e2fc70c03`.
+The direct harness used the actual provider and Docker tool adapter, not the
+installed scheduler, full IsolatedBackend import path or an automated mission.
+Production runtime activation and invoice/credit attribution remain untested.
+
+Post-repair typecheck, all 453 Node tests (89 focused Vertex/adapter tests), status,
+privacy, package, dependency and history checks passed. Earlier deterministic
+controller-ledger and outer-cleanup coverage remains part of this suite.
+
 # Direct cleanup repair after MissionControl review
 
 The preserved candidate `088822e02c260c997357b463d72378b2ed80805f` was rejected
