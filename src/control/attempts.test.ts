@@ -112,6 +112,14 @@ async function fixture(t: any, metered = false, clock = Date.now) {
   const root = await mkdtemp(join(tmpdir(), "mc-attempt-")),
     db = new SqliteStore(join(root, "db")),
     store = new ControlStore(db, clock);
+  // Accounting fixtures must not depend on the CPU quota of their test container.
+  store.setting("scheduler-limits", {
+    workers: 4,
+    cpu: 16,
+    memoryMiB: 16384,
+    providerWorkers: 4,
+    repositoryWorkers: 4,
+  });
   t.after(async () => {
     db.close();
     await rm(root, { recursive: true, force: true });

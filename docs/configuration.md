@@ -186,3 +186,23 @@ created; changing configuration does not increase an existing goal's allowance.
 Changing a selected execution identity requires a freshly reviewed goal. Legacy
 goals containing the former installation-wide runtime hash fail closed after this
 upgrade and must be retained as evidence, then replaced through fresh admission.
+
+## Qualified task resources
+
+A project may declare `config.executionResources`, for example
+`{"cpuUnits": 2, "memoryMiB": 8192}`. These are the minimum resources qualified
+for its required checks, not a model's estimate of task complexity. Record the
+baseline against that exact image, checks and resource allocation before enabling
+the project. Omitted task resources inherit the project minimum. Explicit smaller
+allocations are rejected atomically before dispatch, including reviewed plans;
+independent verification preserves the minimum for retained legacy tasks too.
+The planner and replanner receive these prerequisites, trusted check choices,
+repository scope and the inference-only network limitation. Their structured
+output schema constrains resource minima and exact check choices. Additional
+verification commands must be configured as trusted checks by the operator.
+
+Existing projects without a resource declaration retain legacy admission
+behavior and are shown as not explicitly qualified in the limits view. Add a
+reviewed declaration through configuration application; existing goals keep
+immutable admitted configuration. This source change does not retroactively
+qualify or repair existing execution environments.

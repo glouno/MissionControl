@@ -1,4 +1,5 @@
 import { executionSignal } from "./executionDeadline.js";
+import { inheritPlanResources } from "./planningContract.js";
 import { OperationalLog } from "./operationalLog.js";
 import {
   ReliabilityStore,
@@ -1203,9 +1204,9 @@ export class ControlStore {
     actor = "planner",
   ) {
     executionSignal()?.throwIfAborted();
-    const specs = validatePlan(input);
     return this.db.transaction(() => {
       const g = this.getGoal(goalId);
+      const specs = validatePlan(inheritPlanResources(input, g.config));
       if (
         this.setting(`provider-block:${goalId}`) ||
         this.setting(`replaced-by:${goalId}`)
@@ -1216,6 +1217,17 @@ export class ControlStore {
           409,
         );
       for (const spec of specs) {
+        const minimum = g.config.executionResources;
+        if (
+          minimum &&
+          (spec.cpuUnits < minimum.cpuUnits ||
+            spec.memoryMiB < minimum.memoryMiB)
+        )
+          throw new ControlError(
+            "invalid_plan",
+            `Task resources are below qualified project prerequisites (${minimum.cpuUnits} CPU units, ${minimum.memoryMiB} MiB); correct the plan before dispatch`,
+            409,
+          );
         if (
           g.config.policy.approvedPaths.length &&
           spec.allowedPaths.some(

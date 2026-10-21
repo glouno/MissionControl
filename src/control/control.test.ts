@@ -491,6 +491,7 @@ test("isolated runtime routes planning and replanning without a host backend fal
     backend: { kind: "fake" },
     maxCostUsd: 5,
     estimatePerRunUsd: 1,
+    executionResources: { cpuUnits: 3, memoryMiB: 4096 },
   });
   let calls = 0;
   const scheduler = new Scheduler(f.store, f.root, "unused", {
@@ -500,6 +501,11 @@ test("isolated runtime routes planning and replanning without a host backend fal
     isolatedBackend: () => ({
       run: async (context) => {
         assert.equal(context.mode, "plan");
+        assert.match(context.prompt, /Trusted execution contract/i);
+        assert.match(context.prompt, /\"cpuUnits\":3/);
+        assert.match(context.prompt, /exact strings/);
+        assert.match(context.prompt, /public documentation.*unavailable/);
+        assert.equal(context.claim.task.spec.cpuUnits, 3);
         assert.equal(context.claim.generation, 0);
         assert.ok(
           f.store.db.one(
@@ -520,6 +526,8 @@ test("isolated runtime routes planning and replanning without a host backend fal
     await scheduler.plan(g.id);
     await scheduler.replan(g.id);
     assert.equal(calls, 2);
+    assert.equal(f.store.tasks(g.id)[0].spec.cpuUnits, 3);
+    assert.equal(f.store.tasks(g.id)[0].spec.memoryMiB, 4096);
     assert.equal(f.store.getGoal(g.id).planRevision, 2);
     assert.equal(f.store.canSpend(g.id).spent, 0.2);
   } finally {
@@ -1182,4 +1190,43 @@ test("reviewed admission OpenAPI matches the required application prefix", () =>
   const paths = openApi().paths;
   assert.ok(paths["/api/v1/reviewed-goals"]?.post);
   assert.equal(paths["/reviewed-goals"], undefined);
+});
+
+test("all plan admission paths inherit project resources and reject incompatible explicit resources atomically", async () => {
+  const f = await fixture();
+  try {
+    const goal = f.store.createGoal({
+      title: "Qualified resources",
+      description: "Fixture",
+      repoPath: f.repo,
+      executionResources: { cpuUnits: 2, memoryMiB: 8192 },
+    });
+    for (const resources of [
+      { cpuUnits: 1, memoryMiB: 8192 },
+      { cpuUnits: 2, memoryMiB: 4096 },
+    ]) {
+      assert.throws(
+        () =>
+          f.store.installPlan(
+            goal.id,
+            { tasks: [{ ...spec("one"), ...resources }] },
+            goal.revision,
+            "operator",
+          ),
+        /below qualified project prerequisites/,
+      );
+      assert.equal(f.store.tasks(goal.id).length, 0);
+      assert.equal(f.store.getGoal(goal.id).revision, goal.revision);
+    }
+    f.store.installPlan(
+      goal.id,
+      { tasks: [spec("one")] },
+      goal.revision,
+      "operator",
+    );
+    assert.equal(f.store.tasks(goal.id)[0].spec.cpuUnits, 2);
+    assert.equal(f.store.tasks(goal.id)[0].spec.memoryMiB, 8192);
+  } finally {
+    f.db.close();
+  }
 });

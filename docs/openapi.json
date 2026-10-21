@@ -1173,6 +1173,26 @@
                           "minLength": 1
                         }
                       },
+                      "executionResources": {
+                        "type": "object",
+                        "properties": {
+                          "cpuUnits": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          },
+                          "memoryMiB": {
+                            "type": "integer",
+                            "minimum": 128,
+                            "maximum": 32768
+                          }
+                        },
+                        "required": [
+                          "cpuUnits",
+                          "memoryMiB"
+                        ],
+                        "additionalProperties": false
+                      },
                       "budgetAlertUsd": {
                         "type": "number",
                         "exclusiveMinimum": 0
@@ -5178,6 +5198,26 @@
               "minLength": 1
             }
           },
+          "executionResources": {
+            "type": "object",
+            "properties": {
+              "cpuUnits": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "memoryMiB": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              }
+            },
+            "required": [
+              "cpuUnits",
+              "memoryMiB"
+            ],
+            "additionalProperties": false
+          },
           "budgetAlertUsd": {
             "type": "number",
             "exclusiveMinimum": 0
@@ -6183,6 +6223,26 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "executionResources": {
+                "type": "object",
+                "properties": {
+                  "cpuUnits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "memoryMiB": {
+                    "type": "integer",
+                    "minimum": 128,
+                    "maximum": 32768
+                  }
+                },
+                "required": [
+                  "cpuUnits",
+                  "memoryMiB"
+                ],
+                "additionalProperties": false
               },
               "budgetAlertUsd": {
                 "type": "number",
@@ -7450,6 +7510,26 @@
                   "type": "string",
                   "minLength": 1
                 }
+              },
+              "executionResources": {
+                "type": "object",
+                "properties": {
+                  "cpuUnits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16
+                  },
+                  "memoryMiB": {
+                    "type": "integer",
+                    "minimum": 128,
+                    "maximum": 32768
+                  }
+                },
+                "required": [
+                  "cpuUnits",
+                  "memoryMiB"
+                ],
+                "additionalProperties": false
               },
               "budgetAlertUsd": {
                 "type": "number",

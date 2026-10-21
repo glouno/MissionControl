@@ -113,3 +113,15 @@ test("failing checks and source mutation never alter the trusted checkout", asyn
   assert.equal(result.results[0].exitCode, 2);
   assert.equal(await readFile(join(f.source, "base"), "utf8"), "base\n");
 });
+
+test("verifier preserves qualified resource minimum even for a legacy undersized task", async (t) => {
+  const f = await fixture(t);
+  f.claim.goal.config.executionResources = { cpuUnits: 2, memoryMiB: 8192 };
+  const prepare = f.environment.prepare.bind(f.environment);
+  f.environment.prepare = async (spec, signal) => {
+    assert.equal(spec.cpu, 2);
+    assert.equal(spec.memoryMiB, 8192);
+    return prepare(spec, signal);
+  };
+  assert.equal((await f.verifier.verify(f.claim, f.source)).passed, true);
+});
