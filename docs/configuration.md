@@ -57,10 +57,12 @@ Azure remains controller-side. Subscription coding integration and live provider
 qualification are still pending.
 
 Metered tool-loop runtime definitions use `protocol: "tool-loop"`, the exact
-admitted Azure/Bedrock `backend` configuration, and explicit authentication.
+admitted Azure/Bedrock/Vertex `backend` configuration, and explicit authentication.
 Azure accepts `azure-cli` or `secret` with a private reference. Bedrock accepts
 `aws-session` with separate `accessKey`, `secretKey`, and `sessionToken` references;
-the SDK does not discover credentials from the general home/environment. Session
+Vertex accepts explicit dedicated controller ADC and optional approved impersonation;
+see [Vertex setup, pricing and qualification](vertex.md).
+The SDK does not discover credentials from the general home/environment. Session
 expiry fails provider requests and requires operator refresh. Native Responses
 and Messages modes retain their fixed endpoint/header contract.
 

@@ -56,7 +56,10 @@ export class IsolatedBackend implements AgentBackend {
     };
     context.signal.throwIfAborted();
     const config = context.claim.goal.config.backend;
-    const portable = config.kind === "azure" || config.kind === "bedrock";
+    const portable =
+      config.kind === "azure" ||
+      config.kind === "bedrock" ||
+      config.kind === "vertex";
     if (config.kind !== "codex" && config.kind !== "claude-code" && !portable)
       throw new ControlError(
         "harness_policy",

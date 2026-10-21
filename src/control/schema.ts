@@ -2,7 +2,10 @@ import { executionContractSchema } from "./executionContract.js";
 import { usageSchema } from "./usage.js";
 import { z } from "zod";
 
+import { vertexBackendSchema } from "./vertexConfig.js";
+
 export const backendSchema = z.discriminatedUnion("kind", [
+  vertexBackendSchema,
   z
     .object({ kind: z.literal("fake"), model: z.string().default("fake") })
     .strict(),

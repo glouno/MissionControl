@@ -88,6 +88,21 @@ export const inferenceDiagnosticSchema = z.object({
   endpoint: z.string(),
   model: z.string(),
   maxOutputTokens: z.number().int().min(1).max(131072).optional(),
+  project: z.string().optional(),
+  quotaProject: z.string().optional(),
+  location: z.string().optional(),
+  thinkingLevel: z.string().optional(),
+  modelVersion: z.string().optional(),
+  pricingVersion: z.string().optional(),
+  providerCostUsd: z.number().nonnegative().optional(),
+  tokenUsage: z
+    .object({
+      prompt: z.number().int().nonnegative(),
+      candidates: z.number().int().nonnegative(),
+      thinking: z.number().int().nonnegative(),
+      cached: z.number().int().nonnegative(),
+    })
+    .optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
   startedAt: timestampSchema,
   endedAt: timestampSchema.optional(),
@@ -151,6 +166,19 @@ export interface AttemptRuntime {
   failure?: FailureRecord;
 }
 export interface InferenceDiagnostic {
+  project?: string;
+  quotaProject?: string;
+  location?: string;
+  thinkingLevel?: string;
+  modelVersion?: string;
+  pricingVersion?: string;
+  providerCostUsd?: number;
+  tokenUsage?: {
+    prompt: number;
+    candidates: number;
+    thinking: number;
+    cached: number;
+  };
   version: 1;
   id: string;
   attemptId?: string;
@@ -362,6 +390,7 @@ export function requestIds(headers: Headers) {
       "x-ms-request-id",
       "x-ms-correlation-request-id",
       "x-amzn-requestid",
+      "x-goog-request-id",
     ].flatMap((k) => {
       const v = headers.get(k);
       return v && /^[a-zA-Z0-9_.:/-]{1,256}$/.test(v) ? [[k, v]] : [];
@@ -409,8 +438,12 @@ export function abortable<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted)
+  if (signal.aborted) {
+    // A dispatch may synchronously revoke authority before returning its promise.
+    // Keep observing that active operation even though the caller is fenced.
+    void promise.catch(() => {});
     return Promise.reject(signal.reason ?? new Error("Execution interrupted"));
+  }
   return new Promise((resolve, reject) => {
     const abort = () =>
       reject(signal.reason ?? new Error("Execution interrupted"));
@@ -421,10 +454,36 @@ export function abortable<T>(
   });
 }
 export function deadlineSignal(deadlineAt: number, parent?: AbortSignal) {
-  const signal = AbortSignal.timeout(
-    Math.max(1, Math.min(2147483647, deadlineAt - Date.now())),
-  );
+  const remaining = deadlineAt - Date.now();
+  const signal =
+    remaining <= 0
+      ? AbortSignal.abort(new ProviderFailure(failureRecord("deadline")))
+      : AbortSignal.timeout(Math.min(2147483647, remaining));
   return parent ? AbortSignal.any([signal, parent]) : signal;
+}
+/** Synchronous invocation boundaries complement timers and active-operation watchers. */
+export function invocationFence(
+  parent: AbortSignal,
+  deadlineAt?: number,
+  assertAuthority?: () => void,
+  clock: () => number = Date.now,
+) {
+  const revoked = new AbortController();
+  const timed =
+    deadlineAt === undefined ? parent : deadlineSignal(deadlineAt, parent);
+  const signal = AbortSignal.any([timed, revoked.signal]);
+  const check = () => {
+    try {
+      signal.throwIfAborted();
+      if (deadlineAt !== undefined && clock() >= deadlineAt)
+        throw new ProviderFailure(failureRecord("deadline"));
+      assertAuthority?.();
+    } catch (error) {
+      revoked.abort(error);
+      throw error;
+    }
+  };
+  return { signal, check };
 }
 export class ReliabilityStore {
   constructor(

@@ -17,6 +17,7 @@ export interface RunContext {
   prompt: string;
   signal: AbortSignal;
   deadlineAt?: number;
+  assertAuthority?: () => void;
   // Trusted controller and adapter share one cleanup allowance.
   cleanupSignal?: () => AbortSignal;
   executionSessionId?: string;

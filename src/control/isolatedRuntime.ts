@@ -1,3 +1,5 @@
+import { VertexProvider } from "./vertexProvider.js";
+import { vertexAuthSchema, vertexAuthentication } from "./vertexAuth.js";
 import { ReliabilityStore, boundedCleanup } from "./reliability.js";
 import { assertRuntimeBinding } from "./runtimeFingerprint.js";
 import { inferenceHttpFetch } from "./inferenceHttp.js";
@@ -105,10 +107,14 @@ export const isolatedRuntimeSchema = z
           .object({
             protocol: z.literal("tool-loop"),
             backend: backendSchema.refine(
-              (b) => b.kind === "azure" || b.kind === "bedrock",
-              "Tool loop requires Azure or Bedrock",
+              (b) =>
+                b.kind === "azure" ||
+                b.kind === "bedrock" ||
+                b.kind === "vertex",
+              "Tool loop requires Azure, Bedrock or Vertex",
             ),
             authentication: z.discriminatedUnion("kind", [
+              vertexAuthSchema,
               z.object({ kind: z.literal("azure-cli") }).strict(),
               z
                 .object({
@@ -232,8 +238,35 @@ export function assertSessionAuthority(
         "Goal review reservation is no longer active",
         409,
       );
-  } else
-    store.assertLease(session.taskId, spec.workerId, spec.authorityGeneration);
+  } else {
+    const task = store.assertLease(
+      session.taskId,
+      spec.workerId,
+      spec.authorityGeneration,
+    );
+    if (goal.config.executionContract?.usagePolicy.kind === "metered") {
+      if (spec.operationReservationId) {
+        if (
+          !["verifying", "integrating"].includes(task.status) ||
+          (store.reliability.runtime(spec.operationReservationId)?.deadlineAt ??
+            Infinity) <= store.clock() ||
+          !store.db.one(
+            `SELECT id FROM control_attempts WHERE id=${sql(spec.operationReservationId)} AND goal_id=${sql(goal.id)} AND task_id IS NULL AND outcome='active'`,
+          )
+        )
+          throw new ControlError(
+            "stale_lease",
+            "Controller operation reservation is no longer active",
+            409,
+          );
+      } else if (!["claimed", "running"].includes(task.status))
+        throw new ControlError(
+          "stale_lease",
+          "Coding inference ended when verification began",
+          409,
+        );
+    }
+  }
 }
 export async function createIsolatedRuntime(
   store: ControlStore,
@@ -267,7 +300,24 @@ export async function createIsolatedRuntime(
     }
     if (p.protocol === "tool-loop") {
       const b = p.backend;
-      if (b.kind === "azure") {
+      if (b.kind === "vertex") {
+        if (!secretsDir || p.authentication.kind !== "google-adc")
+          throw Error(
+            "Vertex requires explicit dedicated controller ADC file reference",
+          );
+        portableProviders[name] = new VertexProvider(
+          b,
+          inferenceHttpFetch,
+          vertexAuthentication(
+            p.authentication,
+            secretsDir,
+            b.quotaProject,
+            (value) => store.redactor.register(value),
+          ),
+          store.reliability,
+          name,
+        );
+      } else if (b.kind === "azure") {
         let headers: () => Promise<Record<string, string>>;
         if (p.authentication.kind === "azure-cli") {
           if (b.credential !== "identity")
@@ -514,7 +564,7 @@ export async function createIsolatedRuntime(
         );
       }
       const kind = goal.config.backend.kind,
-        portable = kind === "azure" || kind === "bedrock";
+        portable = kind === "azure" || kind === "bedrock" || kind === "vertex";
       const protocol = portable
         ? "tool-loop"
         : kind === "codex"

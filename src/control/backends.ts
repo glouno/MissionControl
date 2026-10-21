@@ -3,7 +3,11 @@ import {
   nativeOutputSchema,
   normalizeNativeOutput,
 } from "./nativeOutputSchema.js";
-import { ProviderFailure, classifyFailure } from "./reliability.js";
+import {
+  ProviderFailure,
+  classifyFailure,
+  failureRecord,
+} from "./reliability.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { terminateProcessTree } from "../util.js";
@@ -56,6 +60,7 @@ export function createBackend(config: BackendConfig): AgentBackend {
       return new CodexBackend(config);
     case "azure":
     case "bedrock":
+    case "vertex":
       throw new Error(
         "Metered tool-loop execution requires the configured isolated runtime and controller-owned provider",
       );
@@ -152,7 +157,14 @@ export const portableTools: ToolDefinition[] = [
 ];
 export class PortableBackend implements AgentBackend {
   constructor(readonly provider: ModelProvider) {}
+  protected assertInferenceAuthority(c: RunContext) {
+    c.signal.throwIfAborted();
+    c.assertAuthority?.();
+    if (c.deadlineAt !== undefined && Date.now() >= c.deadlineAt)
+      throw new ProviderFailure(failureRecord("deadline"));
+  }
   async run(c: RunContext) {
+    this.assertInferenceAuthority(c);
     const saved = c.claim.task.checkpoint?.messages as
       ModelMessage[] | undefined;
     const messages: ModelMessage[] = saved
@@ -161,6 +173,9 @@ export class PortableBackend implements AgentBackend {
     let costUsd = 0,
       inputTokens = 0,
       outputTokens = 0;
+    let thinkingTokens = 0,
+      cachedInputTokens = 0,
+      vertexMeasured = false;
     const completed = new Map<string, string>();
     const pendingTool = c.claim.task.checkpoint?.pendingTool;
     if (pendingTool) {
@@ -192,13 +207,16 @@ export class PortableBackend implements AgentBackend {
       tools = tools.filter((t) => t.name !== "request_human_input");
     for (let turn = 0; turn < 40; turn++) {
       if (c.signal.aborted) throw c.signal.reason;
+      this.assertInferenceAuthority(c);
       const ceiling = c.claim.goal.config.estimatePerRunUsd;
-      const upper = this.provider.cost({
-        text: "",
-        calls: [],
-        inputTokens: Math.ceil(JSON.stringify(messages).length / 2) + 1000,
-        outputTokens: 8192,
-      });
+      const upper =
+        this.provider.reservation?.(messages, tools) ??
+        this.provider.cost({
+          text: "",
+          calls: [],
+          inputTokens: Math.ceil(JSON.stringify(messages).length / 2) + 1000,
+          outputTokens: 8192,
+        });
       if (ceiling > 0 && costUsd + upper > ceiling) {
         await c.onCheckpoint(
           "Paused before inference would exceed the reserved estimate",
@@ -235,7 +253,10 @@ export class PortableBackend implements AgentBackend {
           generation: c.claim.generation,
           sessionId: c.executionSessionId,
           progress: c.onProgress,
+          assertAuthority: () => this.assertInferenceAuthority(c),
+          deadlineAt: c.deadlineAt,
         });
+        this.assertInferenceAuthority(c);
       } catch (error) {
         if (error instanceof Error)
           Object.assign(error, {
@@ -252,16 +273,28 @@ export class PortableBackend implements AgentBackend {
           new Error("Provider returned invalid estimated cost"),
           { usage: { kind: "metered", status: "unknown" } },
         );
+      if (r.vertexUsage) {
+        vertexMeasured = true;
+        thinkingTokens += r.vertexUsage.thinking;
+        cachedInputTokens += r.vertexUsage.cached;
+      }
       costUsd += measuredCost;
       inputTokens += r.inputTokens;
       outputTokens += r.outputTokens;
-      messages.push({ role: "assistant", content: r.text, calls: r.calls });
+      messages.push({
+        role: "assistant",
+        content: r.text,
+        calls: r.calls,
+        nativeParts: r.nativeParts,
+      });
+      this.assertInferenceAuthority(c);
       if (!r.calls.length)
         return {
           text: r.text,
           usage: {
             kind: "metered" as const,
             status: "estimated" as const,
+            ...(vertexMeasured ? { thinkingTokens, cachedInputTokens } : {}),
             costUsd,
             inputTokens,
             outputTokens,
@@ -270,16 +303,29 @@ export class PortableBackend implements AgentBackend {
           inputTokens,
           outputTokens,
         };
-      for (const call of r.calls) {
+      for (const [callIndex, call] of r.calls.entries()) {
+        this.assertInferenceAuthority(c);
         if (call.name === "request_human_input" && !c.disableTaskHandoffs) {
+          const request = questionSchema.parse(call.arguments);
+          // Preserve the native assistant turn, including signed parts. Every
+          // call needs a response before the continuation's user prompt. Calls
+          // after the handoff are deferred, never silently replayed on resume.
+          for (const deferred of r.calls.slice(callIndex))
+            messages.push({
+              role: "tool",
+              callId: deferred.id,
+              content:
+                deferred.id === call.id
+                  ? "Human decision requested; the controller-recorded answer will be supplied in the continuation prompt."
+                  : "Not executed because this turn paused for a human decision. Reconsider this action after reading the continuation prompt.",
+            });
           await c.onCheckpoint(
             "Awaiting human decision",
-            messages.slice(0, -1),
+            messages,
+            undefined,
+            costUsd,
           );
-          throw Object.assign(
-            new HumanWait(questionSchema.parse(call.arguments)),
-            { costUsd },
-          );
+          throw Object.assign(new HumanWait(request), { costUsd });
         }
         await c.onCheckpoint(
           `Starting tool ${call.name} (${call.id})`,
@@ -287,7 +333,9 @@ export class PortableBackend implements AgentBackend {
           call,
           costUsd,
         );
+        this.assertInferenceAuthority(c);
         const result = completed.get(call.id) ?? (await this.tool(c, call));
+        this.assertInferenceAuthority(c);
         c.onProgress?.("tool_completed");
         completed.set(call.id, result);
         messages.push({ role: "tool", content: result, callId: call.id });
@@ -298,7 +346,7 @@ export class PortableBackend implements AgentBackend {
           costUsd,
         );
       }
-      if (JSON.stringify(messages).length > 180000) {
+      if (!r.nativeParts && JSON.stringify(messages).length > 180000) {
         const old = messages.splice(1, Math.max(0, messages.length - 13));
         const summary = old
           .map((m) => `${m.role}: ${m.content.slice(0, 500)}`)

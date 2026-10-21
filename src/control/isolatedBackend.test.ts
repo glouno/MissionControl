@@ -396,8 +396,7 @@ for (const cleanupFails of [false, true])
         throw new Error("incomplete provider response");
       });
       await assert.rejects(b.run(f.context), (error: any) => {
-        if (cleanupFails)
-          assert.equal(error.failure.kind, "cleanup_blocked");
+        if (cleanupFails) assert.equal(error.failure.kind, "cleanup_blocked");
         else assert.equal(error.message, "incomplete provider response");
         assert.equal(error.usage.status, priced ? "estimated" : "unknown");
         assert.equal(error.usage.inputTokens, 100);
@@ -407,3 +406,83 @@ for (const cleanupFails of [false, true])
         return true;
       });
     });
+
+test("native Vertex uses existing isolated controller tool execution without cloud worker environment", async (t) => {
+  const { VertexProvider } = await import("./vertexProvider.js");
+  const { vertexBackendSchema } = await import("./vertexConfig.js");
+  const f = await fixture(t);
+  const config = vertexBackendSchema.parse({
+    kind: "vertex",
+    project: "fixture-project",
+    quotaProject: "fixture-quota",
+    location: "global",
+    model: "gemini-4-argon",
+    thinkingLevel: "low",
+    maxInputTokens: 8192,
+    maxOutputTokens: 1024,
+    maxRequestCostUsd: 1,
+    pricing: [
+      {
+        version: "fixture",
+        currency: "USD",
+        effectiveFrom: "2026-01-01T00:00:00Z",
+        effectiveUntil: "2027-01-01T00:00:00Z",
+        inputUsdPerMillion: 1,
+        cachedInputUsdPerMillion: 0.1,
+        outputUsdPerMillion: 2,
+        thinkingUsdPerMillion: 2,
+        evidenceUrl: "https://example.invalid/pricing",
+      },
+    ],
+  });
+  f.context.claim.goal.config.backend = config;
+  let calls = 0,
+    tools = 0;
+  const provider = new VertexProvider(
+    config,
+    (async (_url, init) => {
+      calls++;
+      assert.equal(
+        (init?.headers as any).Authorization,
+        "Bearer controller-only-fixture",
+      );
+      const body = JSON.parse(String(init?.body));
+      if (calls === 2)
+        assert.equal(
+          body.contents.at(-1).parts[0].functionResponse.name,
+          "read_file",
+        );
+      return new Response(
+        `data: ${JSON.stringify({ modelVersion: "gemini-4-argon", candidates: [{ content: { role: "model", parts: calls === 1 ? [{ functionCall: { name: "read_file", args: { path: "base" } }, thoughtSignature: "opaque-fixture" }] : [{ text: "done" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, thoughtsTokenCount: 0, totalTokenCount: 110 } })}\n\n`,
+      );
+    }) as typeof fetch,
+    async () => ({ Authorization: "Bearer controller-only-fixture" }),
+    undefined,
+    "fixture",
+    () => Date.parse("2026-10-21T00:00:00Z"),
+  );
+  const b = f.backend(async () => {
+    throw Error("must use portable provider");
+  });
+  delete b.options.backend;
+  b.options.portableProvider = provider;
+  f.env.execute = async (_id, command, signal) => {
+    signal.throwIfAborted();
+    tools++;
+    assert.equal(command[0], "python3");
+    assert.equal(command.join(" ").includes("controller-only-fixture"), false);
+    assert.equal(JSON.parse(command[3]!).name, "read_file");
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ result: "base" }),
+      stderr: "",
+    };
+  };
+  const result = await b.run(f.context);
+  assert.equal(result.text, "done");
+  assert.equal(calls, 2);
+  assert.equal(tools, 1);
+  assert.equal(f.registry.all()[0].spec.gatewayNetwork, undefined);
+  assert.equal(f.registry.all()[0].spec.gatewayEnv, undefined);
+  assert.equal(f.db.query("SELECT * FROM inference_capabilities").length, 0);
+});

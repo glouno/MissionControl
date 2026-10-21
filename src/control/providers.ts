@@ -1,3 +1,4 @@
+import { VertexProvider } from "./vertexProvider.js";
 import { randomUUID } from "node:crypto";
 import {
   ProviderFailure,
@@ -13,12 +14,15 @@ import {
   type InferenceDiagnostic,
 } from "./reliability.js";
 export interface InferenceContext {
+  deadlineAt?: number;
   attemptId?: string;
   goalId?: string;
   taskId?: string;
   generation?: number;
   sessionId?: string;
   progress?: (kind: string) => void;
+  // Trusted controller authority; never populated from model or goal input.
+  assertAuthority?: () => void;
 }
 import { inferenceHttpFetch } from "./inferenceHttp.js";
 import {
@@ -40,6 +44,7 @@ export interface ModelMessage {
   content: string;
   calls?: ToolCall[];
   callId?: string;
+  nativeParts?: Record<string, unknown>[];
 }
 export interface ToolDefinition {
   name: string;
@@ -47,12 +52,23 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 export interface ModelResult {
+  nativeParts?: Record<string, unknown>[];
+  vertexUsage?: {
+    prompt: number;
+    candidates: number;
+    thinking: number;
+    cached: number;
+    pricingVersion: string;
+    modelVersion: string;
+    requestId?: string;
+  };
   text: string;
   calls: ToolCall[];
   inputTokens: number;
   outputTokens: number;
 }
 export interface ModelProvider {
+  reservation?(messages: ModelMessage[], tools: ToolDefinition[]): number;
   generate(
     messages: ModelMessage[],
     tools: ToolDefinition[],
@@ -516,11 +532,16 @@ export class BedrockProvider implements ModelProvider {
   }
 }
 export function createProvider(c: BackendConfig): ModelProvider {
+  if (c.kind === "vertex") return new VertexProvider(c);
   if (c.kind === "azure") return new AzureProvider(c);
   if (c.kind === "bedrock") return new BedrockProvider(c);
   throw new Error(`No inference provider for ${c.kind}`);
 }
-async function* sse(response: Response, signal: AbortSignal) {
+export async function* sse(
+  response: Response,
+  signal: AbortSignal,
+  check: () => void = () => signal.throwIfAborted(),
+) {
   if (!response.body) throw new Error("Empty inference response");
   let buffer = "";
   const decoder = new TextDecoder();
@@ -528,7 +549,9 @@ async function* sse(response: Response, signal: AbortSignal) {
   const reader = response.body.getReader();
   try {
     while (true) {
+      check();
       const next = await abortable(reader.read(), signal);
+      check();
       if (next.done) break;
       const bytes = next.value;
       total += bytes.byteLength;
