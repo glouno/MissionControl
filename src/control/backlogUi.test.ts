@@ -241,3 +241,18 @@ test("interrupted ownership answers require evidence and send it with the exact 
     explanation: evidence.value,
   });
 });
+
+test("backlog launch exposes effective planning and global limits without admitting work", () => {
+  const h = harness();
+  h.evaluate(
+    `data.projects[0].executionLimits={harness:'Codex app-server',usagePolicy:'metered',goalCostCeilingUsd:45,runReservationUsd:2,timeoutMs:600000,planning:{timeoutMs:600000,maxRequests:12},outputTokensPerRequest:32768,maxWorkers:2,maxAttempts:3,maxReplans:3,noProgressWarningMs:600000,noProgressTimeoutMs:900000,outputLimitMeaning:'Output includes reasoning',planningRequestMeaning:'Gateway requests'};data.allowance={maximumUsd:5000,admittedUsd:100};data.installationLimits={maxGoalCostUsd:250,maxConcurrentMeteredRuns:4};data.backlog=[{id:'fixture',projectId:'synthetic',title:'Fixture',description:'Fixture',status:'backlog',revision:1,priority:1,dependencies:[],acceptanceCriteria:[],blockedReasons:[],dependencyStatus:[]}];backlogList(el('view'))`,
+  );
+  const text = descendants(h.elements.view)
+    .map((e) => e.textContent)
+    .join(" ");
+  assert.match(text, /Planning timeout/);
+  assert.match(text, /600 seconds/);
+  assert.match(text, /Installation cumulative admission ceiling/);
+  assert.match(text, /Codex app-server/);
+  assert.equal(h.requests.length, 0);
+});

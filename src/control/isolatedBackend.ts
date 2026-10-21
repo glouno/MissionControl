@@ -190,12 +190,10 @@ export class IsolatedBackend implements AgentBackend {
           provider: this.options.provider,
           protocol: config.kind === "codex" ? "responses" : "messages",
           model: config.model,
-          maxOutputTokens: Math.min(
+          maxOutputTokens:
             config.kind === "codex" ? (config.maxOutputTokens ?? 65536) : 32768,
-            context.mode === "plan" ? planningLimits.maxOutputTokens : Infinity,
-          ),
           ...(context.mode === "plan"
-            ? { maxRequests: planningLimits.maxRequests }
+            ? { maxRequests: planningLimits(context.claim.goal.config).maxRequests }
             : {}),
           expiresAt:
             context.deadlineAt ??
@@ -206,11 +204,7 @@ export class IsolatedBackend implements AgentBackend {
             ? { MISSIONCONTROL_INFERENCE_TOKEN: token }
             : {
                 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
-                CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(
-                  context.mode === "plan"
-                    ? planningLimits.maxOutputTokens
-                    : 32768,
-                ),
+                CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32768",
                 CLAUDE_CODE_USE_FOUNDRY: "1",
                 ANTHROPIC_FOUNDRY_AUTH_TOKEN: token,
                 ANTHROPIC_FOUNDRY_BASE_URL: "http://inference-gateway:8080",

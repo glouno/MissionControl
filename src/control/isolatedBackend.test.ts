@@ -190,9 +190,10 @@ test("isolated Codex configuration honors admitted reasoning effort", async (t) 
   assert.match(toml, /model_provider = "missioncontrol"/);
 });
 
-test("isolated native planner receives bounded inference capability without changing coding configuration", async (t) => {
+for (const allowance of [undefined, 7]) test(`isolated native planner inherits provider output and request allowance ${allowance ?? "default"}`, async (t) => {
   const f = await fixture(t, "review");
   f.context.mode = "plan";
+  f.context.claim.goal.config.planning = allowance ? { maxRequests: allowance } : undefined;
   f.context.claim.goal.config.backend = {
     kind: "codex",
     model: "synthetic",
@@ -206,8 +207,8 @@ test("isolated native planner receives bounded inference capability without chan
   const cap = JSON.parse(
     f.db.one<any>("SELECT record FROM inference_capabilities")!.record,
   );
-  assert.equal(cap.maxOutputTokens, 8192);
-  assert.equal(cap.maxRequests, 4);
+  assert.equal(cap.maxOutputTokens, 65536);
+  assert.equal(cap.maxRequests, allowance ?? 40);
   assert.equal(f.context.claim.goal.config.backend.maxOutputTokens, 65536);
 });
 

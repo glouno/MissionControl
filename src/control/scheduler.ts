@@ -1007,7 +1007,7 @@ export class Scheduler {
         context.deadlineAt ?? Infinity,
         executionDeadline() ?? Infinity,
         context.mode === "plan"
-          ? this.store.clock() + planningLimits.timeoutMs
+          ? this.store.clock() + planningLimits(g.config).timeoutMs
           : Infinity,
       );
       runtime.deadlineAt = deadlineAt;

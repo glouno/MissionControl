@@ -175,7 +175,7 @@ test("portable planner stops after four measured calls without refunding usage o
   await assert.rejects(
     backend.run({
       claim: {
-        goal: { config: { estimatePerRunUsd: 1, maxCostUsd: 1 } },
+        goal: { config: { estimatePerRunUsd: 1, maxCostUsd: 1, planning: { maxRequests: 4 } } },
         task: { spec: {} },
         generation: 1,
       } as any,

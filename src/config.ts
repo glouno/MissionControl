@@ -695,6 +695,7 @@ export function effectiveGoal(
         "maxAttempts",
         "timeoutMs",
         "maxReplans",
+        "planning",
       ].includes(key)
     )
       continue;
@@ -725,6 +726,21 @@ export function effectiveGoal(
   ] as const)
     if (result[key] > baseline[key])
       throw new Error(`Goal cannot increase configured ${key}`);
+  if (result.planning || baseline.planning) {
+    if (
+      (result.planning?.timeoutMs ?? result.timeoutMs) >
+      Math.min(
+        baseline.planning?.timeoutMs ?? baseline.timeoutMs,
+        baseline.timeoutMs,
+      )
+    )
+      throw new Error("Goal cannot increase configured planning timeout");
+    if (
+      (result.planning?.maxRequests ?? 40) >
+      (baseline.planning?.maxRequests ?? 40)
+    )
+      throw new Error("Goal cannot increase configured planning requests");
+  }
   const a = config.settings.authority;
   if (!a.allowedExecutionModes.includes(p.executionMode))
     throw new Error("Project execution mode is not authorized");

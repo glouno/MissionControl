@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, symlink, rm, chmod } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  symlink,
+  rm,
+  chmod,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -492,6 +499,28 @@ test("configuration preserves precedence and resolves repositories from their de
     /override/,
   );
 });
+test("goal planning overrides can reduce allowances but cannot remove project limits", async (t) => {
+  const f = await fixture(t),
+    c = await loadConfiguration(f.configDir);
+  c.projects[0].config.planning = { timeoutMs: 8000, maxRequests: 12 };
+  assert.equal(
+    effectiveGoal(c, "sample", "Plan", {
+      planning: { timeoutMs: 4000, maxRequests: 6 },
+    }).planning?.maxRequests,
+    6,
+  );
+  for (const planning of [
+    undefined,
+    {},
+    { timeoutMs: 9000, maxRequests: 12 },
+    { timeoutMs: 8000, maxRequests: 13 },
+  ])
+    assert.throws(
+      () => effectiveGoal(c, "sample", "Plan", { planning }),
+      /increase configured planning/,
+    );
+});
+
 test("configuration rejects unknown keys, missing references, reserved ports and redirected files", async (t) => {
   const f = await fixture(t);
   await writeFile(

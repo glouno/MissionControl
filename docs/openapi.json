@@ -682,6 +682,7 @@
                               "fake",
                               "azure",
                               "bedrock",
+                              "vertex",
                               "codex-subscription",
                               "claude-subscription"
                             ]
@@ -833,6 +834,131 @@
                       },
                       "backend": {
                         "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "vertex"
+                              },
+                              "project": {
+                                "type": "string",
+                                "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                              },
+                              "quotaProject": {
+                                "type": "string",
+                                "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                              },
+                              "location": {
+                                "type": "string",
+                                "const": "global"
+                              },
+                              "model": {
+                                "type": "string",
+                                "const": "gemini-4-argon"
+                              },
+                              "stream": {
+                                "default": true,
+                                "type": "boolean"
+                              },
+                              "thinkingLevel": {
+                                "type": "string",
+                                "enum": [
+                                  "low",
+                                  "medium",
+                                  "high"
+                                ]
+                              },
+                              "maxInputTokens": {
+                                "type": "integer",
+                                "minimum": 4096,
+                                "maximum": 1000000
+                              },
+                              "maxOutputTokens": {
+                                "type": "integer",
+                                "minimum": 64,
+                                "maximum": 65536
+                              },
+                              "maxRequestCostUsd": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              "pricing": {
+                                "minItems": 1,
+                                "maxItems": 24,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "version": {
+                                      "type": "string",
+                                      "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+                                    },
+                                    "currency": {
+                                      "type": "string",
+                                      "const": "USD"
+                                    },
+                                    "effectiveFrom": {
+                                      "type": "string",
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                                    },
+                                    "effectiveUntil": {
+                                      "type": "string",
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                                    },
+                                    "inputUsdPerMillion": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "cachedInputUsdPerMillion": {
+                                      "type": "number",
+                                      "minimum": 0
+                                    },
+                                    "outputUsdPerMillion": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "thinkingUsdPerMillion": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "evidenceUrl": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    }
+                                  },
+                                  "required": [
+                                    "version",
+                                    "currency",
+                                    "effectiveFrom",
+                                    "effectiveUntil",
+                                    "inputUsdPerMillion",
+                                    "cachedInputUsdPerMillion",
+                                    "outputUsdPerMillion",
+                                    "thinkingUsdPerMillion",
+                                    "evidenceUrl"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "project",
+                              "quotaProject",
+                              "location",
+                              "model",
+                              "stream",
+                              "thinkingLevel",
+                              "maxInputTokens",
+                              "maxOutputTokens",
+                              "maxRequestCostUsd",
+                              "pricing"
+                            ],
+                            "additionalProperties": false
+                          },
                           {
                             "type": "object",
                             "properties": {
@@ -1102,6 +1228,22 @@
                         "type": "integer",
                         "minimum": 1000,
                         "maximum": 3600000
+                      },
+                      "planning": {
+                        "type": "object",
+                        "properties": {
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 3600000
+                          },
+                          "maxRequests": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 40
+                          }
+                        },
+                        "additionalProperties": false
                       },
                       "maxReplans": {
                         "default": 3,
@@ -3019,7 +3161,7 @@
     },
     "/api/v1/goal-drafts": {
       "post": {
-        "summary": "Validate a draft against applied project authority",
+        "summary": "Validate a draft against applied project authority and inspect effective execution limits",
         "requestBody": {
           "required": true,
           "content": {
@@ -3886,6 +4028,60 @@
             "minimum": 1,
             "maximum": 131072
           },
+          "project": {
+            "type": "string"
+          },
+          "quotaProject": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string"
+          },
+          "thinkingLevel": {
+            "type": "string"
+          },
+          "modelVersion": {
+            "type": "string"
+          },
+          "pricingVersion": {
+            "type": "string"
+          },
+          "providerCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "tokenUsage": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "candidates": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "thinking": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cached": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "prompt",
+              "candidates",
+              "thinking",
+              "cached"
+            ],
+            "additionalProperties": false
+          },
           "reasoningEffort": {
             "type": "string",
             "enum": [
@@ -4497,6 +4693,7 @@
                   "fake",
                   "azure",
                   "bedrock",
+                  "vertex",
                   "codex-subscription",
                   "claude-subscription"
                 ]
@@ -4651,6 +4848,130 @@
               "kind": "fake"
             },
             "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "vertex"
+                  },
+                  "project": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                  },
+                  "quotaProject": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                  },
+                  "location": {
+                    "type": "string",
+                    "const": "global"
+                  },
+                  "model": {
+                    "type": "string",
+                    "const": "gemini-4-argon"
+                  },
+                  "stream": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "thinkingLevel": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "maxInputTokens": {
+                    "type": "integer",
+                    "minimum": 4096,
+                    "maximum": 1000000
+                  },
+                  "maxOutputTokens": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 65536
+                  },
+                  "maxRequestCostUsd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "pricing": {
+                    "minItems": 1,
+                    "maxItems": 24,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "const": "USD"
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                        },
+                        "effectiveUntil": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                        },
+                        "inputUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "cachedInputUsdPerMillion": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "thinkingUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "evidenceUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "currency",
+                        "effectiveFrom",
+                        "effectiveUntil",
+                        "inputUsdPerMillion",
+                        "cachedInputUsdPerMillion",
+                        "outputUsdPerMillion",
+                        "thinkingUsdPerMillion",
+                        "evidenceUrl"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "quotaProject",
+                  "location",
+                  "model",
+                  "thinkingLevel",
+                  "maxInputTokens",
+                  "maxOutputTokens",
+                  "maxRequestCostUsd",
+                  "pricing"
+                ],
+                "additionalProperties": false
+              },
               {
                 "type": "object",
                 "properties": {
@@ -4912,6 +5233,22 @@
             "type": "integer",
             "minimum": 1000,
             "maximum": 3600000
+          },
+          "planning": {
+            "type": "object",
+            "properties": {
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000
+              },
+              "maxRequests": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 40
+              }
+            },
+            "additionalProperties": false
           },
           "maxReplans": {
             "default": 3,
@@ -5362,6 +5699,7 @@
                       "fake",
                       "azure",
                       "bedrock",
+                      "vertex",
                       "codex-subscription",
                       "claude-subscription"
                     ]
@@ -5516,6 +5854,130 @@
                   "kind": "fake"
                 },
                 "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "vertex"
+                      },
+                      "project": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                      },
+                      "quotaProject": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                      },
+                      "location": {
+                        "type": "string",
+                        "const": "global"
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gemini-4-argon"
+                      },
+                      "stream": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "thinkingLevel": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "maxInputTokens": {
+                        "type": "integer",
+                        "minimum": 4096,
+                        "maximum": 1000000
+                      },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 65536
+                      },
+                      "maxRequestCostUsd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "pricing": {
+                        "minItems": 1,
+                        "maxItems": 24,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "version": {
+                              "type": "string",
+                              "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+                            },
+                            "currency": {
+                              "type": "string",
+                              "const": "USD"
+                            },
+                            "effectiveFrom": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "effectiveUntil": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "inputUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "cachedInputUsdPerMillion": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "outputUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "thinkingUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "evidenceUrl": {
+                              "type": "string",
+                              "format": "uri"
+                            }
+                          },
+                          "required": [
+                            "version",
+                            "currency",
+                            "effectiveFrom",
+                            "effectiveUntil",
+                            "inputUsdPerMillion",
+                            "cachedInputUsdPerMillion",
+                            "outputUsdPerMillion",
+                            "thinkingUsdPerMillion",
+                            "evidenceUrl"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "project",
+                      "quotaProject",
+                      "location",
+                      "model",
+                      "thinkingLevel",
+                      "maxInputTokens",
+                      "maxOutputTokens",
+                      "maxRequestCostUsd",
+                      "pricing"
+                    ],
+                    "additionalProperties": false
+                  },
                   {
                     "type": "object",
                     "properties": {
@@ -5778,6 +6240,22 @@
                 "minimum": 1000,
                 "maximum": 3600000
               },
+              "planning": {
+                "type": "object",
+                "properties": {
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 3600000
+                  },
+                  "maxRequests": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 40
+                  }
+                },
+                "additionalProperties": false
+              },
               "maxReplans": {
                 "default": 3,
                 "type": "integer",
@@ -5874,6 +6352,130 @@
           },
           "backend": {
             "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "vertex"
+                  },
+                  "project": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                  },
+                  "quotaProject": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                  },
+                  "location": {
+                    "type": "string",
+                    "const": "global"
+                  },
+                  "model": {
+                    "type": "string",
+                    "const": "gemini-4-argon"
+                  },
+                  "stream": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "thinkingLevel": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "maxInputTokens": {
+                    "type": "integer",
+                    "minimum": 4096,
+                    "maximum": 1000000
+                  },
+                  "maxOutputTokens": {
+                    "type": "integer",
+                    "minimum": 64,
+                    "maximum": 65536
+                  },
+                  "maxRequestCostUsd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "pricing": {
+                    "minItems": 1,
+                    "maxItems": 24,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "const": "USD"
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                        },
+                        "effectiveUntil": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                        },
+                        "inputUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "cachedInputUsdPerMillion": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "outputUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "thinkingUsdPerMillion": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "evidenceUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "currency",
+                        "effectiveFrom",
+                        "effectiveUntil",
+                        "inputUsdPerMillion",
+                        "cachedInputUsdPerMillion",
+                        "outputUsdPerMillion",
+                        "thinkingUsdPerMillion",
+                        "evidenceUrl"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project",
+                  "quotaProject",
+                  "location",
+                  "model",
+                  "thinkingLevel",
+                  "maxInputTokens",
+                  "maxOutputTokens",
+                  "maxRequestCostUsd",
+                  "pricing"
+                ],
+                "additionalProperties": false
+              },
               {
                 "type": "object",
                 "properties": {
@@ -6364,6 +6966,7 @@
                       "fake",
                       "azure",
                       "bedrock",
+                      "vertex",
                       "codex-subscription",
                       "claude-subscription"
                     ]
@@ -6518,6 +7121,130 @@
                   "kind": "fake"
                 },
                 "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "vertex"
+                      },
+                      "project": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                      },
+                      "quotaProject": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+                      },
+                      "location": {
+                        "type": "string",
+                        "const": "global"
+                      },
+                      "model": {
+                        "type": "string",
+                        "const": "gemini-4-argon"
+                      },
+                      "stream": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "thinkingLevel": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      },
+                      "maxInputTokens": {
+                        "type": "integer",
+                        "minimum": 4096,
+                        "maximum": 1000000
+                      },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 65536
+                      },
+                      "maxRequestCostUsd": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "pricing": {
+                        "minItems": 1,
+                        "maxItems": 24,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "version": {
+                              "type": "string",
+                              "pattern": "^[a-zA-Z0-9_.-]{1,80}$"
+                            },
+                            "currency": {
+                              "type": "string",
+                              "const": "USD"
+                            },
+                            "effectiveFrom": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "effectiveUntil": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "inputUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "cachedInputUsdPerMillion": {
+                              "type": "number",
+                              "minimum": 0
+                            },
+                            "outputUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "thinkingUsdPerMillion": {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            },
+                            "evidenceUrl": {
+                              "type": "string",
+                              "format": "uri"
+                            }
+                          },
+                          "required": [
+                            "version",
+                            "currency",
+                            "effectiveFrom",
+                            "effectiveUntil",
+                            "inputUsdPerMillion",
+                            "cachedInputUsdPerMillion",
+                            "outputUsdPerMillion",
+                            "thinkingUsdPerMillion",
+                            "evidenceUrl"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "project",
+                      "quotaProject",
+                      "location",
+                      "model",
+                      "thinkingLevel",
+                      "maxInputTokens",
+                      "maxOutputTokens",
+                      "maxRequestCostUsd",
+                      "pricing"
+                    ],
+                    "additionalProperties": false
+                  },
                   {
                     "type": "object",
                     "properties": {
@@ -6779,6 +7506,22 @@
                 "type": "integer",
                 "minimum": 1000,
                 "maximum": 3600000
+              },
+              "planning": {
+                "type": "object",
+                "properties": {
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 3600000
+                  },
+                  "maxRequests": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 40
+                  }
+                },
+                "additionalProperties": false
               },
               "maxReplans": {
                 "default": 3,

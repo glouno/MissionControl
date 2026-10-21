@@ -205,6 +205,13 @@ export const goalSchema = z
       .min(1000)
       .max(3600000)
       .default(900000),
+    planning: z
+      .object({
+        timeoutMs: z.number().int().min(1000).max(3600000).optional(),
+        maxRequests: z.number().int().min(1).max(40).optional(),
+      })
+      .strict()
+      .optional(),
     maxReplans: z.number().int().min(0).max(10).default(3),
     policy: policySchema.prefault({}),
     scheduledAt: z.string().datetime({ offset: true }).optional(),
