@@ -1,6 +1,7 @@
 import {
   boundedCleanup,
   deadlineSignal,
+  invocationFence,
   abortable,
   ProviderFailure,
   ReliabilityStore,
@@ -47,14 +48,21 @@ export class IsolatedBackend implements AgentBackend {
     readonly options: IsolatedBackendOptions,
   ) {}
   async run(context: RunContext): Promise<BackendResult> {
+    const deadlineAt =
+      context.deadlineAt ?? Date.now() + context.claim.goal.config.timeoutMs;
+    const originalAuthority = context.assertAuthority;
+    const fence = invocationFence(context.signal, deadlineAt, () => {
+      originalAuthority?.();
+      this.options.assertLease(context.claim.task.id, context.claim.generation);
+      this.options.assertContext?.(context);
+    });
     context = {
       ...context,
-      signal: deadlineSignal(
-        context.deadlineAt ?? Date.now() + context.claim.goal.config.timeoutMs,
-        context.signal,
-      ),
+      deadlineAt,
+      signal: fence.signal,
+      assertAuthority: fence.check,
     };
-    context.signal.throwIfAborted();
+    fence.check();
     const config = context.claim.goal.config.backend;
     const portable =
       config.kind === "azure" ||
@@ -76,8 +84,7 @@ export class IsolatedBackend implements AgentBackend {
         "Explicit model, positive cost reservation and pinned environment image required",
         409,
       );
-    this.options.assertLease(context.claim.task.id, context.claim.generation);
-    this.options.assertContext?.(context);
+    fence.check();
     const generation = Math.max(1, context.claim.generation);
     const assertExecutionLease = (
       taskId: string,
@@ -91,8 +98,7 @@ export class IsolatedBackend implements AgentBackend {
         );
       // Generation zero denotes a controller-reserved goal review, not a task
       // claim. Its injected authority must validate that operation reservation.
-      this.options.assertLease(context.claim.task.id, context.claim.generation);
-      this.options.assertContext?.(context);
+      fence.check();
     };
     const startedAt = Date.now();
     const baseSha = await git(context.workspace, ["rev-parse", "HEAD"]);
@@ -137,16 +143,24 @@ export class IsolatedBackend implements AgentBackend {
     let result: BackendResult | undefined;
     let failure: unknown;
     let cleanupSignal: AbortSignal | undefined;
-    const cleanup = () =>
-      (cleanupSignal ??=
-        failure || context.signal.aborted
+    let terminalCleanup = false;
+    const cleanup = () => {
+      // Switch an interrupted success allowance to the controller's terminal
+      // allowance once. Never renew an exhausted terminal cleanup deadline.
+      if (cleanupSignal?.aborted && !terminalCleanup) cleanupSignal = undefined;
+      if (!cleanupSignal) {
+        terminalCleanup = !!failure || context.signal.aborted;
+        cleanupSignal = terminalCleanup
           ? (this.options.cleanupSignal?.(context) ??
             context.cleanupSignal?.() ??
             AbortSignal.timeout(60000))
           : deadlineSignal(
               Math.min(context.deadlineAt ?? Infinity, Date.now() + 60000),
               context.signal,
-            ));
+            );
+      }
+      return cleanupSignal;
+    };
     try {
       const contracts = context.claim.goal.config.siblingContracts.length
         ? await prepareContractSnapshot(
@@ -276,6 +290,7 @@ export class IsolatedBackend implements AgentBackend {
           }),
           context.signal,
         );
+        fence.check();
       } catch (error) {
         const reliability = new ReliabilityStore(this.registry.db);
         reliability.migrate();
@@ -285,7 +300,9 @@ export class IsolatedBackend implements AgentBackend {
             `${context.claim.task.id}:${context.claim.generation}`,
           session.id,
         );
-        failure = latest?.failure ? new ProviderFailure(latest.failure) : error;
+        failure = context.signal.aborted
+          ? context.signal.reason
+          : latest?.failure ? new ProviderFailure(latest.failure) : error;
       }
       // The container is stopped before any trusted Git inspection or source import.
       this.gateway.revoke(session.id);
@@ -365,6 +382,7 @@ export class IsolatedBackend implements AgentBackend {
         );
       if (failure) throw failure;
       if (!result) throw new Error("Native harness ended without result");
+      fence.check();
       return {
         ...result,
         // Provider counters and operator-pinned rates give an estimate, never an invoice.
@@ -403,6 +421,13 @@ export class IsolatedBackend implements AgentBackend {
       };
     } catch (error) {
       failure = error;
+      if (portable && result && error instanceof Error)
+        Object.assign(error, {
+          costUsd: result.costUsd,
+          usage: result.usage,
+          costStatus: "estimated_unknown",
+          executionSessionId: session.id,
+        });
       if (config.kind === "codex" && error instanceof Error) {
         const usage = this.gateway.sessionUsage(session.id);
         Object.assign(error, {
@@ -425,6 +450,21 @@ export class IsolatedBackend implements AgentBackend {
           cleanup(),
         );
       } catch (error) {
+        if (context.signal.aborted) {
+          const interrupted = context.signal.reason;
+          if (interrupted instanceof Error) {
+            Object.assign(interrupted, {
+              cleanupFailure: error,
+              ...(result ? {
+                costUsd: result.costUsd,
+                usage: result.usage,
+                costStatus: portable ? "estimated_unknown" : "reported",
+                executionSessionId: session.id,
+              } : {}),
+            });
+          }
+          error = interrupted;
+        }
         if (config.kind === "codex" && error instanceof Error) {
           const usage = this.gateway.sessionUsage(session.id);
           Object.assign(error, {
@@ -445,6 +485,33 @@ export class IsolatedBackend implements AgentBackend {
           gatewayNetwork: undefined,
         },
       });
+      // A return above completes only after this awaited teardown. The portable
+      // watcher has stopped, so revalidate synchronously at the outer boundary.
+      // Keep checkpoint/source evidence and measured usage on rejected completion.
+      if (!failure && result) {
+        try {
+          fence.check();
+        } catch (error) {
+          if (error instanceof Error)
+            Object.assign(error, {
+              costUsd: result.costUsd,
+              usage: result.usage,
+              inputTokens: result.inputTokens,
+              outputTokens: result.outputTokens,
+              costStatus: portable ? "estimated_unknown" : "reported",
+              executionSessionId: session.id,
+            });
+          if (config.kind === "codex" && error instanceof Error) {
+            const usage = this.gateway.sessionUsage(session.id);
+            Object.assign(error, {
+              costUsd: usage.status === "estimated" ? usage.costUsd : undefined,
+              usage: { ...usage, elapsedMs: Date.now() - startedAt },
+              costStatus: "estimated_unknown",
+            });
+          }
+          throw error;
+        }
+      }
     }
   }
 }

@@ -69,6 +69,24 @@ with no failed, cancelled or skipped tests. The focused Vertex suite passed
 62 tests before the final full run. These worker checks are synthetic implementation
 evidence; independent exact-candidate review and integration remain controller phases.
 
+Outer completion continuation retains `7bcab2138060847b79dee2e4345f581c233d7dc6`
+and the earlier recovery evidence. Its pre-edit authoritative baseline passed all
+442 Node tests, eight Python tests and typecheck. The outer isolated adapter now
+uses the invocation fence at entry, backend result acceptance, source authority
+checks and final completion after awaited reset/network cleanup. Synthetic real
+VertexProvider/FakeEnvironment fixtures expire the clock or revoke either
+controller authority callback immediately after reset, and confirm that no `done`
+result escapes. Entry expiry dispatches no auth, inference, tools or environment
+preparation. Cancellation during reset preserves its original reason and cleanup
+failure evidence; interrupted success cleanup switches once to the existing
+terminal allowance without renewing an exhausted terminal allowance. Known Vertex
+usage remains attached to rejected completion, and uncertain cleanup retains its
+session record for reconciliation. Focused Vertex/isolated adapter checks passed
+83 tests. The final authoritative `mc-check-vertex` passed typecheck, all 447
+Node tests, eight Python tests, pinned lockfile comparison and whitespace checks,
+with no failed, cancelled or skipped tests. Independent controller review of this
+exact continuation remains pending.
+
 The candidate adds direct Vertex streaming/JSON inference to the existing isolated
 controller portable loop, explicit ADC/impersonation refresh and egress, versioned
 USD pricing, conservative request reservations, installation run capacity, native
