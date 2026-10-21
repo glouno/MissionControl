@@ -31,6 +31,8 @@ export interface InferenceCapability {
   model: string;
   expiresAt: number;
   maxOutputTokens?: number;
+  maxRequests?: number;
+  admittedRequests?: number;
   revoked?: boolean;
 }
 export interface TrustedUpstream {
@@ -81,6 +83,10 @@ export class InferenceGateway {
       !this.upstreams[capability.provider] ||
       this.upstreams[capability.provider].protocol !== capability.protocol ||
       !capability.model ||
+      (capability.maxRequests !== undefined &&
+        (!Number.isSafeInteger(capability.maxRequests) ||
+          capability.maxRequests < 1)) ||
+      capability.admittedRequests !== undefined ||
       capability.expiresAt <= this.clock()
     )
       throw new Error("Invalid inference capability");
@@ -149,6 +155,21 @@ export class InferenceGateway {
         req.headers.authorization?.replace(/^Bearer /, "") ??
         String(req.headers["x-api-key"] ?? "");
       capability = this.authenticate(token);
+      if (capability.maxRequests !== undefined) {
+        this.db.transaction(() => {
+          const current = this.authenticate(token);
+          if ((current.admittedRequests ?? 0) >= current.maxRequests!)
+            throw new ControlError(
+              "planning_limit",
+              "Planning request limit reached; submit a reviewed fixed plan after inspecting retained usage",
+              400,
+            );
+          current.admittedRequests = (current.admittedRequests ?? 0) + 1;
+          this.db.exec(
+            `UPDATE inference_capabilities SET record=${sql(JSON.stringify(current))} WHERE hash=${sql(hash(token))}`,
+          );
+        });
+      }
       sessionId = capability.sessionId;
       const active =
         this.activeRequests.get(sessionId) ?? new Set<AbortController>();

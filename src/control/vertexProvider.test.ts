@@ -141,6 +141,64 @@ test("Vertex text, nonstream and cumulative usage price prompt/cache/thinking ex
   );
 });
 
+test("portable planner stops after four measured calls without refunding usage or executing a fifth tool", async () => {
+  let requests = 0,
+    tools = 0;
+  const backend = new PortableBackend({
+    reservation: () => 0.01,
+    cost: () => 0.01,
+    generate: async () => ({
+      text: "",
+      calls: [
+        {
+          id: `call-${++requests}`,
+          name: "read_file",
+          arguments: { path: "file" },
+        },
+      ],
+      inputTokens: 10,
+      outputTokens: 5,
+      vertexUsage: {
+        prompt: 10,
+        candidates: 2,
+        thinking: 3,
+        cached: 2,
+        pricingVersion: "fixture",
+        modelVersion: "fixture",
+      },
+    }),
+  });
+  backend.tool = async () => {
+    tools++;
+    return "fixture";
+  };
+  await assert.rejects(
+    backend.run({
+      claim: {
+        goal: { config: { estimatePerRunUsd: 1, maxCostUsd: 1 } },
+        task: { spec: {} },
+        generation: 1,
+      } as any,
+      mode: "plan",
+      prompt: "plan",
+      workspace: "/fixture",
+      signal: new AbortController().signal,
+      onCheckpoint: async () => {},
+    }),
+    (error: any) => {
+      assert.match(error.message, /reviewed fixed plan/);
+      assert.equal(error.costUsd, 0.04);
+      assert.equal(error.usage.inputTokens, 40);
+      assert.equal(error.usage.outputTokens, 20);
+      assert.equal(error.usage.thinkingTokens, 12);
+      assert.equal(error.usage.cachedInputTokens, 8);
+      return true;
+    },
+  );
+  assert.equal(requests, 4);
+  assert.equal(tools, 4);
+});
+
 test("Vertex accepts live metadata-only chunks but requires complete final token evidence", async () => {
   const metadata = { trafficType: "ON_DEMAND" };
   const first = {

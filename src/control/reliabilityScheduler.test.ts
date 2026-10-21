@@ -61,6 +61,41 @@ async function until(predicate: () => boolean, limit = 3000) {
     await new Promise((r) => setTimeout(r, 10));
   assert.ok(predicate());
 }
+test("planning and replanning keep shorter deadlines and actionable exhaustion without accepting partial JSON", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("bounded-planning", { timeoutMs: 3600000 });
+  const seen: any[] = [];
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({
+      run: async (context) => {
+        seen.push(context);
+        assert.ok(context.deadlineAt! <= Date.now() + 120000);
+        assert.equal(context.mode, "plan");
+        assert.ok(context.outputSchema);
+        throw Object.assign(
+          new ProviderFailure(
+            failureRecord("incomplete_stream", {
+              providerCode: "max_output_tokens",
+            }),
+          ),
+          { usage: { kind: "metered", status: "unknown" } },
+        );
+      },
+    }),
+  });
+  t.after(() => scheduler.close());
+  await assert.rejects(scheduler.plan(goal.id), /reviewed fixed plan/);
+  assert.equal(f.store.tasks(goal.id).length, 0);
+  assert.equal(f.store.getGoal(goal.id).planRevision, 0);
+  assert.equal(f.store.canSpend(goal.id).unresolvedUsd, 1);
+  assert.equal(f.store.getGoal(goal.id).config.timeoutMs, 3600000);
+  const g2 = await f.goal("bounded-replan", { timeoutMs: 3600000 });
+  await scheduler.workspaces.prepareGoal(g2);
+  await assert.rejects(scheduler.replan(g2.id), /reviewed fixed plan/);
+  assert.equal(f.store.tasks(g2.id).length, 0);
+  assert.equal(seen.length, 2);
+});
+
 test("stopped controller operations reconcile without restart or replay", async (t) => {
   const f = await fixture(t),
     goal = await f.goal("recovery");
