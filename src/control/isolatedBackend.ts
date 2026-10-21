@@ -450,21 +450,25 @@ export class IsolatedBackend implements AgentBackend {
           cleanup(),
         );
       } catch (error) {
-        if (context.signal.aborted) {
-          const interrupted = context.signal.reason;
-          if (interrupted instanceof Error) {
-            Object.assign(interrupted, {
-              cleanupFailure: error,
-              ...(result ? {
-                costUsd: result.costUsd,
-                usage: result.usage,
-                costStatus: portable ? "estimated_unknown" : "reported",
-                executionSessionId: session.id,
-              } : {}),
-            });
-          }
-          error = interrupted;
+        const cleanupFailure = error;
+        // Teardown can fail at the same time as cancellation or revocation.
+        // Preserve the authority failure as primary, and always retain measured
+        // inference usage even when the cleanup error is the primary failure.
+        try {
+          fence.check();
+        } catch (authorityError) {
+          error = authorityError;
+          if (error instanceof Error) Object.assign(error, { cleanupFailure });
         }
+        if (result && error instanceof Error)
+          Object.assign(error, {
+            costUsd: result.costUsd,
+            usage: result.usage,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            costStatus: portable ? "estimated_unknown" : "reported",
+            executionSessionId: session.id,
+          });
         if (config.kind === "codex" && error instanceof Error) {
           const usage = this.gateway.sessionUsage(session.id);
           Object.assign(error, {

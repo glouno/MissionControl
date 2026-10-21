@@ -408,8 +408,17 @@ for (const cleanupFails of [false, true])
     });
 
 for (const boundary of [
-  "success", "expired-entry", "reset-deadline", "reset-authority",
-  "reset-cancellation", "reset-context-authority",
+  "success",
+  "expired-entry",
+  "reset-deadline",
+  "reset-authority",
+  "reset-cancellation",
+  "reset-context-authority",
+  "reset-failure",
+  "reset-failure-authority",
+  "reset-failure-context-authority",
+  "reset-failure-deadline",
+  "reset-failure-cancellation",
 ])
 test(`native Vertex isolated completion fences ${boundary} after controller tool execution`, async (t) => {
   const { VertexProvider } = await import("./vertexProvider.js");
@@ -474,15 +483,26 @@ test(`native Vertex isolated completion fences ${boundary} after controller tool
   });
   delete b.options.backend;
   b.options.portableProvider = provider;
-  let wall = Date.now(), revoked = false;
+  let wall = Date.now(),
+    revoked = false;
   t.mock.method(Date, "now", () => wall);
   f.context.deadlineAt = boundary === "expired-entry" ? wall : wall + 60000;
   const reason = new Error("synthetic completion authority revoked");
   b.options.assertContext = () => {
-    if (revoked && boundary === "reset-authority") throw reason;
+    if (
+      revoked &&
+      (boundary === "reset-authority" ||
+        boundary === "reset-failure-authority")
+    )
+      throw reason;
   };
   f.context.assertAuthority = () => {
-    if (revoked && boundary === "reset-context-authority") throw reason;
+    if (
+      revoked &&
+      (boundary === "reset-context-authority" ||
+        boundary === "reset-failure-context-authority")
+    )
+      throw reason;
   };
   const controller = new AbortController();
   f.context.signal = controller.signal;
@@ -491,15 +511,24 @@ test(`native Vertex isolated completion fences ${boundary} after controller tool
   f.env.reset = async (id, signal) => {
     await reset(id, signal);
     resets++;
-    if (boundary === "reset-deadline") wall = f.context.deadlineAt;
-    if (boundary === "reset-authority" || boundary === "reset-context-authority") revoked = true;
-    if (boundary === "reset-cancellation") controller.abort(reason);
+    if (
+      boundary === "reset-deadline" ||
+      boundary === "reset-failure-deadline"
+    )
+      wall = f.context.deadlineAt;
+    if (boundary.includes("authority")) revoked = true;
+    if (boundary.includes("cancellation")) controller.abort(reason);
+    if (boundary.startsWith("reset-failure"))
+      throw new Error("synthetic reset failure");
   };
   f.env.execute = async (_id, command, signal) => {
     signal.throwIfAborted();
     tools++;
     assert.equal(command[0], "python3");
-    assert.equal(command.join(" ").includes("controller-only-fixture"), false);
+    assert.equal(
+      command.join(" ").includes("controller-only-fixture"),
+      false,
+    );
     assert.equal(JSON.parse(command[3]!).name, "read_file");
     return {
       exitCode: 0,
@@ -514,14 +543,24 @@ test(`native Vertex isolated completion fences ${boundary} after controller tool
     await assert.rejects(b.run(f.context), (error: any) => {
       if (boundary.includes("deadline") || boundary === "expired-entry")
         assert.equal(error.failure?.kind, "deadline");
+      else if (boundary === "reset-failure")
+        assert.equal(error.failure?.kind, "cleanup_blocked");
       else assert.equal(error, reason);
-      if (boundary === "reset-cancellation")
+      if (
+        boundary !== "reset-failure" &&
+        (boundary.startsWith("reset-failure") ||
+          boundary === "reset-cancellation")
+      )
         assert.equal(error.cleanupFailure.failure.kind, "cleanup_blocked");
       if (boundary !== "expired-entry") {
         assert.equal(error.usage.status, "estimated");
         assert.equal(error.usage.inputTokens, 200);
         assert.equal(error.usage.outputTokens, 20);
         assert.equal(error.costUsd, 0.00024);
+        assert.equal(error.inputTokens, 200);
+        assert.equal(error.outputTokens, 20);
+        assert.equal(error.costStatus, "estimated_unknown");
+        assert.equal(error.executionSessionId, f.registry.all()[0].id);
       }
       return true;
     });
@@ -537,7 +576,9 @@ test(`native Vertex isolated completion fences ${boundary} after controller tool
   assert.equal(resets, 1);
   assert.equal(
     f.registry.all()[0].status,
-    boundary === "reset-cancellation" ? "prepared" : "checkpointed",
+    boundary === "reset-cancellation" || boundary.startsWith("reset-failure")
+      ? "prepared"
+      : "checkpointed",
   );
   assert.equal(f.registry.all()[0].container, undefined);
   assert.equal(f.registry.all()[0].spec.gatewayNetwork, undefined);

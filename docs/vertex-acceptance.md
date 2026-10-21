@@ -1,3 +1,34 @@
+# Direct cleanup repair after MissionControl review
+
+The preserved candidate `088822e02c260c997357b463d72378b2ed80805f` was rejected
+by independent review: failing final teardown could discard measured Vertex usage
+and mask controller revocation. The direct repair on
+`fix/vertex-cleanup-accounting-20261021` retains measured cost, token counters and
+session identity on cleanup errors whether or not cancellation has fired. It
+checks invocation authority synchronously on the cleanup-failure path; revocation,
+cancellation or deadline expiry stays the primary error, with cleanup failure
+attached separately. Failed cleanup retains the session for inspected recovery.
+
+Full direct verification also found new high-severity advisories in the unchanged
+MCP SDK 1.31.0 pin (the same audit fails on main). This candidate updates only
+`@modelcontextprotocol/sdk` to 1.32.1; the production dependency audit then reports
+zero vulnerabilities. Its lockfile now differs from the historical worker image,
+so deployment or renewed MissionControl execution requires rebuilding and
+qualifying that image. Existing installed services are unchanged.
+
+The exact real Vertex provider and existing isolated tool fixture reproduce two
+inference calls plus a tool response. Additional cases cover failing reset alone,
+reset plus lease revocation, original authority revocation, deadline expiry and
+cancellation. The failures reproduced against the preserved candidate; all eleven
+completion-boundary cases pass with the repair. No live GCP calls, credentials,
+installed-runtime changes or new MissionControl job were used for this repair.
+Final direct Linux verification passed all eight required gates: typecheck,
+452 Node tests, eight Python status tests, privacy, package, zero-vulnerability
+dependency audit, history audit and eleven Rust Matrix tests. No tests failed
+or were skipped. These are deterministic source checks; live Vertex qualification
+and independent acceptance remain separate. Historical worker evidence follows; its pending-review wording
+is historical and does not imply this direct repair has independent acceptance.
+
 # GCP-VERTEX-01 candidate evidence
 
 Review branch: `review/gcp-vertex-01-boundary-repair`, admitted base
