@@ -8,6 +8,7 @@ import {
   classifyFailure,
   failureRecord,
 } from "./reliability.js";
+import { planningLimits, planningRecovery } from "./planningLimits.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { terminateProcessTree } from "../util.js";
@@ -206,6 +207,24 @@ export class PortableBackend implements AgentBackend {
     if (c.disableTaskHandoffs)
       tools = tools.filter((t) => t.name !== "request_human_input");
     for (let turn = 0; turn < 40; turn++) {
+      if (c.mode === "plan" && turn >= planningLimits.maxRequests)
+        throw Object.assign(
+          new ProviderFailure({
+            ...failureRecord("invalid_request"),
+            message: planningRecovery,
+          }),
+          {
+            usage: {
+              kind: "metered",
+              status: "estimated",
+              ...(vertexMeasured ? { thinkingTokens, cachedInputTokens } : {}),
+              costUsd,
+              inputTokens,
+              outputTokens,
+            },
+            costUsd,
+          },
+        );
       if (c.signal.aborted) throw c.signal.reason;
       this.assertInferenceAuthority(c);
       const ceiling = c.claim.goal.config.estimatePerRunUsd;

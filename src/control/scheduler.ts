@@ -1,4 +1,5 @@
 import { repositoryIdentity } from "./repositories.js";
+import { planningLimits, planningRecovery } from "./planningLimits.js";
 import {
   withExecutionDeadline,
   executionDeadline,
@@ -1005,6 +1006,9 @@ export class Scheduler {
         runtime.deadlineAt,
         context.deadlineAt ?? Infinity,
         executionDeadline() ?? Infinity,
+        context.mode === "plan"
+          ? this.store.clock() + planningLimits.timeoutMs
+          : Infinity,
       );
       runtime.deadlineAt = deadlineAt;
       this.store.reliability.saveRuntime(runtime);
@@ -1092,6 +1096,26 @@ export class Scheduler {
       };
       return output;
     } catch (e) {
+      const classified = classifyFailure(e);
+      if (
+        context.mode === "plan" &&
+        ["deadline", "incomplete_stream"].includes(classified.kind)
+      ) {
+        const failure = new ProviderFailure({
+          ...classified,
+          message: planningRecovery,
+        });
+        if (e instanceof Error)
+          Object.assign(failure, {
+            usage: (e as any).usage,
+            costUsd: (e as any).costUsd,
+            inputTokens: (e as any).inputTokens,
+            outputTokens: (e as any).outputTokens,
+            executionSessionId: (e as any).executionSessionId,
+            cleanupFailure: (e as any).cleanupFailure,
+          });
+        e = failure;
+      }
       this.store.recordFailure(g.id, classifyFailure(e), budget);
       if (e instanceof Error)
         Object.assign(e, { reliabilityAttemptId: budget });
@@ -1228,6 +1252,7 @@ export class Scheduler {
         claim: c,
         workspace: this.workspaces.goalPath(g),
         mode: "plan",
+        outputSchema: z.toJSONSchema(planSchema, { target: "draft-7" }),
         signal: AbortSignal.timeout(g.config.timeoutMs),
         onCheckpoint: async () => {},
         prompt: `Revise the goal plan after these events: ${JSON.stringify(this.store.events(0, g.id).slice(-20))}. Preserve these accepted contracts exactly: ${JSON.stringify(prior)}. Workers implement source and run required checks, then return candidates. MissionControl performs separate independent review and integration; do not assign workers subagent startup or reviewer infrastructure. Return JSON {tasks:[...]} with bounded tasks, dependencies, acceptanceCriteria, allowedPaths, verificationCommands. Goal: ${g.config.description}`,

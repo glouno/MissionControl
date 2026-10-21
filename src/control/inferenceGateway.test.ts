@@ -77,6 +77,54 @@ async function fixture(
     url = `http://127.0.0.1:${(server.address() as any).port}/v1/${protocol}`;
   return { db, gateway, calls, token, url, cap, upstream };
 }
+test("planner request allowance survives gateway restart and concurrent admissions", async (t) => {
+  const f = await fixture(t);
+  const token = f.gateway.issue({ ...f.cap, maxRequests: 2 });
+  const send = async () => {
+    const r = await fetch(f.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    });
+    await r.text();
+    return r.status;
+  };
+  assert.equal(await send(), 200);
+  const statuses = await Promise.all([send(), send()]);
+  assert.deepEqual(statuses.sort(), [200, 400]);
+  assert.equal(f.calls.length, 2);
+  const restarted = new InferenceGateway(
+    f.db,
+    f.gateway.upstreams,
+    () => {},
+    async () => {
+      throw Error("allowance must not reset on restart");
+    },
+  );
+  assert.equal(restarted.authenticate(token).admittedRequests, 2);
+  const server = restarted.server();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const deniedResponse = await fetch(
+    `http://127.0.0.1:${(server.address() as any).port}/v1/responses`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ model: f.cap.model }),
+    },
+  );
+  assert.equal(deniedResponse.status, 400);
+  await deniedResponse.text();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.gateway.sessionUsage(f.cap.sessionId).inputTokens, 24);
+  assert.equal(f.gateway.sessionUsage(f.cap.sessionId).outputTokens, 8);
+  assert.equal(f.db.query("SELECT record FROM inference_usage").length, 2);
+});
+
 test("native gateway persists three-retry authority and Retry-After across restart", async (t) => {
   const f = await fixture(t, "responses", undefined, 429);
   f.db.exec(

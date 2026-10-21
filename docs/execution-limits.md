@@ -63,3 +63,24 @@ in a second request. It also avoids spending a native planner invocation on a
 fully specified task. It does not recover a refused or output-exhausted existing
 goal, refund previous admissions, change output limits or certify free-form native
 planning. Retained failures still require their normal inspected recovery path.
+
+## Planning bounds
+
+Planning and replanning have a controller-owned two-minute execution deadline,
+even when coding has a longer allowance. The native paid inference gateway
+admits at most four requests per planning capability, including retries, with
+at most 8,192 output tokens per request or the lower configured provider limit.
+The request counter persists across gateway restart and is consumed atomically
+before upstream authentication or dispatch. Locally refused requests never
+become provider billing evidence. Coding and independent review retain their
+admitted limits. Portable tool-loop planners stop after four model calls and
+retain their measured prefix cost. Native subscription planners share the
+deadline; their vendor runtime does not expose this gateway request/output fence.
+
+These bounds stop runaway investigation; they do not guarantee a model will
+produce a plan. Truncated, timed-out or invalid output is not installed as a
+plan. Inspect retained source, diagnostics and unresolved usage before using
+`goal reviewed` with an operator-reviewed fixed plan. The supported admission
+path bypasses the planner atomically and keeps ordinary project, task, path,
+resource, dependency, budget and verification validation. It does not replay
+failed requests or release historical unknown holds.

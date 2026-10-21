@@ -190,6 +190,27 @@ test("isolated Codex configuration honors admitted reasoning effort", async (t) 
   assert.match(toml, /model_provider = "missioncontrol"/);
 });
 
+test("isolated native planner receives bounded inference capability without changing coding configuration", async (t) => {
+  const f = await fixture(t, "review");
+  f.context.mode = "plan";
+  f.context.claim.goal.config.backend = {
+    kind: "codex",
+    model: "synthetic",
+    maxOutputTokens: 65536,
+  };
+  f.gateway.upstreams.fixture.protocol = "responses";
+  f.env.execute = async () => ({ stdout: "", stderr: "" });
+  await f
+    .backend(async () => ({ text: '{"tasks":[]}', costUsd: 0.1 }))
+    .run(f.context);
+  const cap = JSON.parse(
+    f.db.one<any>("SELECT record FROM inference_capabilities")!.record,
+  );
+  assert.equal(cap.maxOutputTokens, 8192);
+  assert.equal(cap.maxRequests, 4);
+  assert.equal(f.context.claim.goal.config.backend.maxOutputTokens, 65536);
+});
+
 test("failed isolated invocation shares terminal cleanup with its caller", async (t) => {
   const f = await fixture(t, "review");
   let terminalCleanupCalls = 0;
