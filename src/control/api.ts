@@ -1,3 +1,4 @@
+import { executionLimits } from "./executionLimits.js";
 import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { instructionManifest } from "./projectContext.js";
 import { supportBundle } from "./supportBundle.js";
@@ -779,6 +780,7 @@ export function createControlServer(
           valid: true,
           config,
           contextBudget: context.contextBudget,
+          executionLimits: executionLimits(config, store.setting("configuration-snapshot")),
         });
       }
       const key = req.headers["idempotency-key"];
@@ -2223,7 +2225,7 @@ export function openApi() {
   };
   paths["/api/v1/goal-drafts"] = {
     post: operation(
-      "Validate a draft against applied project authority",
+      "Validate a draft against applied project authority and inspect effective execution limits",
       objectSchema(
         {
           projectId: { type: "string" },

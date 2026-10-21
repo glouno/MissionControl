@@ -457,10 +457,13 @@ try {
     .getByRole("button", { name: "Apply filters", exact: true })
     .click();
   await page.getByRole("button", { name: "Inspect goal", exact: true }).click();
+  page.once("dialog", d => d.accept("Inspected disposable synthetic resources before resuming"));
   await page
     .locator("#detail")
     .getByRole("button", { name: "Resume", exact: true })
     .click();
+  await waitFor(async () => (await api("/goals/" + controlled.id)).status === "running", "resumed goal state");
+  await page.waitForFunction(() => [...document.querySelectorAll("#detail button")].some(b => b.textContent === "Pause" && !b.disabled));
   await page
     .locator("#detail")
     .getByRole("button", { name: "Pause", exact: true })

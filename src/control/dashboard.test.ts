@@ -43,6 +43,9 @@ test("dashboard reports blocked readiness and reserved budgets separately withou
     throw Error("synthetic-sensitive");
   });
   assert.equal(snapshot.projects[0].readiness.admissible, false);
+  assert.equal(snapshot.projects[0].executionLimits.planning.timeoutMs, goal.config.timeoutMs);
+  assert.equal(snapshot.executionLimits[goal.id].runReservationUsd, 1);
+  assert.equal(snapshot.executionLimits[goal.id].harness, "Synthetic");
   assert.equal(snapshot.projects[0].readiness.liveQualified, false);
   const budget = snapshot.budgets[goal.id];
   assert.ok("reservedUsd" in budget);

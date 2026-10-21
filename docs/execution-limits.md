@@ -64,23 +64,55 @@ fully specified task. It does not recover a refused or output-exhausted existing
 goal, refund previous admissions, change output limits or certify free-form native
 planning. Retained failures still require their normal inspected recovery path.
 
-## Planning bounds
+## Planning limits and slow inference
 
-Planning and replanning have a controller-owned two-minute execution deadline,
-even when coding has a longer allowance. The native paid inference gateway
-admits at most four requests per planning capability, including retries, with
-at most 8,192 output tokens per request or the lower configured provider limit.
-The request counter persists across gateway restart and is consumed atomically
-before upstream authentication or dispatch. Locally refused requests never
-become provider billing evidence. Coding and independent review retain their
-admitted limits. Portable tool-loop planners stop after four model calls and
-retain their measured prefix cost. Native subscription planners share the
-deadline; their vendor runtime does not expose this gateway request/output fence.
+Planning and replanning inherit the goal's admitted `timeoutMs` by default. There
+is no additional two-minute deadline and no separate 8,192-token native planning
+cap. The provider/session output limit still applies, including reasoning where
+the provider counts it. Reaching that limit can truncate output; it does not
+reserve tokens for a final JSON plan. Structured output and validation prevent
+partial plans from being installed, but cannot guarantee successful generation.
 
-These bounds stop runaway investigation; they do not guarantee a model will
-produce a plan. Truncated, timed-out or invalid output is not installed as a
-plan. Inspect retained source, diagnostics and unresolved usage before using
-`goal reviewed` with an operator-reviewed fixed plan. The supported admission
-path bypasses the planner atomically and keeps ordinary project, task, path,
-resource, dependency, budget and verification validation. It does not replay
-failed requests or release historical unknown holds.
+An operator may configure `planning: { timeoutMs: 600000, maxRequests: 12 }` on a
+project. The optional timeout only shortens the admitted execution allowance.
+Planning defaults to 40 native gateway attempts or portable model turns. Native
+gateway attempts include retries and locally refused attempts, and their counter
+persists across restart. Portable provider retries remain separately bounded.
+Native subscriptions enforce the deadline and their invocation policy, but do
+not expose the paid gateway request fence. Ordinary coding/review, cancellation,
+no-progress policy, dollar reservations and installation admission remain active.
+
+Inspect retained source, diagnostics and unresolved usage after exhaustion.
+Use `goal reviewed` with an operator-reviewed fixed plan, or explicitly authorize
+a revised admission. Never replay uncertain requests or refund historical holds
+merely because a limit changed. Removing all deadlines would leave stalled HTTP,
+tools and cleanup without a final bound; tokens alone cannot detect those stalls.
+
+## Inspect effective limits before launch
+
+`POST /api/v1/goal-drafts` returns `executionLimits` alongside the validated
+configuration and context budget. The dashboard shows these limits on project,
+backlog launch, validated draft and goal detail views. They include harness,
+output cap (when established), planning allowance, execution/no-progress timeouts,
+workers, attempts, replans, run reservations and publication permissions. Global
+admission and paid-concurrency limits are shown separately from actual usage.
+Task details show CPU, memory, paths and verification commands. Readiness and the
+limit projection do not grant execution; the server rechecks admission on launch.
+
+## Conversations and caching
+
+Native paid Codex starts a new ephemeral app-server thread per invocation (plan,
+coding attempt, review), rather than one durable thread per mission. Claude uses
+no session persistence. The portable loop keeps messages within an invocation and
+can resume controller checkpoints; its simple summary truncation is not native
+Codex compaction. Independent review deliberately starts with separate state.
+
+Provider prompt caching is distinct from conversation history. Fresh threads can
+reuse identical prompt prefixes where the provider supports it; a thread ID is
+not proof of a cache hit. The native Responses gateway accounts for reported cached
+input using configured prices. Vertex accounts for reported cached input as well.
+MissionControl does not currently create explicit Vertex cache resources or
+optimize cache breakpoints/keys. Portable Azure/Bedrock pricing does not yet fully
+model provider cache read/write charges. Do not present those paths as precise
+invoice accounting. Stable reusable instructions, measured cache counters and
+native coding-session continuation need evaluation before widening session reuse.

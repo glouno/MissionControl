@@ -1,3 +1,4 @@
+import { executionLimits } from "./executionLimits.js";
 import type { ControlStore } from "./store.js";
 import { ControlError, type GoalConfig } from "./schema.js";
 import { sql } from "../sqlite.js";
@@ -63,6 +64,10 @@ export function dashboardSnapshot(
     }
     return {
       ...p,
+      executionLimits: executionLimits(
+        p.config,
+        store.setting("configuration-snapshot"),
+      ),
       readiness: {
         ...admission,
         liveQualified: false,
@@ -119,6 +124,20 @@ export function dashboardSnapshot(
     pauses: Object.fromEntries(
       goals.map((g) => [g.id, store.setting(`pause:${g.id}`) ?? null]),
     ),
+    executionLimits: Object.fromEntries(
+      goals.map((g) => [
+        g.id,
+        executionLimits(g.config, store.setting("configuration-snapshot")),
+      ]),
+    ),
+    installationLimits: {
+      maxGoalCostUsd:
+        store.setting("configuration-snapshot")?.settings?.authority
+          ?.maxGoalCostUsd ?? null,
+      maxConcurrentMeteredRuns:
+        store.setting("configuration-snapshot")?.settings?.authority
+          ?.maxConcurrentMeteredRuns ?? null,
+    },
     allowance: {
       admittedUsd: store.setting("admitted-cost-usd") ?? 0,
       maximumUsd:

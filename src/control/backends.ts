@@ -206,8 +206,9 @@ export class PortableBackend implements AgentBackend {
           );
     if (c.disableTaskHandoffs)
       tools = tools.filter((t) => t.name !== "request_human_input");
-    for (let turn = 0; turn < 40; turn++) {
-      if (c.mode === "plan" && turn >= planningLimits.maxRequests)
+    for (let turn = 0; turn <= 40; turn++) {
+      if (turn === 40 && c.mode !== "plan") break;
+      if (c.mode === "plan" && turn >= planningLimits(c.claim.goal.config).maxRequests)
         throw Object.assign(
           new ProviderFailure({
             ...failureRecord("invalid_request"),
