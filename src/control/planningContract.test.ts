@@ -21,6 +21,10 @@ test("planner schema carries qualified minima and exact trusted checks without g
   const properties = output.properties.tasks.items.properties;
   assert.equal(properties.cpuUnits.minimum, 2);
   assert.equal(properties.memoryMiB.minimum, 8192);
+  assert.equal(properties.description.maxLength, 4000);
+  assert.equal(properties.acceptanceCriteria.maxItems, 12);
+  assert.equal(properties.acceptanceCriteria.items.maxLength, 500);
+  assert.equal(properties.allowedPaths.maxItems, 100);
   assert.deepEqual(properties.verificationCommands.items.enum, [
     "mc-check",
     "git diff --check",

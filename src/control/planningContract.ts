@@ -15,6 +15,17 @@ export function plannerOutputSchema(config: GoalConfig) {
       tasks: z
         .array(
           taskSchema.extend({
+            description: z.string().min(1).max(4000),
+            dependencies: z
+              .array(z.string().min(1).max(80))
+              .max(100)
+              .optional(),
+            acceptanceCriteria: z
+              .array(z.string().min(1).max(500))
+              .min(1)
+              .max(12),
+            allowedPaths: z.array(z.string().min(1).max(500)).min(1).max(100),
+            resources: z.array(z.string().min(1).max(240)).max(20).optional(),
             cpuUnits: z.number().int().min(minimum.cpuUnits).max(16).optional(),
             memoryMiB: z
               .number()
@@ -23,7 +34,7 @@ export function plannerOutputSchema(config: GoalConfig) {
               .max(32768)
               .optional(),
             verificationCommands: commands.length
-              ? z.array(z.enum(commands)).optional()
+              ? z.array(z.enum(commands)).max(commands.length).optional()
               : z.array(z.string()).max(0).optional(),
           }),
         )
@@ -33,6 +44,9 @@ export function plannerOutputSchema(config: GoalConfig) {
     { target: "draft-7" },
   );
 }
+
+export const planningInstructions =
+  "Planning only: identify the smallest useful implementation DAG from the goal and necessary source files. Do not implement changes, run the full baseline/test suite, install dependencies, or investigate unrelated infrastructure. A fully specified single task needs one task. Each description is a concise implementation brief (at most 4000 characters), with at most 12 short acceptance criteria. Do not embed source code, test output, documentation copies, or the final implementation in the plan. Use the structured output schema; return the completed plan once the scope and checks are known.";
 
 /** Trusted project prerequisites, shared by planning and independent verification. */
 export function planningContract(config: GoalConfig) {
