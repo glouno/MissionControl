@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -753,4 +753,71 @@ for await (const line of createInterface({input:process.stdin})) {
       error.failure?.kind === "unknown" &&
       !error.message.includes("Synthetic terminal failure"),
   );
+});
+
+test("Codex planning accepts complete validated JSON before a provider whitespace tail", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mc-codex-whitespace-"));
+  const command = join(root, "codex-stub");
+  const plan = {
+    tasks: [
+      {
+        key: "one",
+        title: "One",
+        description: "Implement one",
+        allowedPaths: ["src/**"],
+        acceptanceCriteria: ["Works"],
+      },
+    ],
+  };
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+import {createInterface} from 'node:readline';
+const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+for await(const line of createInterface({input:process.stdin})) {
+ const m=JSON.parse(line);
+ if(m.method==='initialize')send({id:m.id,result:{}});
+ if(m.method==='thread/start')send({id:m.id,result:{thread:{id:'fixture'}}});
+ if(m.method==='turn/start'){
+  send({id:m.id,result:{}});
+  send({method:'item/started',params:{item:{id:'commentary',phase:'commentary'}}});
+  send({method:'item/agentMessage/delta',params:{itemId:'commentary',delta:${JSON.stringify(JSON.stringify(plan))}}});
+  send({method:'item/agentMessage/delta',params:{itemId:'final',delta:'{"tasks":['}});
+  send({method:'item/agentMessage/delta',params:{itemId:'final',delta:${JSON.stringify(JSON.stringify(plan).slice(10))}}});
+  setInterval(()=>send({method:'item/agentMessage/delta',params:{itemId:'final',delta:' \\n'}}),50);
+ }
+}
+`,
+    { mode: 0o755 },
+  );
+  try {
+    const config = goalSchema.parse({
+      title: "Plan",
+      description: "Plan",
+      repoPath: root,
+    });
+    const output = await new CodexBackend({
+      kind: "codex",
+      command: "codex",
+    }).run({
+      claim: { goal: { config } } as Claim,
+      workspace: root,
+      execution: fixtureExecution(root, command),
+      mode: "plan",
+      outputSchema: (await import("./planningContract.js")).plannerOutputSchema(
+        config,
+      ),
+      prompt: "Return the plan",
+      signal: AbortSignal.timeout(3000),
+      onCheckpoint: async () => {},
+    });
+    assert.deepEqual(JSON.parse(output.text), plan);
+    assert.equal(output.usage?.kind, "metered");
+    assert.equal(
+      output.usage?.kind === "metered" && output.usage.status,
+      "unknown",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
