@@ -2,7 +2,7 @@ import { planSchema, taskSchema, type GoalConfig } from "./schema.js";
 import { z } from "zod";
 
 /** Constrain structured output with the same prerequisites used by admission. */
-export function plannerOutputSchema(config: GoalConfig) {
+export function plannerPlanSchema(config: GoalConfig) {
   const minimum = planningContract(config).minimumResources;
   const commands = [
     ...new Set([
@@ -10,39 +10,37 @@ export function plannerOutputSchema(config: GoalConfig) {
       ...config.trustedAdditionalVerificationCommands,
     ]),
   ];
-  return z.toJSONSchema(
-    planSchema.extend({
-      tasks: z
-        .array(
-          taskSchema.extend({
-            description: z.string().min(1).max(4000),
-            dependencies: z
-              .array(z.string().min(1).max(80))
-              .max(100)
-              .optional(),
-            acceptanceCriteria: z
-              .array(z.string().min(1).max(500))
-              .min(1)
-              .max(12),
-            allowedPaths: z.array(z.string().min(1).max(500)).min(1).max(100),
-            resources: z.array(z.string().min(1).max(240)).max(20).optional(),
-            cpuUnits: z.number().int().min(minimum.cpuUnits).max(16).optional(),
-            memoryMiB: z
-              .number()
-              .int()
-              .min(minimum.memoryMiB)
-              .max(32768)
-              .optional(),
-            verificationCommands: commands.length
-              ? z.array(z.enum(commands)).max(commands.length).optional()
-              : z.array(z.string()).max(0).optional(),
-          }),
-        )
-        .min(1)
-        .max(100),
-    }),
-    { target: "draft-7" },
-  );
+  return planSchema.extend({
+    tasks: z
+      .array(
+        taskSchema.extend({
+          description: z.string().min(1).max(4000),
+          dependencies: z.array(z.string().min(1).max(80)).max(100).optional(),
+          acceptanceCriteria: z
+            .array(z.string().min(1).max(500))
+            .min(1)
+            .max(12),
+          allowedPaths: z.array(z.string().min(1).max(500)).min(1).max(100),
+          resources: z.array(z.string().min(1).max(240)).max(20).optional(),
+          cpuUnits: z.number().int().min(minimum.cpuUnits).max(16).optional(),
+          memoryMiB: z
+            .number()
+            .int()
+            .min(minimum.memoryMiB)
+            .max(32768)
+            .optional(),
+          verificationCommands: commands.length
+            ? z.array(z.enum(commands)).max(commands.length).optional()
+            : z.array(z.string()).max(0).optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+  });
+}
+
+export function plannerOutputSchema(config: GoalConfig) {
+  return z.toJSONSchema(plannerPlanSchema(config), { target: "draft-7" });
 }
 
 export const planningInstructions =

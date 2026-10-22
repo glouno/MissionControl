@@ -116,3 +116,14 @@ optimize cache breakpoints/keys. Portable Azure/Bedrock pricing does not yet ful
 model provider cache read/write charges. Do not present those paths as precise
 invoice accounting. Stable reusable instructions, measured cache counters and
 native coding-session continuation need evaluation before widening session reuse.
+
+Native Codex planning accepts a complete, validated JSON plan from the final
+agent-message stream before a provider terminal event. Some Responses deployments
+continue emitting whitespace after the closing JSON until the output allowance
+is exhausted. The controller stops that native invocation and revokes its gateway
+stream once the plan validates; independent source-mutation checks and plan
+admission still run. Partial JSON, invalid dependencies and commentary cannot
+complete planning. Missing terminal provider usage retains unknown accounting
+and reservation holds. This behavior applies to planning only, not coding or review.
+Planner descriptions and acceptance criteria are bounded implementation briefs;
+workers still have their admitted execution/context allowances.

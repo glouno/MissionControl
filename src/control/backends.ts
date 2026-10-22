@@ -9,6 +9,7 @@ import {
   failureRecord,
 } from "./reliability.js";
 import { planningLimits, planningRecovery } from "./planningLimits.js";
+import { plannerPlanSchema } from "./planningContract.js";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { terminateProcessTree } from "../util.js";
@@ -31,6 +32,7 @@ import {
 } from "./providers.js";
 import {
   questionSchema,
+  validatePlan,
   type BackendConfig,
   type Claim,
   type QuestionInput,
@@ -208,7 +210,10 @@ export class PortableBackend implements AgentBackend {
       tools = tools.filter((t) => t.name !== "request_human_input");
     for (let turn = 0; turn <= 40; turn++) {
       if (turn === 40 && c.mode !== "plan") break;
-      if (c.mode === "plan" && turn >= planningLimits(c.claim.goal.config).maxRequests)
+      if (
+        c.mode === "plan" &&
+        turn >= planningLimits(c.claim.goal.config).maxRequests
+      )
         throw Object.assign(
           new ProviderFailure({
             ...failureRecord("invalid_request"),
@@ -578,6 +583,9 @@ export class CodexBackend implements AgentBackend {
       sessionId = "",
       inputTokens = 0,
       outputTokens = 0;
+    const planningMessages = new Map<string, string>();
+    const commentaryItems = new Set<string>();
+    let planCompleted = false;
     let settle: (v: BackendResult) => void = () => {},
       reject: (e: Error) => void = () => {};
     const completed = new Promise<BackendResult>((yes, no) => {
@@ -615,6 +623,7 @@ export class CodexBackend implements AgentBackend {
         received += line.length;
         if (received > 20000000) throw new Error("Codex output limit reached");
         const m = JSON.parse(line);
+        if (planCompleted) return;
         if (m.id !== undefined && m.method === undefined) {
           const v = pending.get(m.id);
           if (v) {
@@ -690,6 +699,50 @@ export class CodexBackend implements AgentBackend {
           }
           send({ id: m.id, result: { decision: "decline" } });
           return;
+        }
+        if (
+          m.method === "item/started" &&
+          m.params?.item?.phase === "commentary"
+        )
+          commentaryItems.add(m.params.item.id);
+        if (
+          c.mode === "plan" &&
+          c.outputSchema &&
+          m.method === "item/agentMessage/delta" &&
+          !commentaryItems.has(m.params?.itemId)
+        ) {
+          const key = m.params?.itemId ?? "final";
+          const candidate =
+            (planningMessages.get(key) ?? "") + (m.params?.delta ?? "");
+          planningMessages.set(key, candidate);
+          // A complete validated plan is the result. Some providers continue
+          // generating whitespace after closing JSON until their token cap.
+          // Stop that stream rather than discard a usable plan on exhaustion.
+          try {
+            const parsed = normalizeNativeOutput(
+              JSON.parse(candidate),
+              c.outputSchema,
+            );
+            if (
+              plannerPlanSchema(c.claim.goal.config).safeParse(parsed).success
+            ) {
+              validatePlan(parsed);
+              c.signal.throwIfAborted();
+              c.assertAuthority?.();
+              planCompleted = true;
+              settle({
+                text: JSON.stringify(parsed),
+                inputTokens,
+                outputTokens,
+                sessionId,
+                usage: { kind: "metered", status: "unknown" },
+              });
+              terminateProcessTree(p.pid, "SIGTERM");
+              return;
+            }
+          } catch {
+            /* Partial or invalid JSON never completes planning. */
+          }
         }
         if (
           m.method === "item/completed" &&
