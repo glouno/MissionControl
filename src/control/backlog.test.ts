@@ -242,7 +242,7 @@ test("dependency references reject unknown, cross-project and cyclic entries; on
 test("schema 6 migration advances ledger atomically and retries after failure", async (t) => {
   const f = await fixture(t);
   f.db.exec(
-    "DROP TABLE control_backlog; DELETE FROM schema_migrations WHERE version>=7; PRAGMA user_version=6; CREATE TRIGGER fail_migration BEFORE INSERT ON schema_migrations WHEN NEW.version=7 BEGIN SELECT RAISE(ABORT,'injected migration'); END",
+    "DROP TABLE agent_invocations; DROP TABLE control_backlog; DELETE FROM schema_migrations WHERE version>=7; PRAGMA user_version=6; CREATE TRIGGER fail_migration BEFORE INSERT ON schema_migrations WHEN NEW.version=7 BEGIN SELECT RAISE(ABORT,'injected migration'); END",
   );
   assert.throws(() => new ControlStore(f.db), /injected migration/);
   assert.equal(
@@ -257,7 +257,7 @@ test("schema 6 migration advances ledger atomically and retries after failure", 
   new ControlStore(f.db);
   assert.equal(
     f.db.one<{ user_version: number }>("PRAGMA user_version")!.user_version,
-    8,
+    9,
   );
   assert.deepEqual(
     f.db
@@ -265,7 +265,7 @@ test("schema 6 migration advances ledger atomically and retries after failure", 
         "SELECT version FROM schema_migrations ORDER BY version",
       )
       .map((r) => r.version),
-    [1, 2, 3, 4, 5, 6, 7, 8],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9],
   );
 });
 test("API enforces identity, stored project scope, dependencies and explicit revisions without changing drafts", async (t) => {

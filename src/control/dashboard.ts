@@ -1,3 +1,4 @@
+import { InvocationStore } from "./invocations.js";
 import { executionLimits } from "./executionLimits.js";
 import type { ControlStore } from "./store.js";
 import { ControlError, type GoalConfig } from "./schema.js";
@@ -100,6 +101,10 @@ export function dashboardSnapshot(
       };
     });
   return {
+    invocationMetrics: Object.fromEntries(
+      goals.map((g) => [g.id, new InvocationStore(store).metrics(g.id)]),
+    ),
+    recentInvocations: new InvocationStore(store).all().slice(-100),
     goals,
     budgetAlerts: goals
       .filter(

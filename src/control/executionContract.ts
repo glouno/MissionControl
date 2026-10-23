@@ -15,15 +15,19 @@ export const executionContractSchema = z
     authentication: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("none") }).strict(),
       z
+        .object({ kind: z.literal("local"), reference: z.string().min(1) })
+        .strict(),
+      z
         .object({ kind: z.literal("controller"), reference: z.string().min(1) })
         .strict(),
       z
         .object({ kind: z.literal("session"), reference: z.string().min(1) })
         .strict(),
     ]),
-    execution: z.enum(["fake", "isolated"]),
+    execution: z.enum(["fake", "isolated", "native"]),
     usagePolicy: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("synthetic") }).strict(),
+      z.object({ kind: z.literal("observed") }).strict(),
       z
         .object({
           kind: z.literal("metered"),
@@ -46,6 +50,20 @@ export const executionContractSchema = z
   .superRefine((c, ctx) => {
     const issue = (message: string) =>
       ctx.addIssue({ code: "custom", message });
+    if (c.execution === "native") {
+      if (
+        c.harness !== "codex" ||
+        c.provider !== "codex-subscription" ||
+        c.authentication.kind !== "local" ||
+        c.usagePolicy.kind !== "observed"
+      )
+        issue(
+          "Native execution requires Codex, local subscription authentication and observed usage",
+        );
+      return;
+    }
+    if (c.usagePolicy.kind === "observed" || c.authentication.kind === "local")
+      issue("Local authentication and observed usage require native execution");
     if (c.provider === "fake") {
       if (
         c.harness !== "fake" ||
@@ -140,6 +158,11 @@ export function validateExecutionLimits(input: {
     throw Error(
       "Goal dollar limits exceed provider usage policy or lack a positive reservation",
     );
+  if (
+    policy.kind === "observed" &&
+    (input.maxCostUsd !== 0 || input.estimatePerRunUsd !== 0)
+  )
+    throw Error("Observed subscription execution cannot reserve dollars");
   if (policy.kind === "subscription") {
     if (input.maxCostUsd !== 0 || input.estimatePerRunUsd !== 0)
       throw Error(

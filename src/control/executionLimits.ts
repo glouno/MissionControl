@@ -5,6 +5,7 @@ import { planningLimits } from "./planningLimits.js";
 export function executionLimits(config: GoalConfig, snapshot?: any) {
   const kind = config.backend.kind;
   const nativePaid =
+    config.executionContract?.execution !== "native" &&
     ["codex", "claude-code"].includes(kind) &&
     config.executionContract?.usagePolicy.kind !== "subscription";
   const provider = snapshot?.hosts?.find(
@@ -23,39 +24,55 @@ export function executionLimits(config: GoalConfig, snapshot?: any) {
     ? provider?.maxOutputTokens === undefined
       ? null
       : Math.min(configuredOutput ?? 32768, provider.maxOutputTokens)
-    : kind === "fake" ||
+    : config.executionContract?.execution === "native" ||
+        kind === "fake" ||
         config.executionContract?.usagePolicy.kind === "subscription"
       ? null
       : configuredOutput;
   return {
+    environment:
+      config.executionContract?.execution === "isolated"
+        ? "container sandbox"
+        : (config.executionContract?.execution ?? "fake"),
+    resourceEnforcement:
+      config.executionContract?.execution === "native"
+        ? "scheduler accounting only"
+        : "container limits",
     harness:
-      kind === "fake"
-        ? "Synthetic"
-        : kind === "codex"
-          ? "Codex app-server"
-          : kind === "claude-code"
-            ? "Claude Code"
-            : "MissionControl portable tool loop",
+      config.executionContract?.execution === "native"
+        ? "Codex exec (native devbox)"
+        : kind === "fake"
+          ? "Synthetic"
+          : kind === "codex"
+            ? "Codex app-server"
+            : kind === "claude-code"
+              ? "Claude Code"
+              : "MissionControl portable tool loop",
     usagePolicy:
       config.executionContract?.usagePolicy.kind ??
       (kind === "fake" ? "synthetic" : "metered"),
     goalCostCeilingUsd: config.maxCostUsd,
     runReservationUsd: config.estimatePerRunUsd,
     timeoutMs: config.timeoutMs,
-    planning: planningLimits(config),
+    planning:
+      config.executionContract?.execution === "native"
+        ? { timeoutMs: planningLimits(config).timeoutMs, maxRequests: null }
+        : planningLimits(config),
     outputTokensPerRequest: output,
     outputLimitMeaning:
       output === null
         ? "Not established by this projection; inspect native policy or provider readiness"
         : "Includes reasoning where the provider counts it; reaching the cap may truncate output. Native gateway uses the currently applied deployment limit",
     planningRequestMeaning:
-      kind === "fake"
-        ? "No inference"
-        : config.executionContract?.usagePolicy.kind === "subscription"
-          ? "Vendor runtime controls requests; controller planning request fence unavailable"
-          : nativePaid
-            ? "Gateway attempts including retries and locally refused attempts"
-            : "Portable model turns; provider retries are bounded separately",
+      config.executionContract?.execution === "native"
+        ? "Underlying requests are not fenced or counted by this adapter; inspect observed invocation metrics"
+        : kind === "fake"
+          ? "No inference"
+          : config.executionContract?.usagePolicy.kind === "subscription"
+            ? "Vendor runtime controls requests; controller planning request fence unavailable"
+            : nativePaid
+              ? "Gateway attempts including retries and locally refused attempts"
+              : "Portable model turns; provider retries are bounded separately",
     maxWorkers: config.maxWorkers,
     executionResources: config.executionResources ?? null,
     maxAttempts: config.maxAttempts,

@@ -339,7 +339,7 @@ export function classifyFailure(
   )
     kind = "policy_refusal";
   else if (
-    /insufficient.?quota|quota.?exhaust|billing.?limit|credits?.?(exhaust|insufficient)/i.test(
+    /insufficient.?quota|quota.?exhaust|billing.?limit|credits?.?(exhaust|insufficient)|hit your usage limit/i.test(
       text,
     )
   )

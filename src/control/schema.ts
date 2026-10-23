@@ -1,3 +1,4 @@
+import { nativeProfileSchema } from "./nativeConfig.js";
 import { executionContractSchema } from "./executionContract.js";
 import { usageSchema } from "./usage.js";
 import { z } from "zod";
@@ -95,7 +96,8 @@ export const goalSchema = z
     admission: z
       .object({
         configurationHash: z.string().regex(/^[a-f0-9]{64}$/),
-        executionMode: z.enum(["fake", "isolated"]),
+        nativeProfile: nativeProfileSchema.optional(),
+        executionMode: z.enum(["fake", "isolated", "native"]),
         providerId: z.string().optional(),
         executionImageDigest: z
           .string()
@@ -261,6 +263,18 @@ export const taskSchema = z.object({
 });
 export const planSchema = z.object({
   tasks: z.array(taskSchema).min(1).max(100),
+});
+// Keep omitted resources omitted until project minima are resolved at admission.
+export const inputPlanSchema = z.object({
+  tasks: z
+    .array(
+      taskSchema.extend({
+        cpuUnits: taskSchema.shape.cpuUnits.removeDefault().optional(),
+        memoryMiB: taskSchema.shape.memoryMiB.removeDefault().optional(),
+      }),
+    )
+    .min(1)
+    .max(100),
 });
 export const reviewSchema = z.object({
   resolvedObservations: z.array(z.string()).optional(),

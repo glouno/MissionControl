@@ -100,7 +100,7 @@ export function executionUsage(
   },
 ): Usage {
   const policy = config.executionContract?.usagePolicy.kind;
-  if (policy === "subscription") {
+  if (policy === "subscription" || policy === "observed") {
     if (result.costUsd !== undefined)
       throw Error("Subscription execution cannot report dollar costs");
     if (result.usage) {
@@ -118,7 +118,11 @@ export function executionUsage(
   const usage = backendUsage(result, config.backend.kind === "fake");
   if (policy === "metered" && usage.kind !== "metered")
     throw Error("Execution usage differs from admitted metered policy");
-  if (policy !== "subscription" && usage.kind === "subscription")
+  if (
+    policy !== "subscription" &&
+    policy !== "observed" &&
+    usage.kind === "subscription"
+  )
     throw Error("Subscription usage requires admitted subscription policy");
   return usage;
 }

@@ -1,3 +1,6 @@
+import { nativePreflight } from "./nativeRuntime.js";
+import { InvocationStore } from "./invocations.js";
+import { explainProject } from "./projectExecution.js";
 import { executionLimits } from "./executionLimits.js";
 import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { instructionManifest } from "./projectContext.js";
@@ -27,6 +30,7 @@ import {
   goalSchema,
   backendSwitchSchema,
   planSchema,
+  inputPlanSchema,
   questionSchema,
   ownerOperationSchema,
   scheduleSchema,
@@ -65,7 +69,7 @@ import {
 const reviewedGoalSchema = z
   .object({
     goal: z.unknown(),
-    plan: planSchema,
+    plan: inputPlanSchema,
   })
   .strict();
 const claimSchema = z.object({
@@ -761,6 +765,65 @@ export function createControlServer(
           ),
         );
       }
+      const projectInspection =
+        /^\/projects\/([^/]+)\/(explain|preflight)$/.exec(path);
+      if (projectInspection && method === "GET") {
+        scopedRead();
+        const project = store
+          .projects()
+          .find((p) => p.id === projectInspection[1]);
+        if (!project)
+          throw new ControlError("not_found", "Project not found", 404);
+        if (automation && !automation.projectIds.includes(project.id))
+          throw new ControlError(
+            "forbidden",
+            "Project is outside automation scope",
+            403,
+          );
+        return send(
+          res,
+          200,
+          await explainProject(
+            project.config,
+            projectInspection[2] === "preflight",
+          ),
+        );
+      }
+      const invocationInspection =
+        /^\/goals\/([^/]+)\/(invocations|metrics|experiment)$/.exec(path);
+      if (invocationInspection && method === "GET") {
+        scopedRead();
+        const goal = store.getGoal(invocationInspection[1]);
+        if (
+          automation &&
+          (!goal.config.projectId ||
+            !automation.projectIds.includes(goal.config.projectId))
+        )
+          throw new ControlError(
+            "forbidden",
+            "Goal is outside automation scope",
+            403,
+          );
+        const ledger = new InvocationStore(store);
+        const records = ledger.all(goal.id);
+        const after = url.searchParams.get("after");
+        const offset = after ? records.findIndex((r) => r.id === after) + 1 : 0;
+        if (after && offset === 0)
+          throw new ControlError(
+            "invalid_cursor",
+            "Invocation cursor does not belong to goal",
+            400,
+          );
+        return send(
+          res,
+          200,
+          invocationInspection[2] === "metrics"
+            ? ledger.metrics(goal.id)
+            : invocationInspection[2] === "experiment"
+              ? ledger.experiment(goal.id)
+              : records.slice(offset, offset + number(url, "limit", 100)),
+        );
+      }
       if (path === "/goal-drafts" && method === "POST") {
         scopedRead();
         if (!options.validateGoal)
@@ -780,7 +843,10 @@ export function createControlServer(
           valid: true,
           config,
           contextBudget: context.contextBudget,
-          executionLimits: executionLimits(config, store.setting("configuration-snapshot")),
+          executionLimits: executionLimits(
+            config,
+            store.setting("configuration-snapshot"),
+          ),
         });
       }
       const key = req.headers["idempotency-key"];
@@ -856,6 +922,15 @@ export function createControlServer(
         }
         if (input) {
           preflightConfig = options.validateGoal(input);
+          if (preflightConfig.executionContract?.execution === "native") {
+            const readiness = await nativePreflight(preflightConfig);
+            if (!readiness.ready)
+              throw new ControlError(
+                "native_preflight",
+                readiness.faults.join("; "),
+                409,
+              );
+          }
           await instructionManifest(
             { config: preflightConfig } as import("./schema.js").Goal,
             preflightConfig.repoPath,
@@ -1196,7 +1271,7 @@ export function createControlServer(
           }
           if (gm[2] === "plan") {
             const v = z
-              .object({ revision: z.number().int(), plan: planSchema })
+              .object({ revision: z.number().int(), plan: inputPlanSchema })
               .parse(body);
             return store.installPlan(gid, v.plan, v.revision, principal.actor);
           }
@@ -1687,6 +1762,50 @@ export function openApi() {
         schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
       },
     ];
+  for (const action of ["invocations", "metrics", "experiment"])
+    paths[`/api/v1/goals/{id}/${action}`] = {
+      parameters: [idParameter],
+      get: {
+        summary: `Inspect recorded execution ${action}`,
+        parameters:
+          action === "invocations"
+            ? [
+                {
+                  name: "limit",
+                  in: "query",
+                  schema: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 500,
+                    default: 100,
+                  },
+                },
+                { name: "after", in: "query", schema: { type: "string" } },
+              ]
+            : [],
+        responses: {
+          200: {
+            description: "Measured metadata; unavailable values remain null",
+          },
+          401: { description: "Authentication required" },
+          403: { description: "Outside permitted project scope" },
+        },
+      },
+    };
+  for (const action of ["explain", "preflight"])
+    paths[`/api/v1/projects/{id}/${action}`] = {
+      parameters: [idParameter],
+      get: {
+        summary: `Inspect selected execution ${action} without inference`,
+        responses: {
+          200: {
+            description: "Effective project settings and actionable readiness",
+          },
+          401: { description: "Authentication required" },
+          403: { description: "Outside permitted project scope" },
+        },
+      },
+    };
   paths["/api/v1/goals/{id}/replacement"] = {
     parameters: [idParameter],
     post: {

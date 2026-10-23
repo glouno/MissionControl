@@ -1,3 +1,4 @@
+import { nativePreflight } from "./control/nativeRuntime.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { spawnSync } from "node:child_process";
 import { statfs } from "node:fs/promises";
@@ -266,7 +267,30 @@ export async function diagnose(
           : "Configure a private credential reference",
       });
   }
+  const nativeProjects = await Promise.all(
+    config.projects
+      .filter((p) => p.executionMode === "native")
+      .map(async (p) => {
+        try {
+          return {
+            projectId: p.id,
+            ...(await nativePreflight(
+              effectiveGoal(config, p.id, "Native readiness", {}, false),
+            )),
+          };
+        } catch {
+          return {
+            projectId: p.id,
+            ready: false,
+            faults: [
+              "Inspect selected native profile and repository prerequisites",
+            ],
+          };
+        }
+      }),
+  );
   return {
+    nativeProjects,
     node: process.version,
     platform: process.platform,
     architecture: process.arch,
