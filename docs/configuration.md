@@ -75,12 +75,13 @@ provider invoices. Synthetic Linux Docker qualification does not establish live
 Azure/Bedrock or macOS support.
 
 Real provider files require an `executionContract` separating harness, provider,
-authentication reference, execution and usage policy. Contracts reject real host
-execution, mismatched native subscription harnesses and subscription dollar
-policies. Metered limits cannot widen the provider's policy. Authentication
+authentication reference, execution and usage policy. Native host execution
+requires the explicit local Codex/observed-usage contract; other real providers
+retain isolated execution. Contracts reject mismatched harnesses and subscription
+dollar policies. Metered limits cannot widen the provider's policy. Authentication
 references name controller capabilities or dedicated environments, never contain
 credentials. Admitted contracts remain in immutable goal/attempt snapshots.
-Native subscription admission requires matching [private acceptance evidence](subscriptions.md). Missing or stale evidence keeps admission closed.
+Container subscription admission requires matching [private acceptance evidence](subscriptions.md). Missing or stale container evidence keeps that route closed.
 
 Provider authentication must reference its own host runtime provider ID (metered)
 or a matching dedicated authentication environment (subscription). Configuration
@@ -206,3 +207,13 @@ behavior and are shown as not explicitly qualified in the limits view. Add a
 reviewed declaration through configuration application; existing goals keep
 immutable admitted configuration. This source change does not retroactively
 qualify or repair existing execution environments.
+
+## Native profiles and execution
+
+`executionMode: "native"` selects installed Codex with an existing local ChatGPT
+login and `usagePolicy.kind: "observed"`. A provider's local authentication
+reference selects exactly one named `host.nativeProfiles` entry. Native
+configuration does not require container images, dedicated auth environments or
+gateways. Persisted `fake` and `isolated` contracts keep their original meanings;
+`isolated` is the container sandbox route. See [native configuration and inspection](native-execution.md)
+and [migration/rollback](native-migration.md).

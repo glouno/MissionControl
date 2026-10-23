@@ -1,7 +1,9 @@
 # Installation qualification
 
 This repository is a v1 preview candidate. Core builds require Node 24 LTS
-and Git. Real execution requires a qualified Docker Engine/Desktop installation.
+and Git. Native Codex execution requires Linux/WSL, an existing selected ChatGPT
+login and prepared devbox tools; see [native setup](native-execution.md). Container
+execution requires its qualified Docker Engine/Desktop installation.
 Encrypted backup requires age. macOS image-build ownership additionally requires
 Python 3 on PATH for the native process start-time probe. Matrix is optional and does not make Rust a core
 installation dependency.
@@ -30,8 +32,9 @@ records implementation, configured checks and independent review before success.
 
 Edit external configuration, run `config validate`, then `config apply`. Changes
 to host/provider/server settings require a stopped instance and `config apply
---offline`. Existing goals retain their admitted revision. Real provider modes
-remain gated on isolation qualification; there is no host fallback.
+--offline`. Existing goals retain their admitted revision. Native and container readiness
+are separate; container providers retain their isolation qualification and never
+fall back to host execution.
 
 `service install` prepares a separate user service definition. It does not enable
 or start it. Run `service start` explicitly after configuration review and

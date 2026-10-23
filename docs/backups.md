@@ -84,7 +84,7 @@ separate Matrix, subscription, configuration, or homeserver backup.
 
 Schema 7 backups include the durable project backlog in the authoritative SQLite
 snapshot, including revisions, dependency IDs, statuses and linked goal IDs.
-Backup manifests and recovery inspection support database schemas 1 through 8;
+Backup manifests and recovery inspection support database schemas 1 through 9;
 ledger and foreign-key checks still apply. Restoring a launched entry preserves
 its original launch revision: matching replay returns its original goal without
 creating another admission. Pending backlog remains inert after recovery and

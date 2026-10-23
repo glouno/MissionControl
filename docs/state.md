@@ -151,8 +151,14 @@ Schema 7 adds durable project backlog (`control_backlog`) with indexed project,
 status and priority, revision concurrency control, immutable entry identity and a
 unique foreign-key goal link. Fresh initialization and schema-6 upgrades apply
 migration 7 and its ledger entry with `PRAGMA user_version` in one transaction.
-Instance inspection accepts supported schemas 1 through 8 and checks their exact
+Instance inspection accepts supported schemas 1 through 9 and checks their exact
 ledger. Recovery retains pending, archived and launched entries and the original
 launch revision. Backlog changes do not start execution; explicit launch commits
 admission, accounting, planning job, status and goal link atomically. See
 [backlog workflow](agents.md#durable-project-backlog) for dependency and replay rules.
+
+Schema 9 adds controller-owned `agent_invocations` with goal/attempt references.
+It records native, synthetic and container adapter activity separately from
+private raw output. Existing admissions and historical JSON remain unchanged.
+Native Linux PID/group/start/boot records participate in the same retained
+ownership checks as container resources; see [native recovery](native-execution.md).
