@@ -1043,6 +1043,12 @@ export class Scheduler {
         },
         prompt: [
           context.prompt,
+          ...(context.mode === "review"
+            ? [
+                `Repository instructions and pinned contracts: ${JSON.stringify(await instructionManifest(g, context.workspace))}`,
+                `Required verification commands: ${JSON.stringify(g.config.verificationCommands)}`,
+              ]
+            : []),
           ...(g.config.admission?.contexts ?? []).map(
             (c) =>
               `Selected private context ${c.path} (sha256 ${c.hash}):\n${c.content}`,

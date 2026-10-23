@@ -717,3 +717,33 @@ test("fenced worker authority cannot revive after paused goal resumes", async (t
   assert.equal(f.store.attempts(goal.id)[0].outcome, "recovering");
   assert.equal(f.store.canSpend(goal.id).settledUsd, 0);
 });
+
+
+test("independent reviews receive admitted instructions and exact checks without native discovery", async (t) => {
+  const f = await fixture(t);
+  const goal = await f.goal("review-context", {
+    runtimeInstructions: "Use installed contract artifact abc123. Missing contracts belong to coordinator.",
+    instructionFiles: ["AGENTS.md"],
+    verificationCommands: ["/opt/contracts/check"],
+  } as any);
+  await writeFile(join(goal.config.repoPath, "AGENTS.md"), "Contract ownership stays with Data.");
+  let received = "";
+  const scheduler = new Scheduler(f.store, f.root, "unused", {
+    backend: () => ({ run: async (context: any) => {
+      received = context.prompt;
+      return { text: "synthetic review", costUsd: 0, inputTokens: 0, outputTokens: 0 };
+    }}),
+  } as any);
+  await scheduler.runBackend(goal, {
+    claim: { goal, task: { id: "review" }, generation: 0 } as any,
+    workspace: goal.config.repoPath,
+    mode: "review",
+    prompt: "Inspect candidate commit.",
+    signal: new AbortController().signal,
+    onCheckpoint: async () => {},
+  }, "review");
+  assert.ok(received.includes("Inspect candidate commit."));
+  assert.ok(received.includes("Missing contracts belong to coordinator."));
+  assert.ok(received.includes("Contract ownership stays with Data."));
+  assert.ok(received.includes("/opt/contracts/check"));
+});
