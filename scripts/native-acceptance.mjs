@@ -12,7 +12,7 @@ import { createServer } from "node:net";
 import { once } from "node:events";
 import { classifyFailure } from "../dist/control/reliability.js";
 import { nativePreflight } from "../dist/control/nativeRuntime.js";
-import { nativeCommand } from "../dist/control/nativeProcess.js";
+import { nativeCommand, ownedGroup } from "../dist/control/nativeProcess.js";
 import {
   nativeEnvironment,
   nativeProfileSchema,
@@ -35,6 +35,21 @@ const configDir = join(root, "config"),
   secrets = join(root, "secrets");
 const executable = resolve(flags.codex),
   codexHome = resolve(flags["codex-home"]);
+const availableCases = [
+  ...(flags["real-repo"] ? ["real"] : []),
+  "ordinary",
+  "check-repair",
+  "review-repair",
+  "cancellation",
+  "restart",
+];
+const selectedCases = flags.cases ? flags.cases.split(",") : availableCases;
+assert.ok(
+  selectedCases.length &&
+    selectedCases.every((name) => availableCases.includes(name)) &&
+    new Set(selectedCases).size === selectedCases.length,
+  "--cases must select known acceptance cases; real requires --real-repo",
+);
 const profile = nativeProfileSchema.parse({
   executable,
   codexHome,
@@ -55,6 +70,7 @@ const report = {
   version: 1,
   sourceRevision: (await exec("git", ["rev-parse", "HEAD"])).stdout.trim(),
   model: flags.model,
+  caseSelection: selectedCases,
   cases: [],
   gaps: [],
   productionActivated: false,
@@ -127,6 +143,41 @@ async function inspect(goal) {
   result.evidence = await request(`/goals/${goal.id}/evidence?limit=100`);
   result.recovery = await request(`/goals/${goal.id}/recovery`);
   return result;
+}
+async function runningSleep(row) {
+  if (!row.process || row.outcome !== "active") return false;
+  const raw = await readFile(
+    join(state, "agent-output", row.id, "events.jsonl"),
+    "utf8",
+  ).catch(() => "");
+  const events = raw.split("\n").flatMap((line) => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
+  const started = events.findLast(
+    (event) =>
+      event.type === "item.started" &&
+      event.item?.type === "command_execution" &&
+      /time\.sleep\(\s*600\s*\)|\bsleep\s+600\b/.test(event.item.command ?? ""),
+  );
+  if (
+    !started ||
+    events.some(
+      (event) =>
+        event.type === "item.completed" && event.item?.id === started.item.id,
+    )
+  )
+    return false;
+  for (const member of await ownedGroup(row.process)) {
+    const command = await readFile(`/proc/${member.pid}/cmdline`, "utf8").catch(
+      () => "",
+    );
+    if (/time\.sleep\(\s*600\s*\)|\bsleep\s+600\b/.test(command)) return true;
+  }
+  return false;
 }
 async function admit(projectId, description, criteria, key) {
   return request(
@@ -307,14 +358,7 @@ try {
   await save("prerequisite-failure.json", report.prerequisiteFailure);
   const baseTask =
     "Update module.py so total(values) sums only values >= 0, preserving empty input as 0. Keep check.py unchanged. This is a small disposable Python fixture; return the normal worker handoff and let MissionControl run independent checks and review. Do not create a Git commit, use external integrations, or start subagents.";
-  for (const name of [
-    ...(flags["real-repo"] ? ["real"] : []),
-    "ordinary",
-    "check-repair",
-    "review-repair",
-    "cancellation",
-    "restart",
-  ]) {
+  for (const name of selectedCases) {
     let description = baseTask;
     if (name.includes("repair"))
       description +=
@@ -335,25 +379,51 @@ try {
             ["total([1, -2, 3]) == 4", "total([]) == 0"],
             name,
           );
+    let interruptedInvocation;
     if (["cancellation", "restart"].includes(name)) {
       await wait(async () => {
         const invocations = await request(`/goals/${goal.id}/invocations`),
           current = await request(`/goals/${goal.id}`);
-        return (
-          invocations.some((row) => row.process && row.firstActivityAt) ||
-          ["paused", "failed"].includes(current.status)
+        for (const row of invocations) {
+          if (await runningSleep(row)) {
+            interruptedInvocation = row;
+            return true;
+          }
+        }
+        return ["paused", "failed", "completed", "cancelled"].includes(
+          current.status,
         );
       });
       const current = await request(`/goals/${goal.id}`);
       if (current.status === "running") {
+        assert.ok(
+          interruptedInvocation,
+          "Lifecycle interruption requires an actual owned sleep command",
+        );
         if (name === "cancellation")
           await request(`/goals/${goal.id}/state`, {
             status: "cancelled",
             revision: current.revision,
           });
         else {
+          const crashedPid = controller.pid;
           await stop("SIGKILL");
+          const owner = JSON.parse(
+            await readFile(join(state, "controller.lock"), "utf8"),
+          );
+          assert.equal(
+            owner.pid,
+            crashedPid,
+            "Recover only the lock owned by this crashed controller",
+          );
+          await cli("state", "recover-lock", "--nonce", owner.nonce);
           await start();
+          const recovered = await request(`/goals/${goal.id}`);
+          if (recovered.status === "running")
+            await request(`/goals/${goal.id}/state`, {
+              status: "paused",
+              revision: recovered.revision,
+            });
         }
         await wait(async () =>
           (await request(`/goals/${goal.id}/tasks`)).every(
@@ -368,6 +438,33 @@ try {
         ),
       );
     const result = await inspect(goal);
+    if (interruptedInvocation) {
+      const rows = await request(`/goals/${goal.id}/invocations`);
+      assert.ok(
+        rows.every(
+          (row) => !["active", "cleanup_blocked"].includes(row.outcome),
+        ),
+        "Lifecycle recovery retained active execution",
+      );
+      for (const row of rows)
+        if (row.process) assert.deepEqual(await ownedGroup(row.process), []);
+      assert.equal(
+        rows.find((row) => row.id === interruptedInvocation.id)?.outcome,
+        "interrupted",
+      );
+      assert.equal(
+        result.status,
+        name === "cancellation" ? "cancelled" : "paused",
+      );
+      result.lifecycle = {
+        interruptedInvocationId: interruptedInvocation.id,
+        interruptionPoint:
+          "Owned running sleep command, confirmed by JSONL and /proc",
+        processesStopped: true,
+        pausedAfterRestartForInspection: name === "restart",
+        controllerLockRecoveredThroughSupportedCommand: name === "restart",
+      };
+    }
     report.cases.push({ name, ...result });
     await save(`${name}.json`, result);
     await save("summary.json", report);
@@ -385,6 +482,23 @@ try {
     if (name.includes("repair")) {
       assert.equal(result.tasks.length, 1);
       assert.ok(result.tasks[0].attempts >= 2);
+      const writers = result.runs.filter(
+        (run) => run.kind === "agent" && run.phase === "implement",
+      );
+      assert.ok(writers.length >= 2 && writers[0].sessionId);
+      assert.ok(
+        writers.every((run) => run.sessionId === writers[0].sessionId),
+        "Repair must resume the saved implementation session",
+      );
+      const reviews = result.runs.filter(
+        (run) => run.kind === "agent" && run.phase === "review",
+      );
+      assert.equal(
+        new Set(reviews.map((run) => run.sessionId)).size,
+        reviews.length,
+        "Each review needs a fresh session",
+      );
+      assert.ok(reviews.every((run) => run.sessionId !== writers[0].sessionId));
     }
     if (name === "ordinary") {
       const direct = join(root, "direct");
