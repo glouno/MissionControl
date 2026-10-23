@@ -69,6 +69,9 @@ binding compatibility. The synthetic installed workflow exercises equivalent
 CLI/API/MCP inspection. Component tests do not replace the outstanding live cases.
 
 The implementation suite before this source review passed 486 tests, including 20 native behavioral tests.
+The source review suite passed 495 core tests, including 21 native behavioral
+tests and eight path-boundary tests. A fresh ordinary delivery, cancellation and
+crash/restart campaign passed with the same selected Codex login and model.
 Typecheck, Python status, privacy and package checks passed. The required audit
 identified GHSA-rxp7-6hxx-x8q5 in transitive `ip-address` 10.7.2; the lockfile now
 selects 10.7.4 and the production dependency audit reports zero vulnerabilities.

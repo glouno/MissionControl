@@ -95,7 +95,7 @@ belongs to the exact installed release, not to the command name.
 
 ## Source and installation layout
 
-Keep one canonical checkout of `glouno/MissionControl`; the directory can simply
+Keep one canonical checkout of the `MissionControl` repository; the directory can simply
 be named `MissionControl`. Put installation configuration, credentials, state,
 immutable releases and acceptance receipts outside that checkout. Temporary PR
 worktrees share the repository history and should be retired after merge.
