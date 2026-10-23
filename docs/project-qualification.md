@@ -215,7 +215,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:CLI",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "53597d626fe085bd2855d0cd87fe070ae81f97d5273c9cc502350fdf65664863",
+        "configurationSha256": "fd921b1a12051df955738a0c2e14c5291dd3b9e32ae0a9a605b2a77701b1294e",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -259,7 +259,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:API",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "9549f78f7eb6aefce07c56669b08417df5f9ffbc9b11c6f71fb128ade20ae1e4",
+        "configurationSha256": "b3bdae07ebe5a87c17aa8b30ebb34a5e81e814ef87f4b666bbf1c348e73a76a0",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -303,7 +303,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Dashboard",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "bebd5777cc367cb67f28f37f94343c6255e4c22fd87a9b787b6888ec5e45fb77",
+        "configurationSha256": "55ff6a3872ac7d6b84ab8a1a554be3f54f16e13f0b7be4e1e201679ee4522257",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -347,7 +347,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Service",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "44f3eb0352486afe310e4727a561e3db09c24e1a340f78eae4a90a2808203444",
+        "configurationSha256": "b2772cfcbf3ab31f6180735bd9dee2b360ced5719e06cad2678348561871d4ab",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -396,7 +396,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:CLI",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "53597d626fe085bd2855d0cd87fe070ae81f97d5273c9cc502350fdf65664863",
+        "configurationSha256": "fd921b1a12051df955738a0c2e14c5291dd3b9e32ae0a9a605b2a77701b1294e",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -451,7 +451,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:API",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "9549f78f7eb6aefce07c56669b08417df5f9ffbc9b11c6f71fb128ade20ae1e4",
+        "configurationSha256": "b3bdae07ebe5a87c17aa8b30ebb34a5e81e814ef87f4b666bbf1c348e73a76a0",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -506,7 +506,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Dashboard",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "bebd5777cc367cb67f28f37f94343c6255e4c22fd87a9b787b6888ec5e45fb77",
+        "configurationSha256": "55ff6a3872ac7d6b84ab8a1a554be3f54f16e13f0b7be4e1e201679ee4522257",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -561,7 +561,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Service",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "44f3eb0352486afe310e4727a561e3db09c24e1a340f78eae4a90a2808203444",
+        "configurationSha256": "b2772cfcbf3ab31f6180735bd9dee2b360ced5719e06cad2678348561871d4ab",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -791,7 +791,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:CLI",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "53597d626fe085bd2855d0cd87fe070ae81f97d5273c9cc502350fdf65664863",
+        "configurationSha256": "fd921b1a12051df955738a0c2e14c5291dd3b9e32ae0a9a605b2a77701b1294e",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -825,8 +825,13 @@ These are invented deterministic metadata, never real application receipts.
             "policySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "requiredCommands": ["node --version", "test -f verification.json"],
-        "localVerificationDocumentation": ["docs/local-verification.md"],
+        "requiredCommands": [
+          "node --version",
+          "test -f verification.json"
+        ],
+        "localVerificationDocumentation": [
+          "docs/local-verification.md"
+        ],
         "evidenceRevision": "fixture-generation-1"
       },
       {
@@ -835,7 +840,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:API",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "9549f78f7eb6aefce07c56669b08417df5f9ffbc9b11c6f71fb128ade20ae1e4",
+        "configurationSha256": "b3bdae07ebe5a87c17aa8b30ebb34a5e81e814ef87f4b666bbf1c348e73a76a0",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -869,8 +874,13 @@ These are invented deterministic metadata, never real application receipts.
             "policySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "requiredCommands": ["node --version", "test -f verification.json"],
-        "localVerificationDocumentation": ["docs/local-verification.md"],
+        "requiredCommands": [
+          "node --version",
+          "test -f verification.json"
+        ],
+        "localVerificationDocumentation": [
+          "docs/local-verification.md"
+        ],
         "evidenceRevision": "fixture-generation-1"
       },
       {
@@ -879,7 +889,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Dashboard",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "bebd5777cc367cb67f28f37f94343c6255e4c22fd87a9b787b6888ec5e45fb77",
+        "configurationSha256": "55ff6a3872ac7d6b84ab8a1a554be3f54f16e13f0b7be4e1e201679ee4522257",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -913,8 +923,13 @@ These are invented deterministic metadata, never real application receipts.
             "policySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "requiredCommands": ["node --version", "test -f verification.json"],
-        "localVerificationDocumentation": ["docs/local-verification.md"],
+        "requiredCommands": [
+          "node --version",
+          "test -f verification.json"
+        ],
+        "localVerificationDocumentation": [
+          "docs/local-verification.md"
+        ],
         "evidenceRevision": "fixture-generation-1"
       },
       {
@@ -923,7 +938,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Service",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "44f3eb0352486afe310e4727a561e3db09c24e1a340f78eae4a90a2808203444",
+        "configurationSha256": "b2772cfcbf3ab31f6180735bd9dee2b360ced5719e06cad2678348561871d4ab",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -957,8 +972,13 @@ These are invented deterministic metadata, never real application receipts.
             "policySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           }
         },
-        "requiredCommands": ["node --version", "test -f verification.json"],
-        "localVerificationDocumentation": ["docs/local-verification.md"],
+        "requiredCommands": [
+          "node --version",
+          "test -f verification.json"
+        ],
+        "localVerificationDocumentation": [
+          "docs/local-verification.md"
+        ],
         "evidenceRevision": "fixture-generation-1"
       }
     ]
@@ -976,7 +996,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:CLI",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "53597d626fe085bd2855d0cd87fe070ae81f97d5273c9cc502350fdf65664863",
+        "configurationSha256": "fd921b1a12051df955738a0c2e14c5291dd3b9e32ae0a9a605b2a77701b1294e",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1009,7 +1029,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:API",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "9549f78f7eb6aefce07c56669b08417df5f9ffbc9b11c6f71fb128ade20ae1e4",
+        "configurationSha256": "b3bdae07ebe5a87c17aa8b30ebb34a5e81e814ef87f4b666bbf1c348e73a76a0",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1042,7 +1062,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Dashboard",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "bebd5777cc367cb67f28f37f94343c6255e4c22fd87a9b787b6888ec5e45fb77",
+        "configurationSha256": "55ff6a3872ac7d6b84ab8a1a554be3f54f16e13f0b7be4e1e201679ee4522257",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1075,7 +1095,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Service",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "cccccccccccccccccccccccccccccccccccccccc",
-        "configurationSha256": "44f3eb0352486afe310e4727a561e3db09c24e1a340f78eae4a90a2808203444",
+        "configurationSha256": "b2772cfcbf3ab31f6180735bd9dee2b360ced5719e06cad2678348561871d4ab",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1113,7 +1133,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:CLI",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "configurationSha256": "53597d626fe085bd2855d0cd87fe070ae81f97d5273c9cc502350fdf65664863",
+        "configurationSha256": "fd921b1a12051df955738a0c2e14c5291dd3b9e32ae0a9a605b2a77701b1294e",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1168,7 +1188,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:API",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "configurationSha256": "9549f78f7eb6aefce07c56669b08417df5f9ffbc9b11c6f71fb128ade20ae1e4",
+        "configurationSha256": "b3bdae07ebe5a87c17aa8b30ebb34a5e81e814ef87f4b666bbf1c348e73a76a0",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1223,7 +1243,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Dashboard",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "configurationSha256": "bebd5777cc367cb67f28f37f94343c6255e4c22fd87a9b787b6888ec5e45fb77",
+        "configurationSha256": "55ff6a3872ac7d6b84ab8a1a554be3f54f16e13f0b7be4e1e201679ee4522257",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
@@ -1278,7 +1298,7 @@ These are invented deterministic metadata, never real application receipts.
         "repository": "fixture:Service",
         "baseCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "candidateCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "configurationSha256": "44f3eb0352486afe310e4727a561e3db09c24e1a340f78eae4a90a2808203444",
+        "configurationSha256": "b2772cfcbf3ab31f6180735bd9dee2b360ced5719e06cad2678348561871d4ab",
         "dependencyLocks": {
           "package-lock.json": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },

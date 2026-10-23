@@ -58,7 +58,7 @@ const measured = (value: number) => ({
   provenance: "measured" as const,
 });
 async function temp(t: test.TestContext) {
-  const dir = await mkdtemp(join(root, ".git", "mc-evaluation-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "mc-evaluation-test-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }

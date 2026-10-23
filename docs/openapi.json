@@ -4179,6 +4179,7 @@
             "enum": [
               "paid_codex_app_server",
               "subscription_codex_exec",
+              "native_codex_exec",
               "portable_tool_loop",
               "claude_native",
               "synthetic",
