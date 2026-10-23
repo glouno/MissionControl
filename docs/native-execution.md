@@ -165,3 +165,8 @@ stopped and artifacts retained; streams are not reattached. PID reuse or ambiguo
 cleanup retains ownership and a specific blocker. This is process supervision,
 not protection against a malicious same-user process that deliberately hides its
 identity. See [migration and rollback](native-migration.md).
+
+A same-boot controller crash retains its instance lock. Inspect the dead owner's
+state and use `state recover-lock --nonce NONCE` before restarting the controller.
+That command refuses a live or foreign owner. Automatic instance-lock recovery
+requires proof that the old Linux boot ended.

@@ -1,9 +1,10 @@
 # Native runtime validation and remaining acceptance
 
-The native route is implemented behind the shared controller lifecycle. It is
-not yet qualified as a dependable unattended default: the selected subscription
-was exhausted during live acceptance on 2026-10-23. No production activation,
-publication, merging, credential copying or automatic login was performed.
+The native route passed Linux live lifecycle acceptance with the selected existing
+Codex subscription on 2026-10-23 after quota became available. It remains a preview
+pending source review, broader operational qualification and the candidate
+follow-up below. No production activation, publication, merging, credential
+copying or automatic login was performed.
 
 ## Evidence and limits
 
@@ -20,12 +21,32 @@ input subsets were 722,176 and 78,080. No completed goal followed: integration a
 later quota failures prevented full delivery. These are historical observations,
 not acceptance receipts for the final source or evidence for a new usage cutoff.
 
-The resumed full-controller run used Docker unavailable to the test controller.
+The first resumed full-controller run used Docker unavailable to the test controller.
 Preflight and declared setup succeeded; the selected subscription rejected the
 first implementation invocation before tool activity. One agent invocation was
 recorded with quota failure and unknown usage. The goal paused without automatic
-replay. Live repair, fresh-review delivery, direct comparison, cancellation and
-controller crash scenarios consequently remain unverified against final source.
+replay. That historical quota receipt is retained.
+
+After quota reset, five workflows completed: one real repository task, two ordinary
+fixtures, a failed-check repair and a failed-review repair. The two repairs each
+used one task, two attempts and the explicitly resumed implementation session;
+each review used a fresh session. Two direct Codex comparisons passed their checks.
+The controller's inspection results for a completed native goal matched through
+CLI, HTTP and MCP. Normal-delivery sample size is three; repair sample size is two.
+
+The initial restart harness incorrectly attempted startup over a stale same-boot
+controller lock. The harness now verifies its crashed owner's PID and uses
+`state recover-lock --nonce` before restarting. The corrected cancellation and
+restart cases wait for a running sleep command, verified by JSONL and owned Linux
+process identities. Both stopped all owned processes and settled the invocation
+as interrupted with unavailable usage retained. After crash recovery the harness
+pauses the goal for inspection before another attempt is admitted. This explicit
+inspection step is part of the receipt.
+
+The real repository workflow completed its admitted checks and review, but an
+additional probe found that its candidate still rewrites quoted sibling paths
+such as `/repos/app:backup/file`. This source finding is retained privately as a
+follow-up before using that candidate. The original checkout was not changed.
 
 Automated native tests cover full candidate delivery, check/review repair within
 one task, explicit session reuse, fresh review workspaces, malformed/duplicate
@@ -40,7 +61,7 @@ Typecheck, Python status, privacy and package checks passed. The required audit
 identified GHSA-rxp7-6hxx-x8q5 in transitive `ip-address` 10.7.2; the lockfile now
 selects 10.7.4 and the production dependency audit reports zero vulnerabilities.
 Linux history and Rust Matrix checks also passed. These deterministic results
-leave the live acceptance criteria outstanding.
+remain separate from the live provider receipts and their source follow-up.
 
 Migration rehearsal copied the installed v1 database through a read-only SQLite
 backup connection. Schema 8 advanced to schema 9. All 856 rows inspected across
@@ -79,6 +100,13 @@ ordinary fixture includes a direct Codex comparison with the same base/model and
 checks; it explicitly reports the additional MissionControl prompts and review
 work. Quota stops the sequential campaign with an acceptance gap, preserving
 unknown measurements and the selected login.
+
+Use `--cases ordinary,cancellation,restart` to rerun selected scenarios in a fresh
+output root. Available names are `ordinary`, `check-repair`, `review-repair`,
+`cancellation` and `restart`; `real` additionally requires the real repository
+flags below. Lifecycle checks establish an actual owned running command before
+interruption, use the supported stale-lock recovery command and verify all owned
+processes are absent afterward.
 
 To include ordinary work in a real repository worktree, also supply
 `--real-repo`, `--real-branch`, `--real-check`, `--real-envelope` and optionally
