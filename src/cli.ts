@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { ControlError } from "./control/schema.js";
+import { NativeRuntime } from "./control/nativeRuntime.js";
 import { abortable, boundedCleanup } from "./control/reliability.js";
 import { OperationalLog } from "./control/operationalLog.js";
 import { Redactor } from "./privacy.js";
@@ -23,16 +25,14 @@ import {
   lockInstance,
   recoverInstanceLock,
 } from "./instance.js";
-import { SqliteStore } from "./sqlite.js";
+import { SqliteStore, sql } from "./sqlite.js";
 import { ControlStore } from "./control/store.js";
 import { ControlClient } from "./control/client.js";
 import { createControlServer } from "./control/api.js";
 import { createLocalDeliveryGate } from "./control/localDelivery.js";
 import { Scheduler } from "./control/scheduler.js";
-import {
-  createIsolatedRuntime,
-  isolatedRuntimeSchema,
-} from "./control/isolatedRuntime.js";
+import type { createIsolatedRuntime } from "./control/isolatedRuntime.js";
+import { isolatedRuntimeSchema } from "./control/runtimeConfig.js";
 import { runMcp } from "./control/mcp.js";
 import { isEntrypoint } from "./entrypoint.js";
 import { createBackup, restoreBackup } from "./backup.js";
@@ -820,6 +820,13 @@ export async function main(args = process.argv.slice(2)) {
     output(await client.request("/schedules"));
     return;
   }
+  if (command === "project" && ["explain", "preflight"].includes(action)) {
+    if (!id) throw Error("Project ID required");
+    output(
+      await client.request(`/projects/${encodeURIComponent(id)}/${action}`),
+    );
+    return;
+  }
   if (command === "project" && ["list", "readiness"].includes(action)) {
     output(await client.request("/projects"));
     return;
@@ -894,7 +901,24 @@ export async function main(args = process.argv.slice(2)) {
       );
       return;
     }
-    if (["attempts", "evidence"].includes(action)) {
+    if (action === "reviewed") {
+      if (!flags.input)
+        throw Error("Reviewed goal requires --input envelope.json");
+      output(
+        await client.request(
+          "/reviewed-goals",
+          "POST",
+          JSON.parse(await readFile(resolve(flags.input), "utf8")),
+          flags["idempotency-key"],
+        ),
+      );
+      return;
+    }
+    if (
+      ["attempts", "evidence", "invocations", "metrics", "experiment"].includes(
+        action,
+      )
+    ) {
       output(
         await client.request(
           `/goals/${encodeURIComponent(id)}/${action}?limit=${encodeURIComponent(flags.limit ?? "100")}&after=${encodeURIComponent(flags.after ?? "")}`,
@@ -1001,6 +1025,8 @@ async function serve(config: LoadedConfiguration) {
     const store = configuredStore(db, () => config);
     config = startupConfiguration(store, config);
     store.fenceStartup();
+    const nativeRuntime = new NativeRuntime(store, config.settings.stateDir);
+    await nativeRuntime.recoverStartup();
     for (const auth of config.auth) {
       try {
         await new AuthRuntime(
@@ -1010,7 +1036,12 @@ async function serve(config: LoadedConfiguration) {
           auth,
         ).reconcileStartup();
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          store.event("ENVIRONMENT_UNAVAILABLE", "controller", {
+            environment: "isolated",
+            reason:
+              "Container authentication recovery unavailable; retained ownership remains fenced",
+          });
       }
     }
     if (
@@ -1019,9 +1050,10 @@ async function serve(config: LoadedConfiguration) {
           { status: string }[] | undefined
       )?.some((r) => r.status !== "stopped")
     )
-      throw Error(
-        "Authentication resources lack a matching reviewed configuration; admission remains closed",
-      );
+      store.event("CONTAINER_AUTH_RECOVERY_BLOCKED", "controller", {
+        reason:
+          "Retained authentication resources lack their configured container runtime",
+      });
     store.setting("instance-maintenance", false);
     const configRoot = config.root;
     store.redactor.register(await token(config));
@@ -1032,23 +1064,34 @@ async function serve(config: LoadedConfiguration) {
         );
     }
     const host = config.hosts.find((h) => h.isolatedRuntime);
-    if (host?.isolatedRuntime)
-      runtime = await createIsolatedRuntime(
-        store,
-        config.settings.stateDir,
-        isolatedRuntimeSchema.parse(host.isolatedRuntime),
-        new URL("../environments/worker/gateway-relay.py", import.meta.url)
-          .pathname,
-        config.settings.secretsDir,
-        Object.fromEntries(
-          config.projects.map((project) => [
-            project.id,
-            effectiveGoal(config, project.id, "Runtime binding", {}, false)
-              .admission!.runtimeHash!,
-          ]),
-        ),
-        config.auth,
-      );
+    if (host?.isolatedRuntime) {
+      try {
+        runtime = await (
+          await import("./control/isolatedRuntime.js")
+        ).createIsolatedRuntime(
+          store,
+          config.settings.stateDir,
+          isolatedRuntimeSchema.parse(host.isolatedRuntime),
+          new URL("../environments/worker/gateway-relay.py", import.meta.url)
+            .pathname,
+          config.settings.secretsDir,
+          Object.fromEntries(
+            config.projects.map((project) => [
+              project.id,
+              effectiveGoal(config, project.id, "Runtime binding", {}, false)
+                .admission!.runtimeHash!,
+            ]),
+          ),
+          config.auth,
+        );
+      } catch (error) {
+        store.event("ENVIRONMENT_UNAVAILABLE", "controller", {
+          environment: "isolated",
+          reason:
+            "Container runtime unavailable; retained resources remain fenced",
+        });
+      }
+    }
     if (!runtime) {
       const resources = db.one(
         "SELECT id FROM sessions WHERE json_extract(record,'$.container') IS NOT NULL UNION ALL SELECT id FROM execution_invocations WHERE json_extract(record,'$.container') IS NOT NULL LIMIT 1",
@@ -1059,11 +1102,12 @@ async function serve(config: LoadedConfiguration) {
           "SELECT session_id FROM gateway_networks WHERE json_extract(record,'$.status') != 'stopped' LIMIT 1",
         )
       )
-        throw new Error(
-          "Retained runtime resources require their configured isolated runtime for recovery",
-        );
-      store.finishStartupRecovery();
+        store.event("CONTAINER_RECOVERY_BLOCKED", "controller", {
+          reason: "Retained container resources require runtime recovery",
+        });
+      else store.finishStartupRecovery({ skipRetained: true });
     }
+    store.finishStartupRecovery({ environment: "fake", skipRetained: true });
     const apply = (next: LoadedConfiguration) => {
       for (const connector of next.connectors.filter((c) => c.enabled))
         if (
@@ -1085,7 +1129,14 @@ async function serve(config: LoadedConfiguration) {
     if (!store.setting("configuration")) apply(config);
     const isolatedBackend = (g: import("./control/schema.js").Goal) => {
       if (g.config.backend.kind === "fake") return new FakeBackend();
-      if (!runtime) throw new Error("Isolated runtime is unavailable");
+      if (g.config.executionContract?.execution === "native")
+        return nativeRuntime.backend(g);
+      if (!runtime)
+        throw new ControlError(
+          "execution_environment",
+          "Selected container runtime is unavailable",
+          409,
+        );
       return runtime.backend(g);
     };
     scheduler = new Scheduler(
@@ -1106,18 +1157,42 @@ async function serve(config: LoadedConfiguration) {
             );
           return new FakeBackend();
         },
-        isolatedBackend,
+        runtime: {
+          backend: isolatedBackend,
+          verify: (claim, path) =>
+            claim.goal.config.backend.kind === "fake"
+              ? syntheticVerifier(claim, path)
+              : claim.goal.config.executionContract?.execution === "native"
+                ? nativeRuntime.verify(claim, path)
+                : runtime
+                  ? runtime.verify(claim, path)
+                  : Promise.reject(
+                      Error("Selected container verifier is unavailable"),
+                    ),
+          recoverAttempt: async (taskId, generation, signal) => {
+            const goal = store.getGoal(store.getTask(taskId).goalId);
+            if (goal.config.executionContract?.execution === "native")
+              await nativeRuntime.recover({ taskId, generation });
+            else if (runtime)
+              await runtime.recoverAttempt(taskId, generation, signal);
+            else if (goal.config.backend.kind !== "fake")
+              throw Error("Container recovery unavailable");
+          },
+          recoverOperation: async (attemptId, signal) => {
+            const row = store.db.one<{ goal_id: string }>(
+              `SELECT goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
+            );
+            const goal = row && store.getGoal(row.goal_id);
+            if (goal?.config.executionContract?.execution === "native")
+              await nativeRuntime.recover({ attemptId });
+            else if (runtime) await runtime.recoverOperation(attemptId, signal);
+            else if (goal?.config.backend.kind !== "fake")
+              throw Error("Container recovery unavailable");
+          },
+        },
         ...(runtime
           ? {
-              isolatedVerifier: (claim, path) =>
-                claim.goal.config.backend.kind === "fake"
-                  ? syntheticVerifier(claim, path)
-                  : runtime!.verify(claim, path),
               executionMaintenance: () => runtime!.maintenance(false),
-              recoverAttempt: (taskId, generation, signal) =>
-                runtime!.recoverAttempt(taskId, generation, signal),
-              recoverOperation: (attemptId, signal) =>
-                runtime!.recoverOperation(attemptId, signal),
               imageMaintenance: runtime.imageMaintenance,
             }
           : {}),
@@ -1210,8 +1285,7 @@ async function serve(config: LoadedConfiguration) {
           input,
         );
         if (result.backend.kind !== "fake") {
-          if (!runtime) throw new Error("Isolated runtime is unavailable");
-          runtime.backend({
+          isolatedBackend({
             config: result,
           } as import("./control/schema.js").Goal);
         }

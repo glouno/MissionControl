@@ -11,6 +11,8 @@ export interface NativeExecution {
   ): ChildProcessWithoutNullStreams;
 }
 export interface RunContext {
+  invocationId?: string;
+  observe?: (patch: Partial<import("./invocations.js").Invocation>) => void;
   claim: Claim;
   workspace: string;
   mode: "implement" | "review" | "plan";

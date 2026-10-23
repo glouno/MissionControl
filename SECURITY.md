@@ -7,8 +7,12 @@ an authentication boundary.
 
 The controller owns application writes. Use scoped automation identities for
 other agents and revoke unused credentials. Task workers require registered
-identity, current leases and approved isolated execution. Never grant a connector
-or coding worker the operator token. Real provider credentials stay controller-side;
+identity, current leases and an explicitly admitted runtime. Container execution
+retains its isolation controls. Native execution grants the configured worker
+user devbox access; worktrees coordinate ownership and do not isolate credentials
+or the filesystem. Never grant a connector
+or coding worker the operator token. Container API provider credentials stay controller-side; native Codex uses the
+selected existing login without copying credentials or inheriting controller secrets;
 subscription sessions belong to their dedicated authentication environment.
 
 Configuration, prompts, model output, goal descriptions, checkpoints, reports,

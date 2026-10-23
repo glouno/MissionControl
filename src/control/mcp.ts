@@ -3,7 +3,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { ControlClient } from "./client.js";
 import { usageReconciliationSchema } from "./usage.js";
-import { goalSchema, backendSwitchSchema, projectSchema } from "./schema.js";
+import {
+  goalSchema,
+  backendSwitchSchema,
+  projectSchema,
+  inputPlanSchema,
+} from "./schema.js";
 export async function runMcp(client: ControlClient) {
   const server = new McpServer({ name: "mission-control", version: "1.0.0" });
   const text = (value: unknown) => ({
@@ -157,6 +162,57 @@ export async function runMcp(client: ControlClient) {
     },
     async ({ apply }) =>
       text(await client.request("/execution-maintenance", "POST", { apply })),
+  );
+  for (const action of ["explain", "preflight"] as const)
+    server.registerTool(
+      `project_${action}`,
+      {
+        description: `Inspect project execution ${action} without inference or admission`,
+        inputSchema: { projectId: z.string() },
+      },
+      async ({ projectId }) =>
+        text(
+          await client.request(
+            `/projects/${encodeURIComponent(projectId)}/${action}`,
+          ),
+        ),
+    );
+  for (const action of ["invocations", "metrics", "experiment"] as const)
+    server.registerTool(
+      `goal_${action}`,
+      {
+        description: `Inspect recorded ${action}; unavailable usage stays unknown`,
+        inputSchema: {
+          goalId: z.string(),
+          after: z.string().optional(),
+          limit: z.number().int().min(1).max(500).default(100),
+        },
+      },
+      async ({ goalId, after, limit }) =>
+        text(
+          await client.request(
+            `/goals/${encodeURIComponent(goalId)}/${action}?limit=${limit}&after=${encodeURIComponent(after ?? "")}`,
+          ),
+        ),
+    );
+  server.registerTool(
+    "goal_reviewed",
+    {
+      description:
+        "Atomically admit an operator-authored plan without model planning",
+      inputSchema: {
+        goal: z.object({
+          projectId: z.string(),
+          description: z.string().min(1),
+        }),
+        plan: inputPlanSchema,
+        idempotencyKey: z.string().min(1).max(200),
+      },
+    },
+    async ({ idempotencyKey, ...input }) =>
+      text(
+        await client.request("/reviewed-goals", "POST", input, idempotencyKey),
+      ),
   );
   server.registerTool(
     "project_list",

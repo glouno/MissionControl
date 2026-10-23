@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "kind": "project-readiness-config",
+  "exportedAt": "2026-10-22T12:00:00Z",
+  "projects": [
+    {
+      "id": "missioncontrol",
+      "project": {
+        "id": "missioncontrol",
+        "name": "MissionControl",
+        "enabled": true,
+        "provider": "illustrative-codex",
+        "executionMode": "isolated",
+        "config": {
+          "repoPath": "example.invalid/MissionControl",
+          "repository": {
+            "mode": "remote",
+            "remoteUrl": "example.invalid/MissionControl",
+            "primaryBranch": "main",
+            "auditedPrimarySha": "1111111111111111111111111111111111111111",
+            "verificationEnvironment": "missioncontrol-illustrative-verifier"
+          },
+          "policy": {
+            "targetBranch": "main",
+            "requiredChecks": [
+              "mc-check"
+            ],
+            "publish": false,
+            "autoMerge": false
+          },
+          "backend": {
+            "kind": "codex",
+            "model": "illustrative-operator-selected-model"
+          },
+          "verificationCommands": [
+            "mc-check"
+          ]
+        }
+      },
+      "providerEnabled": false,
+      "requirements": {
+        "repository": "example.invalid/MissionControl",
+        "targetBranch": "main",
+        "exactBase": "1111111111111111111111111111111111111111",
+        "requiredChecks": [
+          "mc-check"
+        ],
+        "context": [
+          {
+            "id": "missioncontrol-operator-policy",
+            "sha256": null
+          }
+        ],
+        "configHash": null,
+        "runtimeHash": null,
+        "implementationHash": null,
+        "providerId": "illustrative-codex",
+        "model": "illustrative-operator-selected-model",
+        "contract": {
+          "harness": "codex",
+          "provider": "codex-subscription",
+          "authentication": {
+            "kind": "session",
+            "reference": "illustrative-dedicated-codex"
+          },
+          "execution": "isolated",
+          "usagePolicy": {
+            "kind": "subscription",
+            "maxAttempts": 2,
+            "timeoutMs": 600000,
+            "maxConcurrency": 1
+          }
+        },
+        "runtime": {
+          "protocol": "subscription",
+          "model": "illustrative-operator-selected-model",
+          "authenticationReference": "illustrative-dedicated-codex"
+        },
+        "authenticationPolicyHash": null,
+        "executionImage": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "verificationImage": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "platform": "darwin",
+        "architecture": "arm64",
+        "projectHash": null
+      }
+    },
+    {
+      "id": "example-web",
+      "project": {
+        "id": "example-web",
+        "name": "ExampleWeb",
+        "enabled": false,
+        "provider": "illustrative-codex",
+        "executionMode": "isolated",
+        "config": {
+          "repoPath": "example.invalid/ExampleWeb",
+          "repository": {
+            "mode": "remote",
+            "remoteUrl": "example.invalid/ExampleWeb",
+            "primaryBranch": "development",
+            "auditedPrimarySha": "2222222222222222222222222222222222222222",
+            "verificationEnvironment": "example-web-illustrative-verifier"
+          },
+          "policy": {
+            "targetBranch": "development",
+            "requiredChecks": [
+              "npm run check"
+            ],
+            "publish": false,
+            "autoMerge": false
+          },
+          "backend": {
+            "kind": "codex",
+            "model": "illustrative-operator-selected-model"
+          },
+          "verificationCommands": [
+            "npm run check"
+          ]
+        }
+      },
+      "providerEnabled": false,
+      "requirements": {
+        "repository": "example.invalid/ExampleWeb",
+        "targetBranch": "development",
+        "exactBase": "2222222222222222222222222222222222222222",
+        "requiredChecks": [
+          "npm run check"
+        ],
+        "context": [
+          {
+            "id": "example-web-operator-policy",
+            "sha256": null
+          }
+        ],
+        "configHash": null,
+        "runtimeHash": null,
+        "implementationHash": null,
+        "providerId": "illustrative-codex",
+        "model": "illustrative-operator-selected-model",
+        "contract": {
+          "harness": "codex",
+          "provider": "codex-subscription",
+          "authentication": {
+            "kind": "session",
+            "reference": "illustrative-dedicated-codex"
+          },
+          "execution": "isolated",
+          "usagePolicy": {
+            "kind": "subscription",
+            "maxAttempts": 2,
+            "timeoutMs": 600000,
+            "maxConcurrency": 1
+          }
+        },
+        "runtime": {
+          "protocol": "subscription",
+          "model": "illustrative-operator-selected-model",
+          "authenticationReference": "illustrative-dedicated-codex"
+        },
+        "authenticationPolicyHash": null,
+        "executionImage": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "verificationImage": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "platform": "darwin",
+        "architecture": "arm64",
+        "projectHash": null
+      }
+    },
+    {
+      "id": "example-python",
+      "project": {
+        "id": "example-python",
+        "name": "ExamplePython",
+        "enabled": false,
+        "provider": "illustrative-codex",
+        "executionMode": "isolated",
+        "config": {
+          "repoPath": "example.invalid/ExamplePython",
+          "repository": {
+            "mode": "remote",
+            "remoteUrl": "example.invalid/ExamplePython",
+            "primaryBranch": "development",
+            "auditedPrimarySha": "3333333333333333333333333333333333333333",
+            "verificationEnvironment": "example-python-illustrative-verifier"
+          },
+          "policy": {
+            "targetBranch": "development",
+            "requiredChecks": [
+              "python -m pytest"
+            ],
+            "publish": false,
+            "autoMerge": false
+          },
+          "backend": {
+            "kind": "codex",
+            "model": "illustrative-operator-selected-model"
+          },
+          "verificationCommands": [
+            "python -m pytest"
+          ]
+        }
+      },
+      "providerEnabled": false,
+      "requirements": {
+        "repository": "example.invalid/ExamplePython",
+        "targetBranch": "development",
+        "exactBase": "3333333333333333333333333333333333333333",
+        "requiredChecks": [
+          "python -m pytest"
+        ],
+        "context": [
+          {
+            "id": "example-python-operator-policy",
+            "sha256": null
+          }
+        ],
+        "configHash": null,
+        "runtimeHash": null,
+        "implementationHash": null,
+        "providerId": "illustrative-codex",
+        "model": "illustrative-operator-selected-model",
+        "contract": {
+          "harness": "codex",
+          "provider": "codex-subscription",
+          "authentication": {
+            "kind": "session",
+            "reference": "illustrative-dedicated-codex"
+          },
+          "execution": "isolated",
+          "usagePolicy": {
+            "kind": "subscription",
+            "maxAttempts": 2,
+            "timeoutMs": 600000,
+            "maxConcurrency": 1
+          }
+        },
+        "runtime": {
+          "protocol": "subscription",
+          "model": "illustrative-operator-selected-model",
+          "authenticationReference": "illustrative-dedicated-codex"
+        },
+        "authenticationPolicyHash": null,
+        "executionImage": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "verificationImage": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "platform": "darwin",
+        "architecture": "arm64",
+        "projectHash": null
+      }
+    }
+  ]
+}

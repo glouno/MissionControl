@@ -535,7 +535,7 @@ test("real goal dispatch and verification refuse missing isolated execution befo
   });
   const g = f.store.getGoal(f.g.id);
   g.config.backend = { kind: "codex", command: "codex" };
-  assert.throws(() => scheduler.backend(g), /isolated runtime/);
+  assert.throws(() => scheduler.backend(g), /execution runtime/);
   const claim = { goal: g, task: f.store.tasks(g.id)[0] } as any;
   await assert.rejects(scheduler.verify(claim, f.repo), /isolated verifier/);
 });

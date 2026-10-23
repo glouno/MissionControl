@@ -11,13 +11,16 @@ import {
 import { dirname } from "node:path";
 import type { Redactor } from "../privacy.js";
 
+export const logMaxBytes = 10 * 1024 * 1024;
+export const logRetained = 5;
+
 /** Metadata only: arbitrary payloads, errors, prompts and model output never enter this log. */
 export class OperationalLog {
   constructor(
     readonly path: string,
     readonly redactor: Redactor,
-    readonly maxBytes = 10 * 1024 * 1024,
-    readonly retained = 5,
+    readonly maxBytes = logMaxBytes,
+    readonly retained = logRetained,
   ) {}
   write(event: string, metadata: Record<string, unknown> = {}) {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });

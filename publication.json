@@ -6,6 +6,7 @@
     "scripts/*.py",
     "docs/*.md",
     "docs/*.json",
+    "docs/fixtures/project-readiness/**",
     "examples/*.json",
     "profiles/*.json",
     "environments/worker/*",
