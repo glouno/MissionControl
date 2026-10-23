@@ -31,8 +31,9 @@ base, configuration and operator-selected evidence revision, never wall-clock ag
 Each input must be a canonical regular UTF-8 JSON file with no symlinks, at most
 1 MiB. The reader caps bytes even if the file grows. Each document has at most
 20,000 tokens and depth 32. Duplicate JSON keys (including escaped aliases),
-unknown schema fields and duplicate profiles/project IDs block success. Limits
-also apply to direct validator callers. Export files must remain stable during
+the reserved `__proto__` key, unknown schema fields and duplicate profiles/project
+IDs block success. The reserved key is rejected before schema parsing can discard
+dependency-lock evidence. Limits also apply to direct validator callers. Export files must remain stable during
 collection; this tool is a bounded comparator, not a cryptographic provenance
 service or a replacement for controller authentication.
 

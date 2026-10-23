@@ -94,6 +94,31 @@ test("missing and stale fixture receipts block all profiles", async () => {
   }
 });
 
+test("dependency-lock keys cannot disappear from any qualification input", async () => {
+  for (const name of [
+    "expectations",
+    "configuration",
+    "repositories",
+    "artifacts",
+    "checks",
+  ] as const)
+    for (let index = 0; index < 4; index++) {
+      const input = await fixtures();
+      const doc = document(input, name);
+      const row = (doc.projects ?? doc.receipts)[index];
+      const binding = name === "configuration" ? row.config : row;
+      Object.defineProperty(binding.dependencyLocks, "__proto__", {
+        value: "f".repeat(64),
+        enumerable: true,
+      });
+      assert.equal(
+        qualifyProjects(input).suppliedEvidenceQualified,
+        false,
+        `${name}/${index}: silently discarded lock`,
+      );
+    }
+});
+
 test("every binding in every receipt family and profile fails closed", async () => {
   const changes: Record<string, unknown> = {
     repository: "fixture:wrong",
@@ -262,6 +287,8 @@ test("JSON parser and file reader bound hostile inputs without accepting discard
     '{"a":1,"a":2}',
     '{"a":1,"\\u0061":2}',
     '{"x": {"a":1,"a":2}}',
+    '{"__proto__":"unexpected"}',
+    '{"x":{"\\u005f_proto__":"unexpected"}}',
     "[1,]",
     "true true",
     '{"a": nope}',
@@ -309,6 +336,27 @@ test("CLI requires all explicit files, emits stable JSON and never runs supplied
   const valid = run(args);
   assert.equal(valid.status, 0, valid.stdout + valid.stderr);
   assert.equal(valid.stdout, run(args).stdout);
+  for (const name of [
+    "expectations",
+    "configuration",
+    "repositories",
+    "artifacts",
+    "checks",
+  ] as const) {
+    const input = await fixtures();
+    const doc = document(input, name);
+    const row = (doc.projects ?? doc.receipts)[0];
+    const binding = name === "configuration" ? row.config : row;
+    Object.defineProperty(binding.dependencyLocks, "__proto__", {
+      value: "f".repeat(64),
+      enumerable: true,
+    });
+    const file = join(fixtureRoot, `${name}.json`);
+    await writeFile(file, JSON.stringify(input[name]));
+    const rejected = run(args);
+    assert.equal(rejected.status, 2, `${name}: ${rejected.stdout}`);
+    await writeFile(file, JSON.stringify(fixtureBundle[name]));
+  }
   const missing = [...args];
   missing[7] = join(fixtureRoot, "missing-artifacts.json");
   assert.equal(run(missing).status, 1);

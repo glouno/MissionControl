@@ -224,6 +224,8 @@ export function parseQualificationJson(source: string): unknown {
           if (!key?.startsWith('"') || tokens[i++] !== ":")
             throw Error("Malformed JSON object");
           const decoded = JSON.parse(key) as string;
+          // Zod records omit this key; reject it before evidence can be lost.
+          if (decoded === "__proto__") throw Error("Unsupported JSON key");
           if (keys.has(decoded)) throw Error("Duplicate JSON key");
           keys.add(decoded);
         }
