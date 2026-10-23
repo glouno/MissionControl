@@ -2,8 +2,8 @@
 
 The native route passed Linux live lifecycle acceptance with the selected existing
 Codex subscription on 2026-10-23 after quota became available. It remains a preview
-pending source review, broader operational qualification and the candidate
-follow-up below. No production activation, publication, merging, credential
+pending broader operational qualification and an operator-reviewed activation.
+Source review and the candidate follow-up below are complete. No production activation, publication, merging, credential
 copying or automatic login was performed.
 
 ## Evidence and limits
@@ -44,9 +44,21 @@ pauses the goal for inspection before another attempt is admitted. This explicit
 inspection step is part of the receipt.
 
 The real repository workflow completed its admitted checks and review, but an
-additional probe found that its candidate still rewrites quoted sibling paths
-such as `/repos/app:backup/file`. This source finding is retained privately as a
-follow-up before using that candidate. The original checkout was not changed.
+additional probe found that its private candidate still rewrites quoted sibling
+paths such as `/repos/app:backup/file`. The feature branch now contains a separate
+reviewed correction: literal path matching with quote-aware boundaries and one
+translation pass. Regressions cover quoted punctuation, spaces, escaped quotes,
+JSON context, overlapping admitted roots and replacement prefixes. The private
+candidate remains retained as evidence; it was not merged. The original checkout
+was not changed.
+
+Source review also found two ownership gaps. Cleanup inspection errors occurred
+before the bounded-cleanup wrapper and could mark an ambiguous writer as failed
+or interrupted. All cleanup inspection failures now retain `cleanup_blocked`
+ownership; a cancellation regression verifies that startup keeps the claim fenced.
+Complete filesystem backup now refuses active or cleanup-blocked native
+invocations alongside existing container writers. Backup/restore regressions
+exercise both refusals and successful restoration after native ownership settles.
 
 Automated native tests cover full candidate delivery, check/review repair within
 one task, explicit session reuse, fresh review workspaces, malformed/duplicate
@@ -56,7 +68,7 @@ launch crash window, cleanup allowances, private output rotation and historical
 binding compatibility. The synthetic installed workflow exercises equivalent
 CLI/API/MCP inspection. Component tests do not replace the outstanding live cases.
 
-The final core suite passed 486 tests, including 20 native behavioral tests.
+The implementation suite before this source review passed 486 tests, including 20 native behavioral tests.
 Typecheck, Python status, privacy and package checks passed. The required audit
 identified GHSA-rxp7-6hxx-x8q5 in transitive `ip-address` 10.7.2; the lockfile now
 selects 10.7.4 and the production dependency audit reports zero vulnerabilities.

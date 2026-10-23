@@ -16,7 +16,12 @@ import {
   nativeEnvironment,
 } from "./nativeConfig.js";
 import { observedBackend, InvocationStore } from "./invocations.js";
-import { processIdentity, ownedGroup, nativeCommand } from "./nativeProcess.js";
+import {
+  processIdentity,
+  ownedGroup,
+  nativeCommand,
+  cleanupNativeProcess,
+} from "./nativeProcess.js";
 import { createControlServer } from "./api.js";
 import { Scheduler } from "./scheduler.js";
 import { StorageManager } from "./storage.js";
@@ -667,6 +672,47 @@ test("native operation reconciliation refuses retained active execution", async 
     () => f.store.finishOperationRecovery(attemptId),
     /still owns retained resources/,
   );
+});
+
+test("cleanup inspection ambiguity retains a cancelled invocation and its workspace claim", async (t) => {
+  const f = await fixture(t),
+    claim = f.store.claimNextTask("ambiguous-cleanup-worker")!,
+    identity = (await processIdentity(process.pid))!,
+    signal = AbortSignal.abort();
+  const ambiguous = {
+    ...identity,
+    startTime: String(BigInt(identity.startTime) + 1n),
+  };
+  const backend = observedBackend(f.store, {
+    async run(context) {
+      context.observe?.({ process: ambiguous });
+      await cleanupNativeProcess(ambiguous, Promise.resolve());
+      throw Error("Ambiguous cleanup must not succeed");
+    },
+  });
+  await assert.rejects(
+    backend.run({
+      claim,
+      workspace: f.repo,
+      mode: "implement",
+      prompt: "",
+      signal,
+      onCheckpoint: async () => {},
+    }),
+    (error: any) => error.failure?.kind === "cleanup_blocked",
+  );
+  const record = new InvocationStore(f.store).all(f.goal.id).at(-1)!;
+  assert.equal(record.outcome, "cleanup_blocked");
+  assert.deepEqual(record.usage, { kind: "subscription", status: "unknown" });
+  // Startup must preserve ownership rather than release the cancelled writer.
+  f.store.fenceStartup();
+  await f.runtime.recoverStartup();
+  assert.equal(
+    f.store.getTask(claim.task.id).workerId,
+    "ambiguous-cleanup-worker",
+  );
+  assert.equal(f.store.getGoal(f.goal.id).status, "paused");
+  assert.ok(await processIdentity(process.pid));
 });
 
 test("empty additive preparation defaults preserve prior native admission fingerprints", async (t) => {

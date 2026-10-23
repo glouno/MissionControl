@@ -2,12 +2,13 @@
 
 This procedure is prepared for a future operator-reviewed activation. Source
 implementation and copied-state rehearsal do not activate a running installation.
-Complete the outstanding [live acceptance](native-runtime-validation.md) first.
+Review the completed Linux [live acceptance](native-runtime-validation.md), the
+source review corrections and installation-specific recovery evidence first.
 
 ## Prepare and rehearse
 
 1. Preserve the installed release, external configuration, existing admissions,
-   credentials and service definitions. Record their revisions and paths. Keep
+credentials and service definitions. Record their revisions and paths. Keep
    dashboard routes and unrelated services intact; use separate unused ports for
    rehearsal. Never reuse a reserved dashboard port or replace its Serve route.
 2. Build/test the reviewed source in a separate worktree. Run
@@ -57,7 +58,9 @@ Pause/drain the new controller and prove its owned native processes and containe
 have stopped. Preserve new candidate artifacts and measurements before stopping
 its service. Schema 9 is additive but the older executable may reject it: never
 point the old executable at a migrated database, edit `user_version`, or delete
-new tables to simulate a downgrade.
+new tables to simulate a downgrade. A live read-only SQLite copy proves database
+restoration and migration only; it cannot replace the final quiescent complete
+application snapshot, including workspaces, Git caches and candidate evidence.
 
 Restore the verified pre-upgrade application snapshot into a new isolated path,
 retain the newer state privately, and restore the matching old external

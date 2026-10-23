@@ -49,8 +49,19 @@ const manifestSchema = z
   })
   .strict();
 export type BackupManifest = z.infer<typeof manifestSchema>;
-/** Filesystem snapshots cannot inherit containers still able to change source. */
+/** Filesystem snapshots require proof that all owned writers have stopped. */
 export function assertQuiescentBackup(db: SqliteStore) {
+  if (
+    db.one(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_invocations'",
+    ) &&
+    db.one(
+      "SELECT id FROM agent_invocations WHERE json_extract(record,'$.environment')='native' AND json_extract(record,'$.outcome') IN ('active','cleanup_blocked') LIMIT 1",
+    )
+  )
+    throw new Error(
+      "Complete backup requires stopped, reconciled native execution resources",
+    );
   for (const table of ["sessions", "execution_invocations"]) {
     if (
       !db.one(

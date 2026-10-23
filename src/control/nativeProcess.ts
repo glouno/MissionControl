@@ -2,7 +2,12 @@ import { launchFrame } from "./nativeLauncher.js";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { abortable, boundedCleanup } from "./reliability.js";
+import {
+  abortable,
+  boundedCleanup,
+  ProviderFailure,
+  failureRecord,
+} from "./reliability.js";
 import type { ProcessIdentity } from "./invocations.js";
 
 export async function processIdentity(
@@ -110,21 +115,27 @@ export async function cleanupNativeProcess(
   closed: Promise<void>,
   cleanupSignal?: () => AbortSignal,
 ) {
-  let done = false;
-  closed.then(() => {
-    done = true;
-  });
-  const members = await ownedGroup(identity);
-  // Proving absent resources does not spend or replenish an attempt's cleanup allowance.
-  if (!members.length && done) return;
-  await boundedCleanup(
-    async (signal) => {
-      await stopOwnedGroup(identity, signal);
-      await abortable(closed, signal);
-    },
-    60000,
-    cleanupSignal?.(),
-  );
+  try {
+    let done = false;
+    closed.then(() => {
+      done = true;
+    });
+    const members = await ownedGroup(identity);
+    // Proving absent resources does not spend or replenish an attempt's cleanup allowance.
+    if (!members.length && done) return;
+    await boundedCleanup(
+      async (signal) => {
+        await stopOwnedGroup(identity, signal);
+        await abortable(closed, signal);
+      },
+      60000,
+      cleanupSignal?.(),
+    );
+  } catch {
+    // Inspection failure is also an unproven cleanup. Keep the invocation and
+    // workspace fenced even when cancellation or an execution error triggered it.
+    throw new ProviderFailure(failureRecord("cleanup_blocked"));
+  }
 }
 export interface CommandResult {
   exitCode: number;
