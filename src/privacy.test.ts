@@ -84,3 +84,70 @@ test("retired worker credentials remain redacted after restart without growing r
     "credential churn must not stall status serialization",
   );
 });
+
+test("execution capability reasons are closed source descriptions independent of private inputs", async () => {
+  const { executionCapabilities } =
+    await import("./control/executionCapabilities.js");
+  const { goalSchema } = await import("./control/schema.js");
+  for (const [kind, subscription] of [
+    ["codex", false],
+    ["codex", true],
+    ["azure", false],
+  ] as const) {
+    const config = goalSchema.parse({
+      title: "Fixture",
+      description: "Fixture",
+      repoPath: "/fixture",
+      backend:
+        kind === "azure"
+          ? {
+              kind,
+              model: "fixture",
+              endpoint: "https://example.invalid",
+              inputUsdPerMillion: 1,
+              outputUsdPerMillion: 1,
+            }
+          : { kind },
+      maxCostUsd: subscription ? 0 : 1,
+      estimatePerRunUsd: subscription ? 0 : 1,
+      maxWorkers: 1,
+      maxAttempts: 1,
+      timeoutMs: 1000,
+      executionContract: {
+        harness: kind === "azure" ? "tool-loop" : kind,
+        provider: subscription ? "codex-subscription" : "azure",
+        authentication: {
+          kind: subscription ? "session" : "controller",
+          reference: "fixture",
+        },
+        execution: "isolated",
+        usagePolicy: subscription
+          ? {
+              kind: "subscription",
+              maxAttempts: 1,
+              timeoutMs: 1000,
+              maxConcurrency: 1,
+            }
+          : { kind: "metered", maxCostUsd: 1, estimatePerRunUsd: 1 },
+      },
+    });
+    const baseline = executionCapabilities(config);
+    const poisoned = structuredClone(config);
+    poisoned.repoPath = "/private/credential-path";
+    poisoned.runtimeInstructions = "private raw native diagnostics <script>";
+    poisoned.backend.model = "private-model-token";
+    poisoned.executionContract!.authentication = {
+      kind: subscription ? "session" : "controller",
+      reference: "private-auth-token",
+    };
+    const projection = executionCapabilities(poisoned);
+    assert.deepEqual(projection, baseline);
+    for (const secret of [
+      poisoned.repoPath,
+      poisoned.runtimeInstructions,
+      poisoned.backend.model,
+      "private-auth-token",
+    ])
+      assert.ok(!JSON.stringify(projection).includes(secret));
+  }
+});

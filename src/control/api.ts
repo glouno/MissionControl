@@ -1,6 +1,11 @@
 import { nativePreflight } from "./nativeRuntime.js";
 import { InvocationStore } from "./invocations.js";
 import { explainProject } from "./projectExecution.js";
+import {
+  executionCapabilities,
+  executionCapabilitiesSchema,
+} from "./executionCapabilities.js";
+
 import { executionLimits } from "./executionLimits.js";
 import { effectiveGoal, type LoadedConfiguration } from "../config.js";
 import { instructionManifest } from "./projectContext.js";
@@ -1042,7 +1047,11 @@ export function createControlServer(
           scopedRead();
           return store
             .projects()
-            .filter((p) => !automation || automation.projectIds.includes(p.id));
+            .filter((p) => !automation || automation.projectIds.includes(p.id))
+            .map((p) => ({
+              ...p,
+              executionCapabilities: executionCapabilities(p.config),
+            }));
         }
         if (path === "/projects" && method === "POST") {
           operator();
@@ -1056,11 +1065,16 @@ export function createControlServer(
         }
         if (method === "GET" && path === "/goals") {
           scopedRead();
-          return store.goals(
-            number(url, "limit", 50),
-            url.searchParams.get("after") ?? "",
-            automation?.projectIds,
-          );
+          return store
+            .goals(
+              number(url, "limit", 50),
+              url.searchParams.get("after") ?? "",
+              automation?.projectIds,
+            )
+            .map((g) => ({
+              ...g,
+              executionCapabilities: executionCapabilities(g.config),
+            }));
         }
         if (reviewed) {
           const input = admissionValidator
@@ -1248,7 +1262,11 @@ export function createControlServer(
                 `SELECT * FROM control_${gm[2]} WHERE goal_id=${sql(gid)} AND id>${sql(url.searchParams.get("after") ?? "")} ORDER BY id LIMIT ${number(url, "limit", 100)}`,
               );
             }
-            return store.getGoal(gid);
+            const goal = store.getGoal(gid);
+            return {
+              ...goal,
+              executionCapabilities: executionCapabilities(goal.config),
+            };
           }
           if (principal.role !== "automation") operator();
           if (gm[2] === "observations") {
@@ -1582,6 +1600,7 @@ function number(url: URL, key: string, fallback: number) {
 }
 export function openApi() {
   const schemas = {
+    ExecutionCapabilities: z.toJSONSchema(executionCapabilitiesSchema),
     ProviderFailure: z.toJSONSchema(failureSchema),
     AttemptRuntime: z.toJSONSchema(attemptRuntimeSchema),
     InferenceDiagnostic: z.toJSONSchema(inferenceDiagnosticSchema),
@@ -1598,6 +1617,43 @@ export function openApi() {
     UsageReconciliation: z.toJSONSchema(usageReconciliationSchema, {
       io: "input",
     }),
+  };
+  const responseSchemas = {
+    ProjectStatus: {
+      type: "object",
+      required: [
+        "id",
+        "name",
+        "family",
+        "enabled",
+        "config",
+        "executionCapabilities",
+      ],
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        family: { type: "string" },
+        enabled: { type: "boolean" },
+        config: { $ref: "#/components/schemas/GoalInput" },
+        executionCapabilities: {
+          $ref: "#/components/schemas/ExecutionCapabilities",
+        },
+      },
+      additionalProperties: false,
+    },
+    GoalStatus: {
+      type: "object",
+      required: ["id", "config", "status", "executionCapabilities"],
+      properties: {
+        id: { type: "string" },
+        config: { $ref: "#/components/schemas/GoalInput" },
+        status: { type: "string" },
+        executionCapabilities: {
+          $ref: "#/components/schemas/ExecutionCapabilities",
+        },
+      },
+      additionalProperties: true,
+    },
   };
   const paths: Record<string, any> = {};
   paths["/api/v1/source-info"] = {
@@ -2189,6 +2245,53 @@ export function openApi() {
   paths["/api/v1/dashboard"] = {
     get: operation("Operator: goals, tasks, decisions and execution health"),
   };
+  paths["/api/v1/dashboard"].get.responses[200] = {
+    description:
+      "Dashboard status; capabilities describe source support separately from readiness and executionLimits",
+    content: {
+      "application/json": {
+        schema: {
+          type: "object",
+          required: ["projects", "goals", "executionLimits"],
+          properties: {
+            projects: {
+              type: "array",
+              items: {
+                allOf: [
+                  {
+                    type: "object",
+                    required: ["id", "executionCapabilities"],
+                    properties: {
+                      id: { type: "string" },
+                      executionCapabilities: {
+                        $ref: "#/components/schemas/ExecutionCapabilities",
+                      },
+                    },
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      readiness: { type: "object" },
+                      executionLimits: { type: "object" },
+                    },
+                  },
+                ],
+              },
+            },
+            goals: {
+              type: "array",
+              items: { $ref: "#/components/schemas/GoalStatus" },
+            },
+            executionLimits: {
+              type: "object",
+              additionalProperties: { type: "object" },
+            },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+  };
   paths["/api/v1/artifacts/{id}/content"] = {
     get: operation(
       "Operator: bounded download of an instance-relative recorded artifact; rejects redirected paths",
@@ -2547,6 +2650,26 @@ export function openApi() {
   paths["/api/v1/claims"].post.responses[409] = {
     description: "No approved controller dispatch/environment",
   };
+  for (const [path, schema, array] of [
+    ["/projects", "ProjectStatus", true],
+    ["/goals", "GoalStatus", true],
+    ["/goals/{id}", "GoalStatus", false],
+  ] as const) {
+    paths[`/api/v1${path}`].get.responses[200] = {
+      description:
+        "Stored status with current-code execution capabilities; no readiness or qualification claim",
+      content: {
+        "application/json": {
+          schema: array
+            ? {
+                type: "array",
+                items: { $ref: `#/components/schemas/${schema}` },
+              }
+            : { $ref: `#/components/schemas/${schema}` },
+        },
+      },
+    };
+  }
   return {
     openapi: "3.1.0",
     info: { title: "MissionControl control plane", version: "1.0.0" },
@@ -2554,7 +2677,7 @@ export function openApi() {
     paths,
     components: {
       securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
-      schemas,
+      schemas: { ...schemas, ...responseSchemas },
     },
   };
 }

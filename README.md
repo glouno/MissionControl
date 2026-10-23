@@ -44,7 +44,12 @@ disabled defaults. Building and installing do not start services or log in.
 - [Installation and first workflow](docs/installation.md)
 - [Native execution](docs/native-execution.md), [validation](docs/native-runtime-validation.md), and [migration/rollback](docs/native-migration.md)
 - [Configuration and private customization](docs/configuration.md)
+- [Exact project evidence qualification and operator handoff](docs/project-qualification.md)
+- [Offline project readiness audit and operator handoff](docs/project-readiness.md)
 - [Agent API and CLI workflows](docs/agents.md), [OpenAPI](docs/openapi.json)
+- [Offline native-agent comparison kit](docs/agent-evaluation.md)
+- [Execution capability matrix and harness restrictions](docs/execution-capabilities.md)
+
 - [Azure Foundry execution](docs/azure.md) and [worker images](docs/worker-images.md)
 - [Database ownership and recovery](docs/state.md), [encrypted backups](docs/backups.md)
 - [Security](SECURITY.md), [licensing and corresponding source](docs/licensing.md)

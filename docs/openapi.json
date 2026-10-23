@@ -1887,7 +1887,17 @@
       "get": {
         "responses": {
           "200": {
-            "description": "Successful operation"
+            "description": "Stored status with current-code execution capabilities; no readiness or qualification claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GoalStatus"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid input"
@@ -1962,7 +1972,14 @@
       "get": {
         "responses": {
           "200": {
-            "description": "Successful operation"
+            "description": "Stored status with current-code execution capabilities; no readiness or qualification claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalStatus"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid input"
@@ -2411,7 +2428,17 @@
       "get": {
         "responses": {
           "200": {
-            "description": "Operator configuration"
+            "description": "Stored status with current-code execution capabilities; no readiness or qualification claim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectStatus"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2575,7 +2602,67 @@
         "summary": "Operator: goals, tasks, decisions and execution health",
         "responses": {
           "200": {
-            "description": "Successful durable operation"
+            "description": "Dashboard status; capabilities describe source support separately from readiness and executionLimits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "projects",
+                    "goals",
+                    "executionLimits"
+                  ],
+                  "properties": {
+                    "projects": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "executionCapabilities"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "executionCapabilities": {
+                                "$ref": "#/components/schemas/ExecutionCapabilities"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "readiness": {
+                                "type": "object"
+                              },
+                              "executionLimits": {
+                                "type": "object"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "goals": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GoalStatus"
+                      }
+                    },
+                    "executionLimits": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid input"
@@ -4075,6 +4162,420 @@
       }
     },
     "schemas": {
+      "ExecutionCapabilities": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "basis": {
+            "type": "string",
+            "const": "current_code"
+          },
+          "path": {
+            "type": "string",
+            "enum": [
+              "paid_codex_app_server",
+              "subscription_codex_exec",
+              "portable_tool_loop",
+              "claude_native",
+              "synthetic",
+              "unavailable"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "properties": {
+              "tools": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "instructions": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "nativeCustomization": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "integrations": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "providerTools": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "humanHandoff": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "ownerHandoff": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "nativeApprovals": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "networkAccess": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "boundedEgress": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "sessions": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "sessionContinuation": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "structuredOutput": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "isolation": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "publication": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "autoMerge": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "supported",
+                      "disabled_by_policy",
+                      "unavailable"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "tools",
+              "instructions",
+              "nativeCustomization",
+              "integrations",
+              "providerTools",
+              "humanHandoff",
+              "ownerHandoff",
+              "nativeApprovals",
+              "networkAccess",
+              "boundedEgress",
+              "sessions",
+              "sessionContinuation",
+              "structuredOutput",
+              "usage",
+              "isolation",
+              "publication",
+              "autoMerge"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "basis",
+          "path",
+          "features"
+        ],
+        "additionalProperties": false
+      },
       "ProviderFailure": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -8562,6 +9063,62 @@
           "explanation"
         ],
         "additionalProperties": false
+      },
+      "ProjectStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "family",
+          "enabled",
+          "config",
+          "executionCapabilities"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "config": {
+            "$ref": "#/components/schemas/GoalInput"
+          },
+          "executionCapabilities": {
+            "$ref": "#/components/schemas/ExecutionCapabilities"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GoalStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "config",
+          "status",
+          "executionCapabilities"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/GoalInput"
+          },
+          "status": {
+            "type": "string"
+          },
+          "executionCapabilities": {
+            "$ref": "#/components/schemas/ExecutionCapabilities"
+          }
+        },
+        "additionalProperties": true
       }
     }
   }

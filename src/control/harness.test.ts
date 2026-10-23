@@ -821,3 +821,50 @@ for await(const line of createInterface({input:process.stdin})) {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("paid Codex declines unsolicited native approval requests without granting controller authority", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mc-codex-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const command = join(root, "codex-stub");
+  await writeFile(
+    command,
+    `#!/usr/bin/env node
+import {createInterface} from 'node:readline';
+import {writeFile} from 'node:fs/promises';
+const send = v => process.stdout.write(JSON.stringify(v)+'\\n');
+for await (const line of createInterface({input:process.stdin})) {
+ const m=JSON.parse(line);
+ if(m.method==='initialize')send({id:m.id,result:{}});
+ if(m.method==='thread/start') {await writeFile('thread.json',JSON.stringify(m.params));send({id:m.id,result:{thread:{id:'fixture'}}});}
+ if(m.method==='turn/start') {send({id:m.id,result:{}});send({id:99,method:'item/commandExecution/requestApproval',params:{threadId:'fixture',command:'host action'}});}
+ if(m.id===99) {await writeFile('approval.json',JSON.stringify(m));send({method:'item/completed',params:{item:{type:'agentMessage',text:'done'}}});send({method:'turn/completed',params:{turn:{status:'completed'}}});}
+}
+`,
+    { mode: 0o755 },
+  );
+  const config = goalSchema.parse({
+    title: "Fixture",
+    description: "Fixture",
+    repoPath: root,
+  });
+  const output = await new CodexBackend({
+    kind: "codex",
+    command: "codex",
+  }).run({
+    claim: { goal: { config } } as Claim,
+    workspace: root,
+    execution: fixtureExecution(root, command),
+    mode: "implement",
+    prompt: "Fixture",
+    signal: AbortSignal.timeout(5000),
+    onCheckpoint: async () => {},
+  });
+  assert.equal(output.text.trim(), "done");
+  assert.deepEqual(
+    JSON.parse(await readFile(join(root, "approval.json"), "utf8")),
+    { id: 99, result: { decision: "decline" } },
+  );
+  const thread = JSON.parse(await readFile(join(root, "thread.json"), "utf8"));
+  assert.equal(thread.approvalPolicy, "never");
+  assert.equal(thread.ephemeral, true);
+});

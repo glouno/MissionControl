@@ -233,3 +233,57 @@ test("subscription structured handoffs retain non-dollar usage; host fallback an
   );
   assert.deepEqual(noHost.args, []);
 });
+
+test("subscription Codex retains native policy fences and refuses unauthorized structured handoffs", async (t) => {
+  const f = fixture(t, "codex", [...codex]);
+  await new SubscriptionNativeBackend().run(f.context);
+  const argv = f.args[0];
+  for (const flag of [
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--dangerously-bypass-approvals-and-sandbox",
+  ])
+    assert.ok(argv.includes(flag));
+  for (const setting of [
+    'web_search="disabled"',
+    "project_doc_max_bytes=0",
+    "features.hooks=false",
+    "features.multi_agent=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.memories=false",
+    "features.skill_search=false",
+    "features.shell_snapshot=false",
+    "mcp_servers={}",
+  ]) {
+    const index = argv.indexOf(setting);
+    assert.ok(index > 0);
+    assert.equal(argv[index - 1], "-c");
+  }
+  const question = {
+    question: "Change policy?",
+    reason: "Requires authority",
+    options: [
+      { id: "keep", label: "Keep policy" },
+      { id: "stop", label: "Stop" },
+    ],
+  };
+  const denied = fixture(t, "codex", [
+    codex[0],
+    {
+      type: "item.completed",
+      item: {
+        type: "agent_message",
+        text: JSON.stringify({ ...final, question }),
+      },
+    },
+    codex[2],
+  ]);
+  denied.context.disableTaskHandoffs = true;
+  await assert.rejects(
+    new SubscriptionNativeBackend().run(denied.context),
+    /cannot issue task handoffs/,
+  );
+  assert.deepEqual(denied.checkpoints, []);
+});
