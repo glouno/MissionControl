@@ -1,4 +1,12 @@
+import { StorageManager } from "./storage.js";
 import test from "node:test";
+// Synthetic lifecycle fixtures must not depend on the CI host's physical capacity.
+test.mock.method(StorageManager.prototype, "pressure", async () => ({
+  freeBytes: 100 * 1024 ** 3,
+  reserveBytes: 50 * 1024 ** 3,
+  admissionAllowed: true,
+}));
+
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

@@ -20,6 +20,7 @@
     "package-lock.json",
     "tsconfig.json",
     "README.md",
+    "AGENTS.md",
     "LICENSE",
     "SECURITY.md",
     "CONTRIBUTING.md",

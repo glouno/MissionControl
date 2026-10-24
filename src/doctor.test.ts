@@ -322,3 +322,23 @@ for (const scenario of [
     }
   });
 }
+
+test("doctor reports host storage denial even with plentiful native filesystem capacity", async (t) => {
+  const { config, command } = await subscriptionFixture(t);
+  config.settings.storage.freeReserveBytes = 0;
+  const result = await diagnose(config, {
+    command,
+    hostStorageProbe: async () => ({
+      admissionAllowed: false,
+      reason: "Windows measurement unavailable",
+    }),
+  });
+  const storage = result.storage as {
+    availableBytes: number;
+    admissible: boolean;
+    host: { reason: string };
+  };
+  assert.ok(storage.availableBytes > 0);
+  assert.equal(storage.admissible, false);
+  assert.equal(storage.host.reason, "Windows measurement unavailable");
+});

@@ -48,6 +48,7 @@ per-goal cap and is not measured spending or a provider-enforced dollar ceiling.
 The allowance is never silently replenished on completion. Change its external
 configuration explicitly. `storage` configures free-space admission and registered
 cache/archive/retention budgets; unfinished/pinned/recovery protections still apply.
+See [storage admission](storage.md) for Windows-host checks and serialized builds.
 
 Host runtime upstreams require explicit `authentication` (`azure-cli` or a secret
 reference with an approved header). Runtime provider IDs match each goal's admitted

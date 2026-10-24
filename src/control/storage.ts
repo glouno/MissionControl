@@ -7,7 +7,6 @@ import {
   writeFile,
   copyFile,
   readdir,
-  statfs,
   rm,
 } from "node:fs/promises";
 import { join, resolve, relative, dirname, basename } from "node:path";
@@ -16,12 +15,13 @@ import { ControlError } from "./schema.js";
 import { git } from "./git.js";
 import { parseWorktrees } from "./repositories.js";
 import { StatePaths } from "./statePaths.js";
+import { measureStoragePressure } from "./storagePressure.js";
 export const storageDefaults = {
   mergedRetentionMs: 7 * 86400000,
   archiveRetentionMs: 90 * 86400000,
   archiveBudgetBytes: 20 * 1024 ** 3,
   cacheBudgetBytes: 30 * 1024 ** 3,
-  freeReserveBytes: 5 * 1024 ** 3,
+  freeReserveBytes: 50 * 1024 ** 3,
 };
 export interface ManagedWorkspace {
   id: string;
@@ -83,6 +83,7 @@ const secretPath = (path: string) =>
     path,
   );
 const disposablePath = (path: string) =>
+  /^connectors\/matrix\/target($|\/)/.test(path) ||
   /(^|\/)(node_modules|\.venv|venv|__pycache__|\.cache|\.pytest_cache|\.ruff_cache|\.next|dist|build|coverage)($|\/)/.test(
     path,
   );
@@ -175,13 +176,10 @@ export class StorageManager {
       );
   }
   async pressure() {
-    const fs = await statfs(this.managedRoot, { bigint: true });
-    const freeBytes = Number(fs.bavail * fs.bsize);
-    return {
-      freeBytes,
-      reserveBytes: this.policy.freeReserveBytes,
-      admissionAllowed: freeBytes >= this.policy.freeReserveBytes,
-    };
+    return measureStoragePressure(
+      this.managedRoot,
+      this.policy.freeReserveBytes,
+    );
   }
   async preview(isActive: (w: ManagedWorkspace) => Promise<boolean>) {
     const pressure = await this.pressure();

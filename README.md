@@ -52,6 +52,7 @@ disabled defaults. Building and installing do not start services or log in.
 
 - [Azure Foundry execution](docs/azure.md) and [worker images](docs/worker-images.md)
 - [Database ownership and recovery](docs/state.md), [encrypted backups](docs/backups.md)
+- [Storage admission and recovery retention](docs/storage.md)
 - [Security](SECURITY.md), [licensing and corresponding source](docs/licensing.md)
 - Optional: [Matrix](docs/matrix.md), [subscription environments](docs/subscriptions.md)
 
