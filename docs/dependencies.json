@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "qualification": "Declared package licenses; redistribution notices and corresponding-source review still required",
   "lockfiles": {
-    "npmSha256": "b63310ee2898984bda3f402bcca0cb92d6b194ab4f9154c9eb757f94e5c0fbba",
+    "npmSha256": "d9aa40411d8c6466ff3109630bbc25a1baf476bd774855a0961c4960cdc5ad6b",
     "rustSha256": "c9212ea119596cc48439619fd07413aa9525620cf9f32ced1dd450aaf0d3b65e"
   },
   "npm": [
@@ -168,13 +168,6 @@
       "source": "git+https://github.com/Azure/azure-sdk-for-js"
     },
     {
-      "name": "@azure/core-process",
-      "version": "1.0.0",
-      "license": "MIT",
-      "integrity": "sha512-/shnJ+ooO8WPxDhPEeI/2oRQuubn16gZ6CvlbpWbEswZfzwI9tI/sMAHmF3x1LuQ9yZYXfLW3TjzGMLEC5blKg==",
-      "source": "git+https://github.com/Azure/azure-sdk-for-js"
-    },
-    {
       "name": "@azure/core-rest-pipeline",
       "version": "1.25.0",
       "license": "MIT",
@@ -197,10 +190,10 @@
     },
     {
       "name": "@azure/identity",
-      "version": "4.13.3",
+      "version": "4.13.0",
       "license": "MIT",
-      "integrity": "sha512-zGQPtqvXPgSA8yfV2CkIQ1qirqk0p9AIVpC5uEkdXQYcKl07QHvyaGYRnZOk0AsQUmxNb4wfkcwY5di8Z5xa9A==",
-      "source": "git+https://github.com/Azure/azure-sdk-for-js"
+      "integrity": "sha512-uWC0fssc+hs1TGGVkkghiaFkkS7NkTxfnCH+Hdg+yTehTpMcehpok4PgUKKdyCH+9ldu6FhiHRv84Ntqj1vVcw==",
+      "source": "github:Azure/azure-sdk-for-js"
     },
     {
       "name": "@azure/logger",
@@ -211,23 +204,23 @@
     },
     {
       "name": "@azure/msal-browser",
-      "version": "5.23.0",
+      "version": "4.30.0",
       "license": "MIT",
-      "integrity": "sha512-IRCwkRCK47hBXK+7bu67UZWY7HS0Jx1dZgi4C1HVbjlBum8Jy8fb2l87xFr6HxdQJWy951zRUHtwwDITHFAtaA==",
+      "integrity": "sha512-HBBKfbZkMVzzF5bofvS1cXuNHFVc+gt4/HOnCmG/0hsHuZRJvJvDg/+7nTwIpoqvJc8BQp5o23rBUfisOLxR+w==",
       "source": "https://github.com/AzureAD/microsoft-authentication-library-for-js.git"
     },
     {
       "name": "@azure/msal-common",
-      "version": "16.14.1",
+      "version": "15.17.0",
       "license": "MIT",
-      "integrity": "sha512-Or6xhPNyi4zHW25158yxBoyxuCqNSPa5YBVqfF1J5Ks4MJWBo/USXdp05DQIPu1Zli00YZu6t0+h6KvHJealxQ==",
+      "integrity": "sha512-VQ5/gTLFADkwue+FohVuCqlzFPUq4xSrX8jeZe+iwZuY6moliNC8xt86qPVNYdtbQfELDf2Nu6LI+demFPHGgw==",
       "source": "https://github.com/AzureAD/microsoft-authentication-library-for-js.git"
     },
     {
       "name": "@azure/msal-node",
-      "version": "6.0.1",
+      "version": "3.8.10",
       "license": "MIT",
-      "integrity": "sha512-ixSO1Y/kCVRthRs+hSx/5qkwaunX1/RAePhlMN0wIpIQ4WEZ6AREGGnGd1AP0qspHVsAwzWQKGubpjh50JyJIQ==",
+      "integrity": "sha512-0Hz7Kx4hs70KZWep/Rd7aw/qOLUF92wUOhn7ZsOuB5xNR/06NL1E2RAI9+UKH1FtvN8nD6mFjH7UKSjv6vOWvQ==",
       "source": "https://github.com/AzureAD/microsoft-authentication-library-for-js.git"
     },
     {
@@ -568,9 +561,9 @@
     },
     {
       "name": "fast-uri",
-      "version": "3.1.8",
+      "version": "3.1.9",
       "license": "BSD-3-Clause",
-      "integrity": "sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==",
+      "integrity": "sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==",
       "source": "git+https://github.com/fastify/fast-uri.git"
     },
     {
@@ -1093,9 +1086,9 @@
     },
     {
       "name": "undici",
-      "version": "7.30.0",
+      "version": "7.30.1",
       "license": "MIT",
-      "integrity": "sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==",
+      "integrity": "sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==",
       "source": "git+https://github.com/nodejs/undici.git"
     },
     {
@@ -1104,6 +1097,13 @@
       "license": "MIT",
       "integrity": "sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==",
       "source": "stream-utils/unpipe"
+    },
+    {
+      "name": "uuid",
+      "version": "11.1.1",
+      "license": "MIT",
+      "integrity": "sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==",
+      "source": "https://github.com/uuidjs/uuid.git"
     },
     {
       "name": "vary",
