@@ -1,7 +1,10 @@
 import { nativePreflight } from "./control/nativeRuntime.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
 import { spawnSync } from "node:child_process";
-import { statfs } from "node:fs/promises";
+import {
+  measureStoragePressure,
+  type windowsStoragePressure,
+} from "./control/storagePressure.js";
 import type { LoadedConfiguration } from "./config.js";
 import { effectiveGoal } from "./config.js";
 import { inspectState } from "./instance.js";
@@ -10,6 +13,7 @@ import { matrixLaunch } from "./control/matrixLifecycle.js";
 export async function diagnose(
   config: LoadedConfiguration,
   options: {
+    hostStorageProbe?: typeof windowsStoragePressure;
     command?: (
       name: string,
       args: string[],
@@ -53,12 +57,17 @@ export async function diagnose(
   }
   let storage: unknown;
   try {
-    const fs = await statfs(config.settings.stateDir);
-    const availableBytes = fs.bavail * fs.bsize;
+    const pressure = await measureStoragePressure(
+      config.settings.stateDir,
+      config.settings.storage.freeReserveBytes,
+      0,
+      options.hostStorageProbe,
+    );
     storage = {
-      availableBytes,
-      reserveBytes: config.settings.storage.freeReserveBytes,
-      admissible: availableBytes >= config.settings.storage.freeReserveBytes,
+      availableBytes: pressure.freeBytes,
+      reserveBytes: pressure.reserveBytes,
+      admissible: pressure.admissionAllowed,
+      host: pressure.host,
     };
   } catch {
     storage = {
