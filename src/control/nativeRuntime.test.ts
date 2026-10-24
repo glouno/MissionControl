@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { SqliteStore } from "../sqlite.js";
@@ -26,6 +27,7 @@ import { createControlServer } from "./api.js";
 import { Scheduler } from "./scheduler.js";
 import { StorageManager } from "./storage.js";
 import { executionContractSchema } from "./executionContract.js";
+import { CodexEvents } from "./nativeCodex.js";
 
 test.mock.method(StorageManager.prototype, "pressure", async () => ({
   freeBytes: 100 * 1024 ** 3,
@@ -736,4 +738,91 @@ test("empty additive preparation defaults preserve prior native admission finger
     )
     .digest("hex");
   assert.equal(nativeBinding(f.goal.config), original);
+});
+
+test("malformed native protocol cannot regain trusted usage or successful completion", () => {
+  const events = new CodexEvents({});
+  assert.throws(() => events.feed("invalid json"));
+  assert.throws(() =>
+    events.feed(
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 100, output_tokens: 10 },
+      }),
+    ),
+  );
+  assert.equal(events.turns, 0);
+  assert.equal(events.completed, false);
+  assert.deepEqual(events.usage, { kind: "subscription", status: "unknown" });
+  assert.throws(() => events.assertSuccessful(0));
+});
+
+test(
+  "native preflight bounds stalled executables and stops their owned processes",
+  { timeout: 10000 },
+  async (t) => {
+    const f = await fixture(t),
+      marker = join(f.root, "preflight-pid");
+    await writeFile(
+      f.profile.executable,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setTimeout(()=>process.exit(0),3000);`,
+      { mode: 0o700 },
+    );
+    f.goal.config.timeoutMs = 1000;
+    const started = Date.now();
+    const result = await nativePreflight(f.goal.config);
+    assert.equal(result.ready, false);
+    assert.ok(Date.now() - started < 5000);
+    const pid = Number(await readFile(marker, "utf8"));
+    assert.equal(await processIdentity(pid), undefined);
+  },
+);
+
+test("native commands and agent execution work from installations with escaped URL paths", async (t) => {
+  const f = await fixture(t),
+    installation = join(f.root, "installation with spaces # % é");
+  await mkdir(installation);
+  await writeFile(join(installation, "package.json"), '{"type":"module"}\n');
+  // Relocate only the modules under test. Dependencies keep their original URLs;
+  // the test does not copy dependency or build trees into its scratch directory.
+  for (const name of [
+    "nativeProcess.js",
+    "nativeRuntime.js",
+    "nativeLauncher.js",
+  ]) {
+    const original = new URL(name, import.meta.url);
+    const source = (await readFile(original, "utf8")).replace(
+      /from "([^\"]+)"/g,
+      (_match, specifier: string) =>
+        `from ${JSON.stringify(specifier.startsWith("./") ? new URL(specifier, original).href : import.meta.resolve(specifier))}`,
+    );
+    await writeFile(join(installation, name), source);
+  }
+  const relocated = await import(
+    pathToFileURL(join(installation, "nativeProcess.js")).href
+  );
+  const command = await relocated.nativeCommand(
+    "/bin/sh",
+    ["-c", "printf relocated"],
+    {
+      cwd: f.repo,
+      env: nativeEnvironment(f.profile),
+    },
+  );
+  assert.equal(command.exitCode, 0, command.stderr);
+  assert.equal(command.stdout, "relocated");
+  const { NativeRuntime: RelocatedRuntime } = await import(
+    pathToFileURL(join(installation, "nativeRuntime.js")).href
+  );
+  const runtime = new RelocatedRuntime(f.store, f.root);
+  const claim = f.store.claimNextTask("relocated-worker")!;
+  await observedBackend(f.store, runtime.backend(f.goal)).run({
+    claim,
+    workspace: f.repo,
+    mode: "implement",
+    prompt: "Implement one",
+    signal: new AbortController().signal,
+    onCheckpoint: async () => {},
+  });
+  assert.equal(await readFile(join(f.repo, "one.txt"), "utf8"), "implemented");
 });

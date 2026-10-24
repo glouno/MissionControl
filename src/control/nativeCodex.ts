@@ -56,6 +56,7 @@ export class CodexEvents {
   turns = 0;
   toolEvents = 0;
   retryEvents = 0;
+  private invalid = false;
   terminalFailure?: ProviderFailure;
   constructor(
     readonly context: Pick<RunContext, "observe" | "onProgress">,
@@ -64,6 +65,7 @@ export class CodexEvents {
     this.sessionId = sessionId;
   }
   feed(line: string) {
+    if (this.invalid) throw Error("Native protocol is already invalid");
     try {
       const event = JSON.parse(line);
       if (!event || typeof event !== "object" || typeof event.type !== "string")
@@ -140,6 +142,7 @@ export class CodexEvents {
           this.terminalFailure = new ProviderFailure(classifyFailure(event));
       }
     } catch (error) {
+      this.invalid = true;
       this.usage = {
         ...this.usage!,
         status: "unknown",
@@ -150,7 +153,13 @@ export class CodexEvents {
   }
   assertSuccessful(code: number, parseError?: unknown) {
     if (this.terminalFailure) throw this.terminalFailure;
-    if (parseError || code !== 0 || this.failed || !this.completed)
+    if (
+      this.invalid ||
+      parseError ||
+      code !== 0 ||
+      this.failed ||
+      !this.completed
+    )
       throw new ProviderFailure(failureRecord("incomplete_stream"));
   }
 }

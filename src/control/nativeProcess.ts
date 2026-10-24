@@ -1,5 +1,6 @@
 import { launchFrame } from "./nativeLauncher.js";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import {
@@ -157,7 +158,7 @@ export async function nativeCommand(
   const child = spawn(
     process.execPath,
     [
-      new URL("./nativeLauncher.js", import.meta.url).pathname,
+      fileURLToPath(new URL("./nativeLauncher.js", import.meta.url)),
       command,
       ...args,
     ],

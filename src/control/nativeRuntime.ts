@@ -33,6 +33,8 @@ import {
 import { workerResponseSchema, responseHandoff } from "./workerHandoff.js";
 import { codexArguments, CodexEvents } from "./nativeCodex.js";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { executionSignal } from "./executionDeadline.js";
 import { instructionManifest } from "./projectContext.js";
 import { InvocationStore, type Invocation } from "./invocations.js";
 import {
@@ -69,15 +71,21 @@ export function selectedNativeProfile(config: GoalConfig): NativeProfile {
 export async function nativePreflight(
   config: GoalConfig,
   task?: Claim["task"]["spec"],
+  parentSignal = executionSignal(),
 ) {
   const profile = selectedNativeProfile(config),
     env = nativeEnvironment(profile),
+    signal = AbortSignal.any([
+      AbortSignal.timeout(config.timeoutMs),
+      ...(parentSignal ? [parentSignal] : []),
+    ]),
     faults: string[] = [];
   if (process.platform !== "linux")
     faults.push("Native execution currently supports Linux/WSL only");
   const version = await nativeCommand(profile.executable, ["--version"], {
     cwd: config.repoPath,
     env,
+    signal,
   }).catch(() => undefined);
   if (!version || version.exitCode)
     faults.push("Selected Codex executable is unavailable");
@@ -85,7 +93,7 @@ export async function nativePreflight(
     const found = await nativeCommand(
       "/bin/sh",
       ["-c", 'command -v "$1"', "mc-preflight", executable],
-      { cwd: config.repoPath, env },
+      { cwd: config.repoPath, env, signal },
     ).catch(() => undefined);
     if (!found || found.exitCode)
       faults.push(`Required executable unavailable: ${executable}`);
@@ -111,7 +119,7 @@ export async function nativePreflight(
         !(
           await fetch(url, {
             method: "HEAD",
-            signal: AbortSignal.timeout(config.timeoutMs),
+            signal,
           })
         ).ok
       )
@@ -127,6 +135,7 @@ export async function nativePreflight(
   const identity = await nativeCommand("git", ["var", "GIT_COMMITTER_IDENT"], {
     cwd: config.repoPath,
     env,
+    signal,
   }).catch(() => undefined);
   if (!identity || identity.exitCode)
     faults.push("Configure Git author identity before execution");
@@ -142,6 +151,7 @@ export async function nativePreflight(
   const login = await nativeCommand(profile.executable, ["login", "status"], {
     cwd: config.repoPath,
     env,
+    signal,
   }).catch(() => undefined);
   if (!login || login.exitCode || !/chatgpt/i.test(login.stdout + login.stderr))
     faults.push(
@@ -338,7 +348,12 @@ export class NativeRuntime {
         );
     };
     assertAuthority();
-    const preflight = await nativePreflight(config, context.claim.task.spec);
+    const preflight = await nativePreflight(
+      config,
+      context.claim.task.spec,
+      context.signal,
+    );
+    context.signal.throwIfAborted();
     if (!preflight.ready)
       throw new ControlError(
         "native_preflight",
@@ -412,7 +427,7 @@ export class NativeRuntime {
     const child = spawn(
       process.execPath,
       [
-        new URL("./nativeLauncher.js", import.meta.url).pathname,
+        fileURLToPath(new URL("./nativeLauncher.js", import.meta.url)),
         profile.executable,
         ...args,
       ],
