@@ -35,7 +35,9 @@ Reset means prepare a fresh directory, retaining the prior manifest and reposito
 there is no destructive reset or automatic retry command. A second explicitly
 requested attempt is possible only if the originally configured maxAttempts permits
 it and accounting admission passes. It continues the existing candidate, records
-history and is not a fresh sample. Do not edit manifests to replenish budgets.
+history and is not a fresh sample. Changed executable bytes refuse continuation
+even under the same declared version; prepare a fresh run and retain prior evidence.
+Do not edit manifests to replenish budgets.
 SIGINT/SIGTERM cancels the active process group and retains partial evidence.
 A controller crash leaves an interrupted attempt and active.lock: retain that run,
 verify external resources are stopped privately, and prepare a new run. Do not clear
@@ -61,6 +63,10 @@ including exhaustive small boundaries and safe-integer cases. CSV implements a
 pure parser with quoting, CRLF, trimming, sorted keys, preserved row order,
 string values and explicit invalid-input errors. TASK.md gives the full contract.
 Fixture hashes bind the prompt, files, version and independent exact-result cases.
+CSV exact expectations include integer-like and mixed headers with JSON escaping;
+keys must appear in lexicographic order in the returned text. Ordinary object
+serialization reorders integer-like keys numerically and fails acceptance. These
+additional cases change the CSV fixture hash while preserving its pinned starting tree.
 
 Acceptance snapshots the whole repository including Git metadata, directory/file
 modes and file hashes. It rejects added/deleted files, symlinks, hardlinks, altered
@@ -140,6 +146,8 @@ stop/reap its isolation on EOF/cancellation and emit NDJSON on stdout. Stderr co
 against the same output cap and is discarded. No raw output is retained: bounded
 byte count/hash, validated numeric fields and fixed error categories survive. Arbitrary
 logs or unknown protocol fields are rejected, not copied into evidence.
+After a malformed event, buffered later events are discarded; only earlier validated
+measurements survive. An already-cancelled request never launches the executable.
 
 Every event has schemaVersion=1, seq (integer, starting at 0 without gaps), and type.
 Exactly one hello is first and one result is last. At most 128 events are accepted;
@@ -220,7 +228,9 @@ and is not subtracted unless supplied. Summaries aggregate attempt histories wit
 turning missing quantities into zero and mark incomplete usage. Failed, rejected,
 synthetic, unsupported or mismatched runs are excluded. Comparable observations require
 matching fixture, source, budgets, model/reasoning/auth/billing/permissions/isolation/
-environment and measured total tokens/agent time. SDK/native families cannot compare.
+environment, native executable version and measured total tokens/agent time.
+Different native versions carry an explicit native-version-mismatch exclusion.
+SDK/native families cannot compare.
 Unknown cost cannot establish a cost advantage. No ranking is generated; repeated,
 matched live samples and independent receipt/isolation review are required.
 

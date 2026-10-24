@@ -132,9 +132,9 @@ const csvSolution = `export function normalize(csv) {
   const sorted = [...headers].sort();
   const output = rows.map(values => {
     if (values.length !== headers.length) throw new Error('invalid');
-    const obj = {}; for (const h of sorted) obj[h] = values[headers.indexOf(h)].trim(); return obj;
+    return '{' + sorted.map(h => JSON.stringify(h) + ':' + JSON.stringify(values[headers.indexOf(h)].trim())).join(',') + '}';
   });
-  return JSON.stringify(output) + '\\n';
+  return '[' + output.join(',') + ']\\n';
 }\n`;
 type Case = { args: unknown[]; expected?: unknown; throws?: true };
 const reservationCases: Case[] = [];
@@ -171,6 +171,13 @@ for (const args of [
   });
 const csvCases: Case[] = [
   { args: ["b,a\n 2 , 1 \n"], expected: '[{"a":"1","b":"2"}]\n' },
+  // Literal strings are independent of object enumeration's numeric-key order.
+  { args: ["2,10\nb,a\n"], expected: '[{"10":"a","2":"b"}]\n' },
+  {
+    args: ['"a""b",2,10,00,0\n"say ""hi""", two , ten ,zeroes,zero\n'],
+    expected:
+      '[{"0":"zero","00":"zeroes","10":"ten","2":"two","a\\"b":"say \\"hi\\""}]\n',
+  },
   {
     args: ['name,note\r\nAda,"hello, world"\r\nBob,"said ""hi"""\r\n'],
     expected:
@@ -673,6 +680,16 @@ export async function boundedProcess(
   },
 ): Promise<ProcessEvidence & { stdout: string }> {
   const started = performance.now();
+  if (options.signal?.aborted)
+    return {
+      outcome: "cancelled",
+      wallMs: performance.now() - started,
+      outputBytes: 0,
+      outputHash: hash(""),
+      exitCode: null,
+      signal: null,
+      stdout: "",
+    };
   const decoder = new StringDecoder("utf8");
   const digest = createHash("sha256");
   let bytes = 0,
@@ -711,7 +728,7 @@ export async function boundedProcess(
         }
       }
       pending += decoder.end();
-      if (pending.trim() && options.onLine) {
+      if (stop !== "malformed" && pending.trim() && options.onLine) {
         try {
           options.onLine(pending);
         } catch {
@@ -1042,6 +1059,8 @@ export async function runAdapter(
     const executableHash = hash(
       await boundedRead(config.executable, 16_777_216),
     );
+    if (m.attempts.some((a) => a.executableHash !== executableHash))
+      throw Error("Executable changed: prepare a fresh run");
     const state = new EventAccumulator(config),
       repo = join(directory, "repo"),
       index = m.attempts.length + 1;
@@ -1186,6 +1205,8 @@ export function comparisonFlags(a: Manifest, b: Manifest): string[] {
   const x = a.attempts.at(-1),
     y = b.attempts.at(-1);
   if (!x || !y) return [...flags, "pending"];
+  if (x.config.nativeVersion !== y.config.nativeVersion)
+    flags.push("native-version-mismatch");
   for (const m of [a, b])
     for (const attempt of m.attempts)
       for (const flag of historyBudgetFlags(m.attempts, attempt.config))

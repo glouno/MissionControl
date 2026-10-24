@@ -74,6 +74,27 @@ test("both fixtures have reproducible pinned trees and independent exact accepta
     ],
   );
 });
+test("CSV acceptance requires lexicographic numeric keys and correct JSON escaping", async (t) => {
+  const dir = await temp(t),
+    run = join(dir, "csv"),
+    m = await prepare("csv", run, root),
+    repo = join(run, "repo"),
+    source = join(repo, "normalize.mjs");
+  await writeFile(source, FIXTURES.csv.solution);
+  assert.equal((await evaluate("csv", repo, m.baseline)).passed, true);
+
+  // Ordinary object serialization recreates the reviewed bug: integer-like
+  // keys reorder numerically even when inserted in lexicographic order.
+  await writeFile(
+    source,
+    FIXTURES.csv.solution.replace("export function normalize", "function lexical") +
+      `export function normalize(csv) { return JSON.stringify(JSON.parse(lexical(csv))) + '\\n'; }\n`,
+  );
+  const incorrect = await evaluate("csv", repo, m.baseline);
+  assert.equal(incorrect.passed, false);
+  assert.equal(incorrect.reason, "incorrect-results");
+  assert.ok(incorrect.candidateHash);
+});
 test("acceptance rejects forbidden files, Git tampering, symlinks and checker bypass", async (t) => {
   const dir = await temp(t);
   for (const [i, attack] of [
@@ -299,6 +320,53 @@ test("bounded processes retain evidence on malformed output, timeout, cancellati
   assert.equal(overflow.outcome, "output-limit");
   assert.equal(overflow.outputBytes, 1024);
 });
+test("pre-cancellation never launches and malformed output cannot admit buffered measurements", async (t) => {
+  const cwd = await temp(t),
+    marker = join(cwd, "launched"),
+    controller = new AbortController();
+  controller.abort();
+  const cancelled = await boundedProcess(
+    process.execPath,
+    [
+      "-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)},'launched')`,
+    ],
+    "",
+    { cwd, timeoutMs: 1000, maxOutputBytes: 1024, signal: controller.signal },
+  );
+  assert.equal(cancelled.outcome, "cancelled");
+  assert.equal(cancelled.outputBytes, 0);
+  assert.equal(cancelled.exitCode, null);
+  await assert.rejects(readFile(marker), { code: "ENOENT" });
+
+  const c = config(),
+    state = new EventAccumulator(c),
+    output =
+      JSON.stringify(hello(c)) +
+      "\nmalformed\n" +
+      JSON.stringify({
+        schemaVersion: 1,
+        seq: 1,
+        type: "measurement",
+        metrics: { totalTokens: measured(12) },
+        costBasis: "unknown",
+      });
+  const failed = await boundedProcess(
+    process.execPath,
+    ["-e", `process.stdout.write(${JSON.stringify(output)})`],
+    "",
+    {
+      cwd,
+      timeoutMs: 1000,
+      maxOutputBytes: 4096,
+      onLine: (line) => state.accept(JSON.parse(line)),
+    },
+  );
+  assert.equal(failed.outcome, "malformed");
+  assert.equal(state.helloSeen, true);
+  assert.equal(state.sequence, 1);
+  assert.equal(state.metrics.totalTokens.value, null);
+});
 async function wrapper(dir: string, events: unknown[], tail = "") {
   const file = join(dir, "adapter.cjs");
   const source = `#!${process.execPath}\nlet input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const r=JSON.parse(input);require('node:fs').writeFileSync(require('node:path').join(r.repository,'reservation.mjs'),${JSON.stringify(FIXTURES.inventory.solution)});${events.map((e) => `console.log(${JSON.stringify(JSON.stringify(e))});`).join("")} ${tail}});\n`;
@@ -434,6 +502,30 @@ test("explicit continuation retains attempt history and sums restarts without un
   assert.ok(admission(m.attempts, c).includes("restart-limit"));
   assert.equal(report([m, m]).comparisons[0].status, "excluded");
 });
+test("continuation refuses changed executable bytes without consuming another attempt", async (t) => {
+  const dir = await temp(t),
+    run = join(dir, "changed-executable"),
+    c = config();
+  c.budget.maxAttempts = 2;
+  c.executable = await wrapper(dir, [
+    hello(c),
+    {
+      schemaVersion: 1,
+      seq: 1,
+      type: "measurement",
+      metrics: { totalTokens: measured(12) },
+      costBasis: "unknown",
+    },
+    { schemaVersion: 1, seq: 2, type: "result", outcome: "failed" },
+  ]);
+  await prepare("inventory", run, root);
+  await runAdapter(run, c, root);
+  const before = await readManifest(run);
+  assert.deepEqual(admission(before.attempts, c), []);
+  await writeFile(c.executable, (await readFile(c.executable, "utf8")) + "\n");
+  await assert.rejects(runAdapter(run, c, root), /Executable changed/);
+  assert.deepEqual(await readManifest(run), before);
+});
 test("partial receipts block readmission after timeout, cancellation, crash or malformed protocol", async (t) => {
   const dir = await temp(t);
   for (const outcome of [
@@ -554,6 +646,12 @@ test("remaining restart allowance reaches adapters and over-budget live-shaped h
   // Other run-wide reported limits also cannot be hidden by splitting attempts.
   m.attempts.forEach((a) => (a.restarts = 0));
   assert.equal(eligible(m), true);
+  const otherVersion = structuredClone(m);
+  otherVersion.attempts.forEach((a) => (a.config.nativeVersion = "fixture-v2"));
+  assert.equal(eligible(otherVersion), true);
+  const versionComparison = report([m, otherVersion]).comparisons[0];
+  assert.equal(versionComparison.status, "excluded");
+  assert.ok(versionComparison.flags.includes("native-version-mismatch"));
   m.attempts.forEach((a) => (a.config.budget.maxReportedTokens = 20));
   assert.equal(eligible(m), false);
   m.attempts.forEach((a) => {
