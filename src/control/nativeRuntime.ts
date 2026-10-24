@@ -80,8 +80,23 @@ export async function nativePreflight(
       ...(parentSignal ? [parentSignal] : []),
     ]),
     faults: string[] = [];
-  if (process.platform !== "linux")
+  const result = (agentVersion?: string) => ({
+    configurationVersion: nativeBinding(config),
+    ready: !faults.length,
+    environment: "native",
+    faults,
+    agentVersion,
+    permissions: profile.permissions,
+    resourceEnforcement: "scheduler accounting only",
+    authenticationInspected: process.platform === "linux" && !signal.aborted,
+    configuration:
+      "Selected existing Codex home/profile; project instructions and integrations remain enabled",
+    setupCommands: profile.setupCommands,
+  });
+  if (process.platform !== "linux") {
     faults.push("Native execution currently supports Linux/WSL only");
+    return result();
+  }
   const version = await nativeCommand(profile.executable, ["--version"], {
     cwd: config.repoPath,
     env,
@@ -157,19 +172,7 @@ export async function nativePreflight(
     faults.push(
       "Selected Codex home needs an existing ChatGPT login; no login was attempted",
     );
-  return {
-    configurationVersion: nativeBinding(config),
-    ready: !faults.length,
-    environment: "native",
-    faults,
-    agentVersion: version?.exitCode === 0 ? version.stdout.trim() : undefined,
-    permissions: profile.permissions,
-    resourceEnforcement: "scheduler accounting only",
-    authenticationInspected: true,
-    configuration:
-      "Selected existing Codex home/profile; project instructions and integrations remain enabled",
-    setupCommands: profile.setupCommands,
-  };
+  return result(version?.exitCode === 0 ? version.stdout.trim() : undefined);
 }
 
 async function candidateUnchanged(

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { SqliteStore } from "../sqlite.js";
@@ -28,6 +29,8 @@ import { Scheduler } from "./scheduler.js";
 import { StorageManager } from "./storage.js";
 import { executionContractSchema } from "./executionContract.js";
 import { CodexEvents } from "./nativeCodex.js";
+
+const linuxTest = process.platform === "linux" ? test : test.skip;
 
 test.mock.method(StorageManager.prototype, "pressure", async () => ({
   freeBytes: 100 * 1024 ** 3,
@@ -135,206 +138,232 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:100,cached
   return { root, repo, store, runtime, goal, db, profile };
 }
 
-test("native explicit task completes through separate checks and review without Docker", async (t) => {
-  const f = await fixture(t);
-  let scheduler: Scheduler;
-  const token = "native-test-operator-0123456789";
-  const server = createControlServer(f.store, {
-    token,
-    onResult: (...args) => scheduler.result(...args),
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  t.after(() => server.close());
-  const url = `http://127.0.0.1:${(server.address() as any).port}`;
-  scheduler = new Scheduler(f.store, f.root, url, { runtime: f.runtime });
-  t.after(() => scheduler.close());
-  const deadline = Date.now() + 30000;
-  while (
-    Date.now() < deadline &&
-    f.store.getGoal(f.goal.id).status !== "completed"
-  ) {
-    await scheduler.tick();
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  const current = f.store.getGoal(f.goal.id);
-  assert.equal(
-    current.status,
-    "completed",
-    JSON.stringify(f.store.tasks(f.goal.id)),
-  );
-  const ledger = new InvocationStore(f.store),
-    records = ledger.all(f.goal.id);
-  assert.ok(records.some((r) => r.phase === "verify" && r.kind === "command"));
-  const coding = records.find((r) => r.phase === "implement")!,
-    review = records.find((r) => r.phase === "review")!;
-  assert.notEqual(coding.workspace, review.workspace);
-  assert.notEqual(coding.sessionId, review.sessionId);
-  assert.equal(coding.candidate, review.candidate);
-  assert.ok(coding.baseCommit);
-  const metrics = ledger.metrics(f.goal.id);
-  assert.equal(metrics.modelRequests.value, null);
-  assert.equal(metrics.inputTokens.value, 200);
-  assert.equal(metrics.cachedInputTokens.value, 80);
-  for (const action of ["invocations", "metrics"]) {
-    const response = await fetch(`${url}/api/v1/goals/${f.goal.id}/${action}`, {
-      headers: { Authorization: `Bearer ${token}` },
+linuxTest(
+  "native explicit task completes through separate checks and review without Docker",
+  async (t) => {
+    const f = await fixture(t);
+    let scheduler: Scheduler;
+    const token = "native-test-operator-0123456789";
+    const server = createControlServer(f.store, {
+      token,
+      onResult: (...args) => scheduler.result(...args),
     });
-    assert.equal(response.status, 200);
-  }
-  assert.equal(
-    (await fetch(`${url}/api/v1/goals/${f.goal.id}/metrics`)).status,
-    401,
-  );
-});
-
-test("unchanged candidates block only after matching trusted-check failures", async (t) => {
-  const f = await fixture(t);
-  let checks = 0;
-  f.runtime.verify = async (_claim, path) => ({
-    commit: await git(path, ["rev-parse", "HEAD"]),
-    passed: false,
-    unchanged: true,
-    verifierVersion: "fixture",
-    results: [
-      {
-        command: "test -f one.txt",
-        exitCode: 1,
-        stdout: "",
-        stderr: ++checks === 1 ? "Temporary tool failure" : "Stable failure",
-      },
-    ],
-  });
-  let scheduler: Scheduler;
-  const token = "native-check-operator-0123456789";
-  const server = createControlServer(f.store, {
-    token,
-    onResult: (...args) => scheduler.result(...args),
-  });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  t.after(() => server.close());
-  scheduler = new Scheduler(
-    f.store,
-    f.root,
-    `http://127.0.0.1:${(server.address() as any).port}`,
-    { runtime: f.runtime },
-  );
-  t.after(() => scheduler.close());
-  const taskId = f.store.tasks(f.goal.id)[0].id;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(() => server.close());
+    const url = `http://127.0.0.1:${(server.address() as any).port}`;
+    scheduler = new Scheduler(f.store, f.root, url, { runtime: f.runtime });
+    t.after(() => scheduler.close());
     const deadline = Date.now() + 30000;
-    while (Date.now() < deadline) {
+    while (
+      Date.now() < deadline &&
+      f.store.getGoal(f.goal.id).status !== "completed"
+    ) {
       await scheduler.tick();
       await new Promise((r) => setTimeout(r, 50));
-      const task = f.store.getTask(taskId);
-      if (checks === attempt && ["retry_wait", "blocked"].includes(task.status))
-        break;
     }
-    const task = f.store.getTask(taskId);
-    assert.equal(checks, attempt);
-    assert.equal(task.status, attempt < 3 ? "retry_wait" : "blocked");
-    if (attempt < 3)
-      f.store.db.exec(
-        `UPDATE control_tasks SET retry_at=0 WHERE id='${taskId}'`,
+    const current = f.store.getGoal(f.goal.id);
+    assert.equal(
+      current.status,
+      "completed",
+      JSON.stringify(f.store.tasks(f.goal.id)),
+    );
+    const ledger = new InvocationStore(f.store),
+      records = ledger.all(f.goal.id);
+    assert.ok(
+      records.some((r) => r.phase === "verify" && r.kind === "command"),
+    );
+    const coding = records.find((r) => r.phase === "implement")!,
+      review = records.find((r) => r.phase === "review")!;
+    assert.notEqual(coding.workspace, review.workspace);
+    assert.notEqual(coding.sessionId, review.sessionId);
+    assert.equal(coding.candidate, review.candidate);
+    assert.ok(coding.baseCommit);
+    const metrics = ledger.metrics(f.goal.id);
+    assert.equal(metrics.modelRequests.value, null);
+    assert.equal(metrics.inputTokens.value, 200);
+    assert.equal(metrics.cachedInputTokens.value, 80);
+    for (const action of ["invocations", "metrics"]) {
+      const response = await fetch(
+        `${url}/api/v1/goals/${f.goal.id}/${action}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
       );
-    else assert.match(JSON.stringify(task.result), /same trusted checks/);
-  }
-});
+      assert.equal(response.status, 200);
+    }
+    assert.equal(
+      (await fetch(`${url}/api/v1/goals/${f.goal.id}/metrics`)).status,
+      401,
+    );
+  },
+);
 
-test("native preserves sessions and user config while excluding controller credentials", async (t) => {
-  const f = await fixture(t);
-  const claim = f.store.claimNextTask("native-worker")!;
-  const backend = observedBackend(f.store, f.runtime.backend(f.goal));
-  const context = {
-    claim,
-    workspace: f.repo,
-    mode: "implement" as const,
-    prompt: "Implement one",
-    signal: new AbortController().signal,
-    onCheckpoint: async () => {},
-  };
-  const first = await backend.run(context),
-    second = await backend.run(context);
-  assert.equal(first.sessionId, second.sessionId);
-  const call = JSON.parse(
-    await readFile(join(f.root, "last-args.json"), "utf8"),
-  );
-  assert.ok(call.args.includes("resume"));
-  assert.ok(call.args.includes('model_reasoning_effort="low"'));
-  assert.ok(!call.args.includes("--last"));
-  assert.ok(!call.args.includes("--ignore-user-config"));
-  assert.ok(!call.args.includes("--ephemeral"));
-  const env = nativeEnvironment(f.profile);
-  assert.equal(env.OPENAI_API_KEY, undefined);
-  assert.equal(env.MISSIONCONTROL_INFERENCE_TOKEN, undefined);
-});
+linuxTest(
+  "unchanged candidates block only after matching trusted-check failures",
+  async (t) => {
+    const f = await fixture(t);
+    let checks = 0;
+    f.runtime.verify = async (_claim, path) => ({
+      commit: await git(path, ["rev-parse", "HEAD"]),
+      passed: false,
+      unchanged: true,
+      verifierVersion: "fixture",
+      results: [
+        {
+          command: "test -f one.txt",
+          exitCode: 1,
+          stdout: "",
+          stderr: ++checks === 1 ? "Temporary tool failure" : "Stable failure",
+        },
+      ],
+    });
+    let scheduler: Scheduler;
+    const token = "native-check-operator-0123456789";
+    const server = createControlServer(f.store, {
+      token,
+      onResult: (...args) => scheduler.result(...args),
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(() => server.close());
+    scheduler = new Scheduler(
+      f.store,
+      f.root,
+      `http://127.0.0.1:${(server.address() as any).port}`,
+      { runtime: f.runtime },
+    );
+    t.after(() => scheduler.close());
+    const taskId = f.store.tasks(f.goal.id)[0].id;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        await scheduler.tick();
+        await new Promise((r) => setTimeout(r, 50));
+        const task = f.store.getTask(taskId);
+        if (
+          checks === attempt &&
+          ["retry_wait", "blocked"].includes(task.status)
+        )
+          break;
+      }
+      const task = f.store.getTask(taskId);
+      assert.equal(checks, attempt);
+      assert.equal(task.status, attempt < 3 ? "retry_wait" : "blocked");
+      if (attempt < 3)
+        f.store.db.exec(
+          `UPDATE control_tasks SET retry_at=0 WHERE id='${taskId}'`,
+        );
+      else assert.match(JSON.stringify(task.result), /same trusted checks/);
+    }
+  },
+);
 
-test("native malformed terminal output fails and preserves unknown usage", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("native-worker")!;
-  await assert.rejects(
-    observedBackend(f.store, f.runtime.backend(f.goal)).run({
+linuxTest(
+  "native preserves sessions and user config while excluding controller credentials",
+  async (t) => {
+    const f = await fixture(t);
+    const claim = f.store.claimNextTask("native-worker")!;
+    const backend = observedBackend(f.store, f.runtime.backend(f.goal));
+    const context = {
+      claim,
+      workspace: f.repo,
+      mode: "implement" as const,
+      prompt: "Implement one",
+      signal: new AbortController().signal,
+      onCheckpoint: async () => {},
+    };
+    const first = await backend.run(context),
+      second = await backend.run(context);
+    assert.equal(first.sessionId, second.sessionId);
+    const call = JSON.parse(
+      await readFile(join(f.root, "last-args.json"), "utf8"),
+    );
+    assert.ok(call.args.includes("resume"));
+    assert.ok(call.args.includes('model_reasoning_effort="low"'));
+    assert.ok(!call.args.includes("--last"));
+    assert.ok(!call.args.includes("--ignore-user-config"));
+    assert.ok(!call.args.includes("--ephemeral"));
+    const env = nativeEnvironment(f.profile);
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    assert.equal(env.MISSIONCONTROL_INFERENCE_TOKEN, undefined);
+  },
+);
+
+linuxTest(
+  "native malformed terminal output fails and preserves unknown usage",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("native-worker")!;
+    await assert.rejects(
+      observedBackend(f.store, f.runtime.backend(f.goal)).run({
+        claim,
+        workspace: f.repo,
+        mode: "implement",
+        prompt: "MALFORMED",
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      }),
+    );
+    assert.equal(
+      new InvocationStore(f.store).all(f.goal.id).at(-1)!.outcome,
+      "failed",
+    );
+  },
+);
+
+linuxTest(
+  "native recovery stops only the selected owned writer and refuses PID reuse",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("native-worker")!;
+    const abort = new AbortController();
+    let started!: () => void;
+    const ready = new Promise<void>((r) => (started = r));
+    const running = observedBackend(f.store, f.runtime.backend(f.goal)).run({
       claim,
       workspace: f.repo,
       mode: "implement",
-      prompt: "MALFORMED",
-      signal: new AbortController().signal,
+      prompt: "WAIT_FOREVER",
+      signal: abort.signal,
+      onProgress: () => started(),
       onCheckpoint: async () => {},
-    }),
-  );
-  assert.equal(
-    new InvocationStore(f.store).all(f.goal.id).at(-1)!.outcome,
-    "failed",
-  );
-});
+    });
+    const rejected = assert.rejects(running);
+    await ready;
+    const record = new InvocationStore(f.store).all(f.goal.id).at(-1)!;
+    assert.ok(record.process);
+    await f.runtime.recover({
+      taskId: claim.task.id,
+      generation: claim.generation,
+    });
+    await rejected;
+    assert.deepEqual(await ownedGroup(record.process!), []);
+    const current = (await processIdentity(process.pid))!;
+    await assert.rejects(
+      ownedGroup({
+        ...current,
+        startTime: String(BigInt(current.startTime) + 1n),
+      }),
+      /reused PID/,
+    );
+  },
+);
 
-test("native recovery stops only the selected owned writer and refuses PID reuse", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("native-worker")!;
-  const abort = new AbortController();
-  let started!: () => void;
-  const ready = new Promise<void>((r) => (started = r));
-  const running = observedBackend(f.store, f.runtime.backend(f.goal)).run({
-    claim,
-    workspace: f.repo,
-    mode: "implement",
-    prompt: "WAIT_FOREVER",
-    signal: abort.signal,
-    onProgress: () => started(),
-    onCheckpoint: async () => {},
-  });
-  const rejected = assert.rejects(running);
-  await ready;
-  const record = new InvocationStore(f.store).all(f.goal.id).at(-1)!;
-  assert.ok(record.process);
-  await f.runtime.recover({
-    taskId: claim.task.id,
-    generation: claim.generation,
-  });
-  await rejected;
-  assert.deepEqual(await ownedGroup(record.process!), []);
-  const current = (await processIdentity(process.pid))!;
-  await assert.rejects(
-    ownedGroup({
-      ...current,
-      startTime: String(BigInt(current.startTime) + 1n),
-    }),
-    /reused PID/,
-  );
-});
-
-test("native preflight detects missing prerequisites without starting an invocation", async (t) => {
-  const f = await fixture(t);
-  f.goal.config.admission!.nativeProfile!.requiredExecutables = [
-    "missioncontrol-nonexistent-tool",
-  ];
-  f.goal.config.admission!.runtimeHash = nativeBinding(f.goal.config);
-  const result = await nativePreflight(f.goal.config);
-  assert.equal(result.ready, false);
-  assert.ok(result.faults.some((f) => f.includes("nonexistent")));
-  assert.equal(new InvocationStore(f.store).all().length, 0);
-});
+linuxTest(
+  "native preflight detects missing prerequisites without starting an invocation",
+  async (t) => {
+    const f = await fixture(t);
+    f.goal.config.admission!.nativeProfile!.requiredExecutables = [
+      "missioncontrol-nonexistent-tool",
+    ];
+    f.goal.config.admission!.runtimeHash = nativeBinding(f.goal.config);
+    const result = await nativePreflight(f.goal.config);
+    assert.equal(result.ready, false);
+    assert.ok(result.faults.some((f) => f.includes("nonexistent")));
+    assert.equal(new InvocationStore(f.store).all().length, 0);
+  },
+);
 
 test("execution contracts reject unsupported native combinations and retain omitted plan resources", () => {
   const native = {
@@ -402,158 +431,190 @@ async function completeFixture(t: test.TestContext, scenario: string) {
   return f;
 }
 for (const scenario of ["CHECK_REPAIR", "REVIEW_REPAIR"])
-  test(`native ${scenario} repairs within one task and resumes the saved session`, async (t) => {
-    const f = await completeFixture(t, scenario),
-      records = new InvocationStore(f.store).all(f.goal.id);
-    assert.equal(f.store.tasks(f.goal.id).length, 1);
-    const writers = records.filter((r) => r.phase === "implement");
-    assert.equal(writers.length, 2);
-    assert.equal(writers[0].sessionId, writers[1].sessionId);
-    const reviews = records.filter((r) => r.phase === "review");
-    if (scenario === "REVIEW_REPAIR") {
-      assert.equal(reviews.length, 2);
-      assert.notEqual(reviews[0].sessionId, reviews[1].sessionId);
-    }
-    assert.equal(f.store.tasks(f.goal.id)[0].attempts, 2);
-  });
-test("native quota failures retain unknown usage and establish a provider blocker", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("quota-worker")!;
-  let error: unknown;
-  try {
-    await observedBackend(f.store, f.runtime.backend(f.goal)).run({
-      claim,
-      workspace: f.repo,
-      mode: "implement",
-      prompt: "QUOTA",
-      signal: new AbortController().signal,
-      onCheckpoint: async () => {},
-    });
-  } catch (e) {
-    error = e;
-  }
-  const { classifyFailure } = await import("./reliability.js");
-  assert.equal(classifyFailure(error).kind, "quota");
-  f.store.recordFailure(
-    f.goal.id,
-    classifyFailure(error),
-    `${claim.task.id}:${claim.generation}`,
-  );
-  assert.equal(f.store.getGoal(f.goal.id).status, "paused");
-  assert.ok(f.store.setting(`provider-block:${f.goal.id}`));
-  assert.equal(
-    new InvocationStore(f.store).metrics(f.goal.id).inputTokens.value,
-    null,
-  );
-});
-test("native duplicate terminal events cannot be accepted or double-count usage", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("duplicate-worker")!;
-  await assert.rejects(
-    observedBackend(f.store, f.runtime.backend(f.goal)).run({
-      claim,
-      workspace: f.repo,
-      mode: "implement",
-      prompt: "DUPLICATE",
-      signal: new AbortController().signal,
-      onCheckpoint: async () => {},
-    }),
-  );
-  const rows = new InvocationStore(f.store).all(f.goal.id);
-  assert.equal(rows[0].outcome, "failed");
-  assert.equal(rows[0].turns, 1);
-});
-test("native command completion and cancellation stop detached descendants", async (t) => {
-  const f = await fixture(t);
-  let identity: Awaited<ReturnType<typeof processIdentity>>;
-  await nativeCommand("/bin/sh", ["-c", "setsid sleep 600 >/dev/null 2>&1 &"], {
-    cwd: f.repo,
-    env: nativeEnvironment(f.profile),
-    onProcess: (id) => (identity = id),
-  });
-  assert.ok(identity);
-  assert.deepEqual(await ownedGroup(identity), []);
-  const abort = new AbortController();
-  let ready!: () => void;
-  const started = new Promise<void>((r) => (ready = r));
-  const running = nativeCommand("/bin/sh", ["-c", "setsid sleep 600 & wait"], {
-    cwd: f.repo,
-    env: nativeEnvironment(f.profile),
-    signal: abort.signal,
-    onProcess: (id) => {
-      identity = id;
-      ready();
+  linuxTest(
+    `native ${scenario} repairs within one task and resumes the saved session`,
+    async (t) => {
+      const f = await completeFixture(t, scenario),
+        records = new InvocationStore(f.store).all(f.goal.id);
+      assert.equal(f.store.tasks(f.goal.id).length, 1);
+      const writers = records.filter((r) => r.phase === "implement");
+      assert.equal(writers.length, 2);
+      assert.equal(writers[0].sessionId, writers[1].sessionId);
+      const reviews = records.filter((r) => r.phase === "review");
+      if (scenario === "REVIEW_REPAIR") {
+        assert.equal(reviews.length, 2);
+        assert.notEqual(reviews[0].sessionId, reviews[1].sessionId);
+      }
+      assert.equal(f.store.tasks(f.goal.id)[0].attempts, 2);
     },
-  });
-  const rejected = assert.rejects(running);
-  await started;
-  abort.abort();
-  await rejected;
-  assert.deepEqual(await ownedGroup(identity!), []);
-});
-test("native verification rejects source mutation and undeclared outputs but permits declared build outputs", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("verify-worker")!;
-  await writeFile(join(f.repo, "one.txt"), "implemented");
-  await git(f.repo, ["add", "one.txt"]);
-  await git(f.repo, ["commit", "-m", "candidate"]);
-  for (const [command, outputs, passed] of [
-    ["printf mutation >> base.txt", [], false],
-    ["touch source.ts", [], false],
-    ["mkdir build; touch build/output", ["build/**"], true],
-  ] as const) {
-    claim.goal.config.verificationCommands = [command];
-    claim.task.spec.verificationCommands = [command];
-    claim.goal.config.admission!.nativeProfile!.buildOutputPaths = [...outputs];
-    claim.goal.config.admission!.runtimeHash = nativeBinding(claim.goal.config);
-    const result = await f.runtime.verify(claim, f.repo);
-    assert.equal(result.passed, passed);
-    assert.equal(result.unchanged, passed);
-  }
-  assert.equal(await readFile(join(f.repo, "base.txt"), "utf8"), "base\n");
-});
-test("native admission catches fixture scope conflicts and prerequisite failures without inference", async (t) => {
-  const f = await fixture(t);
-  f.goal.config.admission!.nativeProfile!.requiredPaths = [
-    "missing-fixture.json",
-  ];
-  f.goal.config.admission!.nativeProfile!.requiredScopePaths = ["fixture.json"];
-  f.goal.config.admission!.runtimeHash = nativeBinding(f.goal.config);
-  const result = await nativePreflight(
-    f.goal.config,
-    f.store.tasks(f.goal.id)[0].spec,
   );
-  assert.equal(result.ready, false);
-  assert.ok(result.faults.some((f) => f.includes("missing-fixture")));
-  assert.ok(result.faults.some((f) => f.includes("outside task scope")));
-  const goal = f.store.createGoal(f.goal.config);
-  assert.throws(
-    () =>
-      f.store.installPlan(
-        goal.id,
-        {
-          tasks: [
-            {
-              key: "one",
-              title: "One",
-              description: "One",
-              allowedPaths: ["one.txt"],
-              acceptanceCriteria: ["pass"],
-            },
-          ],
+linuxTest(
+  "native quota failures retain unknown usage and establish a provider blocker",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("quota-worker")!;
+    let error: unknown;
+    try {
+      await observedBackend(f.store, f.runtime.backend(f.goal)).run({
+        claim,
+        workspace: f.repo,
+        mode: "implement",
+        prompt: "QUOTA",
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      });
+    } catch (e) {
+      error = e;
+    }
+    const { classifyFailure } = await import("./reliability.js");
+    assert.equal(classifyFailure(error).kind, "quota");
+    f.store.recordFailure(
+      f.goal.id,
+      classifyFailure(error),
+      `${claim.task.id}:${claim.generation}`,
+    );
+    assert.equal(f.store.getGoal(f.goal.id).status, "paused");
+    assert.ok(f.store.setting(`provider-block:${f.goal.id}`));
+    assert.equal(
+      new InvocationStore(f.store).metrics(f.goal.id).inputTokens.value,
+      null,
+    );
+  },
+);
+linuxTest(
+  "native duplicate terminal events cannot be accepted or double-count usage",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("duplicate-worker")!;
+    await assert.rejects(
+      observedBackend(f.store, f.runtime.backend(f.goal)).run({
+        claim,
+        workspace: f.repo,
+        mode: "implement",
+        prompt: "DUPLICATE",
+        signal: new AbortController().signal,
+        onCheckpoint: async () => {},
+      }),
+    );
+    const rows = new InvocationStore(f.store).all(f.goal.id);
+    assert.equal(rows[0].outcome, "failed");
+    assert.equal(rows[0].turns, 1);
+  },
+);
+linuxTest(
+  "native command completion and cancellation stop detached descendants",
+  async (t) => {
+    const f = await fixture(t);
+    let identity: Awaited<ReturnType<typeof processIdentity>>;
+    await nativeCommand(
+      "/bin/sh",
+      ["-c", "setsid sleep 600 >/dev/null 2>&1 &"],
+      {
+        cwd: f.repo,
+        env: nativeEnvironment(f.profile),
+        onProcess: (id) => (identity = id),
+      },
+    );
+    assert.ok(identity);
+    assert.deepEqual(await ownedGroup(identity), []);
+    const abort = new AbortController();
+    let ready!: () => void;
+    const started = new Promise<void>((r) => (ready = r));
+    const running = nativeCommand(
+      "/bin/sh",
+      ["-c", "setsid sleep 600 & wait"],
+      {
+        cwd: f.repo,
+        env: nativeEnvironment(f.profile),
+        signal: abort.signal,
+        onProcess: (id) => {
+          identity = id;
+          ready();
         },
-        goal.revision,
-      ),
-    /outside task scope/,
-  );
-  assert.equal(new InvocationStore(f.store).all().length, 0);
-});
+      },
+    );
+    const rejected = assert.rejects(running);
+    await started;
+    abort.abort();
+    await rejected;
+    assert.deepEqual(await ownedGroup(identity!), []);
+  },
+);
+linuxTest(
+  "native verification rejects source mutation and undeclared outputs but permits declared build outputs",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("verify-worker")!;
+    await writeFile(join(f.repo, "one.txt"), "implemented");
+    await git(f.repo, ["add", "one.txt"]);
+    await git(f.repo, ["commit", "-m", "candidate"]);
+    for (const [command, outputs, passed] of [
+      ["printf mutation >> base.txt", [], false],
+      ["touch source.ts", [], false],
+      ["mkdir build; touch build/output", ["build/**"], true],
+    ] as const) {
+      claim.goal.config.verificationCommands = [command];
+      claim.task.spec.verificationCommands = [command];
+      claim.goal.config.admission!.nativeProfile!.buildOutputPaths = [
+        ...outputs,
+      ];
+      claim.goal.config.admission!.runtimeHash = nativeBinding(
+        claim.goal.config,
+      );
+      const result = await f.runtime.verify(claim, f.repo);
+      assert.equal(result.passed, passed);
+      assert.equal(result.unchanged, passed);
+    }
+    assert.equal(await readFile(join(f.repo, "base.txt"), "utf8"), "base\n");
+  },
+);
+linuxTest(
+  "native admission catches fixture scope conflicts and prerequisite failures without inference",
+  async (t) => {
+    const f = await fixture(t);
+    f.goal.config.admission!.nativeProfile!.requiredPaths = [
+      "missing-fixture.json",
+    ];
+    f.goal.config.admission!.nativeProfile!.requiredScopePaths = [
+      "fixture.json",
+    ];
+    f.goal.config.admission!.runtimeHash = nativeBinding(f.goal.config);
+    const result = await nativePreflight(
+      f.goal.config,
+      f.store.tasks(f.goal.id)[0].spec,
+    );
+    assert.equal(result.ready, false);
+    assert.ok(result.faults.some((f) => f.includes("missing-fixture")));
+    assert.ok(result.faults.some((f) => f.includes("outside task scope")));
+    const goal = f.store.createGoal(f.goal.config);
+    assert.throws(
+      () =>
+        f.store.installPlan(
+          goal.id,
+          {
+            tasks: [
+              {
+                key: "one",
+                title: "One",
+                description: "One",
+                allowedPaths: ["one.txt"],
+                acceptanceCriteria: ["pass"],
+              },
+            ],
+          },
+          goal.revision,
+        ),
+      /outside task scope/,
+    );
+    assert.equal(new InvocationStore(f.store).all().length, 0);
+  },
+);
 
 test("native launcher refuses EOF without durable launch authorization", async (t) => {
   const f = await fixture(t),
     marker = join(f.root, "unauthorized-write");
   const child = spawn(process.execPath, [
-    new URL("./nativeLauncher.js", import.meta.url).pathname,
+    fileURLToPath(new URL("./nativeLauncher.js", import.meta.url)),
     process.execPath,
     "-e",
     `require('node:fs').writeFileSync(${JSON.stringify(marker)},'bad')`,
@@ -563,21 +624,24 @@ test("native launcher refuses EOF without durable launch authorization", async (
   assert.equal((await closed)[0], 1);
   await assert.rejects(readFile(marker), { code: "ENOENT" });
 });
-test("normal native commands do not prematurely consume the attempt cleanup allowance", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("cleanup-worker")!;
-  const candidate = f.repo;
-  await writeFile(join(candidate, "one.txt"), "implemented");
-  await git(candidate, ["add", "one.txt"]);
-  await git(candidate, ["commit", "-m", "candidate"]);
-  const result = await f.runtime.verify(claim, candidate);
-  assert.equal(result.passed, true);
-  assert.equal(
-    f.store.reliability.runtime(`${claim.task.id}:${claim.generation}`)
-      ?.cleanupStartedAt,
-    undefined,
-  );
-});
+linuxTest(
+  "normal native commands do not prematurely consume the attempt cleanup allowance",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("cleanup-worker")!;
+    const candidate = f.repo;
+    await writeFile(join(candidate, "one.txt"), "implemented");
+    await git(candidate, ["add", "one.txt"]);
+    await git(candidate, ["commit", "-m", "candidate"]);
+    const result = await f.runtime.verify(claim, candidate);
+    assert.equal(result.passed, true);
+    assert.equal(
+      f.store.reliability.runtime(`${claim.task.id}:${claim.generation}`)
+        ?.cleanupStartedAt,
+      undefined,
+    );
+  },
+);
 test("private output rotates with private permissions while metadata remains independently durable", async (t) => {
   const f = await fixture(t);
   const { PrivateOutput } = await import("./privateOutput.js");
@@ -599,58 +663,61 @@ test("private output rotates with private permissions while metadata remains ind
     assert.equal((await stat(file)).mode & 0o077, 0);
 });
 
-test("native startup retains ambiguous ownership while settling an independent stopped attempt", async (t) => {
-  const f = await fixture(t),
-    other = await fixture(t),
-    claim = f.store.claimNextTask("retained-worker")!;
-  const g = f.store.createGoal(other.goal.config);
-  f.store.installPlan(
-    g.id,
-    {
-      tasks: [
-        {
-          key: "two",
-          title: "Two",
-          description: "Two",
-          allowedPaths: ["one.txt"],
-          acceptanceCriteria: ["done"],
-        },
-      ],
-    },
-    g.revision,
-  );
-  const second = f.store.claimNextTask("stopped-worker", { goalId: g.id })!;
-  assert.ok(second);
-  const identity = (await processIdentity(process.pid))!;
-  new InvocationStore(f.store).save({
-    id: "ambiguous-native",
-    goalId: f.goal.id,
-    taskId: claim.task.id,
-    attemptId: `${claim.task.id}:${claim.generation}`,
-    generation: claim.generation,
-    phase: "implement",
-    environment: "native",
-    agent: "codex",
-    startedAt: Date.now(),
-    workspace: f.repo,
-    outcome: "active",
-    turns: 0,
-    toolEvents: 0,
-    retryEvents: 0,
-    process: {
-      ...identity,
-      startTime: String(BigInt(identity.startTime) + 1n),
-    },
-  });
-  f.store.fenceStartup();
-  await f.runtime.recoverStartup();
-  assert.equal(f.store.getTask(claim.task.id).workerId, "retained-worker");
-  assert.equal(f.store.getTask(second.task.id).workerId, null);
-  assert.equal(f.store.getGoal(f.goal.id).status, "paused");
-  assert.deepEqual(f.store.setting("startup-recovery").tasks, [
-    { taskId: claim.task.id, generation: claim.generation },
-  ]);
-});
+linuxTest(
+  "native startup retains ambiguous ownership while settling an independent stopped attempt",
+  async (t) => {
+    const f = await fixture(t),
+      other = await fixture(t),
+      claim = f.store.claimNextTask("retained-worker")!;
+    const g = f.store.createGoal(other.goal.config);
+    f.store.installPlan(
+      g.id,
+      {
+        tasks: [
+          {
+            key: "two",
+            title: "Two",
+            description: "Two",
+            allowedPaths: ["one.txt"],
+            acceptanceCriteria: ["done"],
+          },
+        ],
+      },
+      g.revision,
+    );
+    const second = f.store.claimNextTask("stopped-worker", { goalId: g.id })!;
+    assert.ok(second);
+    const identity = (await processIdentity(process.pid))!;
+    new InvocationStore(f.store).save({
+      id: "ambiguous-native",
+      goalId: f.goal.id,
+      taskId: claim.task.id,
+      attemptId: `${claim.task.id}:${claim.generation}`,
+      generation: claim.generation,
+      phase: "implement",
+      environment: "native",
+      agent: "codex",
+      startedAt: Date.now(),
+      workspace: f.repo,
+      outcome: "active",
+      turns: 0,
+      toolEvents: 0,
+      retryEvents: 0,
+      process: {
+        ...identity,
+        startTime: String(BigInt(identity.startTime) + 1n),
+      },
+    });
+    f.store.fenceStartup();
+    await f.runtime.recoverStartup();
+    assert.equal(f.store.getTask(claim.task.id).workerId, "retained-worker");
+    assert.equal(f.store.getTask(second.task.id).workerId, null);
+    assert.equal(f.store.getGoal(f.goal.id).status, "paused");
+    assert.deepEqual(f.store.setting("startup-recovery").tasks, [
+      { taskId: claim.task.id, generation: claim.generation },
+    ]);
+  },
+);
 test("native operation reconciliation refuses retained active execution", async (t) => {
   const f = await fixture(t),
     attemptId = f.store.reserveOperation(f.goal.id, "plan");
@@ -676,46 +743,49 @@ test("native operation reconciliation refuses retained active execution", async 
   );
 });
 
-test("cleanup inspection ambiguity retains a cancelled invocation and its workspace claim", async (t) => {
-  const f = await fixture(t),
-    claim = f.store.claimNextTask("ambiguous-cleanup-worker")!,
-    identity = (await processIdentity(process.pid))!,
-    signal = AbortSignal.abort();
-  const ambiguous = {
-    ...identity,
-    startTime: String(BigInt(identity.startTime) + 1n),
-  };
-  const backend = observedBackend(f.store, {
-    async run(context) {
-      context.observe?.({ process: ambiguous });
-      await cleanupNativeProcess(ambiguous, Promise.resolve());
-      throw Error("Ambiguous cleanup must not succeed");
-    },
-  });
-  await assert.rejects(
-    backend.run({
-      claim,
-      workspace: f.repo,
-      mode: "implement",
-      prompt: "",
-      signal,
-      onCheckpoint: async () => {},
-    }),
-    (error: any) => error.failure?.kind === "cleanup_blocked",
-  );
-  const record = new InvocationStore(f.store).all(f.goal.id).at(-1)!;
-  assert.equal(record.outcome, "cleanup_blocked");
-  assert.deepEqual(record.usage, { kind: "subscription", status: "unknown" });
-  // Startup must preserve ownership rather than release the cancelled writer.
-  f.store.fenceStartup();
-  await f.runtime.recoverStartup();
-  assert.equal(
-    f.store.getTask(claim.task.id).workerId,
-    "ambiguous-cleanup-worker",
-  );
-  assert.equal(f.store.getGoal(f.goal.id).status, "paused");
-  assert.ok(await processIdentity(process.pid));
-});
+linuxTest(
+  "cleanup inspection ambiguity retains a cancelled invocation and its workspace claim",
+  async (t) => {
+    const f = await fixture(t),
+      claim = f.store.claimNextTask("ambiguous-cleanup-worker")!,
+      identity = (await processIdentity(process.pid))!,
+      signal = AbortSignal.abort();
+    const ambiguous = {
+      ...identity,
+      startTime: String(BigInt(identity.startTime) + 1n),
+    };
+    const backend = observedBackend(f.store, {
+      async run(context) {
+        context.observe?.({ process: ambiguous });
+        await cleanupNativeProcess(ambiguous, Promise.resolve());
+        throw Error("Ambiguous cleanup must not succeed");
+      },
+    });
+    await assert.rejects(
+      backend.run({
+        claim,
+        workspace: f.repo,
+        mode: "implement",
+        prompt: "",
+        signal,
+        onCheckpoint: async () => {},
+      }),
+      (error: any) => error.failure?.kind === "cleanup_blocked",
+    );
+    const record = new InvocationStore(f.store).all(f.goal.id).at(-1)!;
+    assert.equal(record.outcome, "cleanup_blocked");
+    assert.deepEqual(record.usage, { kind: "subscription", status: "unknown" });
+    // Startup must preserve ownership rather than release the cancelled writer.
+    f.store.fenceStartup();
+    await f.runtime.recoverStartup();
+    assert.equal(
+      f.store.getTask(claim.task.id).workerId,
+      "ambiguous-cleanup-worker",
+    );
+    assert.equal(f.store.getGoal(f.goal.id).status, "paused");
+    assert.ok(await processIdentity(process.pid));
+  },
+);
 
 test("empty additive preparation defaults preserve prior native admission fingerprints", async (t) => {
   const f = await fixture(t);
@@ -757,7 +827,48 @@ test("malformed native protocol cannot regain trusted usage or successful comple
   assert.throws(() => events.assertSuccessful(0));
 });
 
-test(
+test("native preflight refuses unsupported hosts before launching probes", async (t) => {
+  const f = await fixture(t),
+    platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  try {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const result = await nativePreflight(f.goal.config);
+    assert.equal(result.ready, false);
+    assert.equal(result.authenticationInspected, false);
+    assert.deepEqual(result.faults, [
+      "Native execution currently supports Linux/WSL only",
+    ]);
+    assert.equal(result.agentVersion, undefined);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+  await assert.rejects(readFile(join(f.root, "last-args.json")), {
+    code: "ENOENT",
+  });
+});
+
+linuxTest(
+  "native preflight respects cancellation before any executable starts",
+  async (t) => {
+    const f = await fixture(t),
+      marker = join(f.root, "cancelled-preflight");
+    await writeFile(
+      f.profile.executable,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'started');`,
+      { mode: 0o700 },
+    );
+    const result = await nativePreflight(
+      f.goal.config,
+      undefined,
+      AbortSignal.abort(),
+    );
+    assert.equal(result.ready, false);
+    assert.equal(result.authenticationInspected, false);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+  },
+);
+
+linuxTest(
   "native preflight bounds stalled executables and stops their owned processes",
   { timeout: 10000 },
   async (t) => {
@@ -778,51 +889,57 @@ test(
   },
 );
 
-test("native commands and agent execution work from installations with escaped URL paths", async (t) => {
-  const f = await fixture(t),
-    installation = join(f.root, "installation with spaces # % é");
-  await mkdir(installation);
-  await writeFile(join(installation, "package.json"), '{"type":"module"}\n');
-  // Relocate only the modules under test. Dependencies keep their original URLs;
-  // the test does not copy dependency or build trees into its scratch directory.
-  for (const name of [
-    "nativeProcess.js",
-    "nativeRuntime.js",
-    "nativeLauncher.js",
-  ]) {
-    const original = new URL(name, import.meta.url);
-    const source = (await readFile(original, "utf8")).replace(
-      /from "([^\"]+)"/g,
-      (_match, specifier: string) =>
-        `from ${JSON.stringify(specifier.startsWith("./") ? new URL(specifier, original).href : import.meta.resolve(specifier))}`,
+linuxTest(
+  "native commands and agent execution work from installations with escaped URL paths",
+  async (t) => {
+    const f = await fixture(t),
+      installation = join(f.root, "installation with spaces # % é");
+    await mkdir(installation);
+    await writeFile(join(installation, "package.json"), '{"type":"module"}\n');
+    // Relocate only the modules under test. Dependencies keep their original URLs;
+    // the test does not copy dependency or build trees into its scratch directory.
+    for (const name of [
+      "nativeProcess.js",
+      "nativeRuntime.js",
+      "nativeLauncher.js",
+    ]) {
+      const original = new URL(name, import.meta.url);
+      const source = (await readFile(original, "utf8")).replace(
+        /from "([^\"]+)"/g,
+        (_match, specifier: string) =>
+          `from ${JSON.stringify(specifier.startsWith("./") ? new URL(specifier, original).href : import.meta.resolve(specifier))}`,
+      );
+      await writeFile(join(installation, name), source);
+    }
+    const relocated = await import(
+      pathToFileURL(join(installation, "nativeProcess.js")).href
     );
-    await writeFile(join(installation, name), source);
-  }
-  const relocated = await import(
-    pathToFileURL(join(installation, "nativeProcess.js")).href
-  );
-  const command = await relocated.nativeCommand(
-    "/bin/sh",
-    ["-c", "printf relocated"],
-    {
-      cwd: f.repo,
-      env: nativeEnvironment(f.profile),
-    },
-  );
-  assert.equal(command.exitCode, 0, command.stderr);
-  assert.equal(command.stdout, "relocated");
-  const { NativeRuntime: RelocatedRuntime } = await import(
-    pathToFileURL(join(installation, "nativeRuntime.js")).href
-  );
-  const runtime = new RelocatedRuntime(f.store, f.root);
-  const claim = f.store.claimNextTask("relocated-worker")!;
-  await observedBackend(f.store, runtime.backend(f.goal)).run({
-    claim,
-    workspace: f.repo,
-    mode: "implement",
-    prompt: "Implement one",
-    signal: new AbortController().signal,
-    onCheckpoint: async () => {},
-  });
-  assert.equal(await readFile(join(f.repo, "one.txt"), "utf8"), "implemented");
-});
+    const command = await relocated.nativeCommand(
+      "/bin/sh",
+      ["-c", "printf relocated"],
+      {
+        cwd: f.repo,
+        env: nativeEnvironment(f.profile),
+      },
+    );
+    assert.equal(command.exitCode, 0, command.stderr);
+    assert.equal(command.stdout, "relocated");
+    const { NativeRuntime: RelocatedRuntime } = await import(
+      pathToFileURL(join(installation, "nativeRuntime.js")).href
+    );
+    const runtime = new RelocatedRuntime(f.store, f.root);
+    const claim = f.store.claimNextTask("relocated-worker")!;
+    await observedBackend(f.store, runtime.backend(f.goal)).run({
+      claim,
+      workspace: f.repo,
+      mode: "implement",
+      prompt: "Implement one",
+      signal: new AbortController().signal,
+      onCheckpoint: async () => {},
+    });
+    assert.equal(
+      await readFile(join(f.repo, "one.txt"), "utf8"),
+      "implemented",
+    );
+  },
+);
