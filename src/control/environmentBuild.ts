@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, rename, lstat, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -43,6 +43,55 @@ export function ownedDockerInvocation(
       ],
     };
   return { command: "docker", args };
+}
+/** Drain build output without killing the storage-lock owner on verbose logs. */
+export function runBuildCommand(
+  command: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  const capture = () => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    return {
+      append(chunk: Buffer) {
+        chunks.push(chunk);
+        bytes += chunk.length;
+        const limit = 4 * 1024 * 1024;
+        while (bytes > limit) {
+          const first = chunks[0];
+          const excess = bytes - limit;
+          if (first.length <= excess) {
+            chunks.shift();
+            bytes -= first.length;
+          } else {
+            chunks[0] = first.subarray(excess);
+            bytes -= excess;
+          }
+        }
+      },
+      value: () => Buffer.concat(chunks).toString("utf8"),
+    };
+  };
+  return new Promise((resolve, reject) => {
+    const stdout = capture(),
+      stderr = capture();
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", stdout.append);
+    child.stderr.on("data", stderr.append);
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      const output = { stdout: stdout.value(), stderr: stderr.value() };
+      if (code === 0) resolve(output);
+      else
+        reject(
+          Object.assign(new Error(`Image build exited (${signal ?? code})`), {
+            ...output,
+            code,
+            signal,
+          }),
+        );
+    });
+  });
 }
 export interface EnvironmentBuildRecord {
   id: string;
@@ -125,10 +174,12 @@ export class EnvironmentImageBuilder {
       args: string[],
     ) => Promise<{ stdout: string; stderr: string }> = (args: string[]) => {
       const invocation = ownedDockerInvocation(args);
-      return exec(invocation.command, invocation.args, {
-        timeout: invocation.command === "docker" ? 900000 : 0,
-        maxBuffer: 4 * 1024 * 1024,
-      });
+      return invocation.command === "docker"
+        ? exec(invocation.command, invocation.args, {
+            timeout: 900000,
+            maxBuffer: 4 * 1024 * 1024,
+          })
+        : runBuildCommand(invocation.command, invocation.args);
     },
     readonly admission = async () => {
       const pressure = await measureStoragePressure(

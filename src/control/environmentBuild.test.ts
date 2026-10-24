@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import {
   EnvironmentImageBuilder,
   processIdentity,
+  runBuildCommand,
 } from "./environmentBuild.js";
 import { environmentManifestSchema } from "./environmentManifest.js";
 import { git } from "./git.js";
@@ -248,4 +249,23 @@ test("process identity is stable for a live child and absent after it exits", as
   assert.equal(await processIdentity(child.pid!), undefined);
   assert.equal(await processIdentity(-1), undefined);
   assert.equal(await processIdentity(0x100000001), undefined);
+});
+
+test("verbose gated build logs stay bounded while the build finishes or reports failure", async () => {
+  const script =
+    "process.stdout.write('x'.repeat(5 * 1024 * 1024)); process.stderr.write('y'.repeat(5 * 1024 * 1024)); process.stdout.write('finished'); process.stderr.write('diagnostic');";
+  const output = await runBuildCommand(process.execPath, ["-e", script]);
+  assert.equal(Buffer.byteLength(output.stdout), 4 * 1024 * 1024);
+  assert.equal(Buffer.byteLength(output.stderr), 4 * 1024 * 1024);
+  assert.ok(output.stdout.endsWith("finished"));
+  assert.ok(output.stderr.endsWith("diagnostic"));
+  await assert.rejects(
+    runBuildCommand(process.execPath, ["-e", script + "process.exitCode = 7;"]),
+    (error: any) => {
+      assert.equal(error.code, 7);
+      assert.ok(error.stderr.endsWith("diagnostic"));
+      assert.equal(Buffer.byteLength(error.stderr), 4 * 1024 * 1024);
+      return true;
+    },
+  );
 });
