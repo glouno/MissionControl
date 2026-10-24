@@ -18,7 +18,7 @@ import { createServer } from "node:net";
 
 test(
   "fresh CLI installation from unrelated cwd admits a fake goal and records verified completion",
-  { timeout: 40000 },
+  { timeout: 100000 },
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), "mc-fresh-install-"));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -87,7 +87,7 @@ mock.method(StorageManager.prototype, 'pressure', async () => ({ freeBytes: 100 
         await once(child, "exit");
       }
     });
-    const deadline = Date.now() + 30000;
+    let deadline = Date.now() + 30000;
     while (!diagnostics.includes("MissionControl: ")) {
       if (child.exitCode !== null || Date.now() > deadline)
         throw new Error(`Controller failed to start: ${diagnostics}`);
@@ -175,6 +175,19 @@ mock.method(StorageManager.prototype, 'pressure', async () => ({ freeBytes: 100 
     await assert.rejects(
       run("goal", "inspect", scopedGoal.id, "--token-file", credentialFile),
     );
+    // The scoped admission above uses the same repository. Let it finish before
+    // testing the next admission; overlap coordination has separate coverage.
+    deadline = Date.now() + 30000;
+    let scopedStatus: string;
+    do {
+      scopedStatus = JSON.parse(
+        (await run("goal", "inspect", scopedGoal.id)).stdout,
+      ).goal.status;
+      if (scopedStatus === "completed") break;
+      assert.ok(!["failed", "cancelled"].includes(scopedStatus));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    } while (Date.now() < deadline);
+    assert.equal(scopedStatus, "completed");
     const goal = JSON.parse(
       (
         await run(
@@ -204,6 +217,7 @@ mock.method(StorageManager.prototype, 'pressure', async () => ({ freeBytes: 100 
       ).stdout,
     );
     assert.equal(repeat.id, goal.id);
+    deadline = Date.now() + 30000;
     let current;
     do {
       current = JSON.parse((await run("goal", "inspect", goal.id)).stdout);
