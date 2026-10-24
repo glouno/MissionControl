@@ -1,7 +1,7 @@
 # MissionControl
 
 MissionControl turns development goals into dependency-aware tasks, leases work
-to isolated agents, records attempts and checks, and asks for explicit approval
+to native or container agents, records attempts and checks, and asks for explicit approval
 when work needs a human decision. One controller owns the SQLite application
 database. Humans and other agents use its authenticated HTTP API, CLI, MCP and
 six-view dashboard.
@@ -42,8 +42,14 @@ disabled defaults. Building and installing do not start services or log in.
 ## Set up your installation
 
 - [Installation and first workflow](docs/installation.md)
+- [Native execution](docs/native-execution.md), [validation](docs/native-runtime-validation.md), and [migration/rollback](docs/native-migration.md)
 - [Configuration and private customization](docs/configuration.md)
+- [Exact project evidence qualification and operator handoff](docs/project-qualification.md)
+- [Offline project readiness audit and operator handoff](docs/project-readiness.md)
 - [Agent API and CLI workflows](docs/agents.md), [OpenAPI](docs/openapi.json)
+- [Offline native-agent comparison kit](docs/agent-evaluation.md)
+- [Execution capability matrix and harness restrictions](docs/execution-capabilities.md)
+
 - [Azure Foundry execution](docs/azure.md) and [worker images](docs/worker-images.md)
 - [Database ownership and recovery](docs/state.md), [encrypted backups](docs/backups.md)
 - [Security](SECURITY.md), [licensing and corresponding source](docs/licensing.md)
@@ -52,8 +58,9 @@ disabled defaults. Building and installing do not start services or log in.
 Keep project settings, prompts and machine configuration in external files or a
 private `missioncontrol-config` repository. Keep credentials, runtime databases,
 missions/specs, reports, sessions and crypto stores outside the public checkout.
-Real execution requires an explicitly reviewed Docker image and provider runtime;
-there is no silent host-execution fallback. Publication and auto-merge are disabled
+Real execution selects an explicit [native devbox](docs/native-execution.md) or
+container runtime. Container execution retains its reviewed image/provider
+requirements; there is no environment or billing fallback. Publication and auto-merge are disabled
 unless project and installation policy explicitly allow them.
 
 Original MissionControl code is **AGPL-3.0-only**. Builds include the exact reviewed

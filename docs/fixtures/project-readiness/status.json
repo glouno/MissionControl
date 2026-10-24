@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "kind": "project-readiness-status",
+  "exportedAt": "2026-10-22T12:00:00Z",
+  "projects": [
+    {
+      "id": "example-engine",
+      "requirementsHash": null,
+      "reportedReady": true,
+      "paused": false,
+      "unknownUsageHold": null,
+      "hostPolicyAllowsExecution": null,
+      "dockerAvailable": null,
+      "executionImage": null,
+      "verificationImage": null,
+      "authPrepared": null,
+      "authWriterActive": null,
+      "qualification": null
+    },
+    {
+      "id": "example-web",
+      "requirementsHash": null,
+      "reportedReady": false,
+      "paused": false,
+      "unknownUsageHold": null,
+      "hostPolicyAllowsExecution": null,
+      "dockerAvailable": null,
+      "executionImage": null,
+      "verificationImage": null,
+      "authPrepared": null,
+      "authWriterActive": null,
+      "qualification": null
+    },
+    {
+      "id": "example-python",
+      "requirementsHash": null,
+      "reportedReady": false,
+      "paused": true,
+      "unknownUsageHold": null,
+      "hostPolicyAllowsExecution": null,
+      "dockerAvailable": null,
+      "executionImage": null,
+      "verificationImage": null,
+      "authPrepared": null,
+      "authWriterActive": null,
+      "qualification": null
+    }
+  ]
+}

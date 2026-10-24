@@ -1,3 +1,4 @@
+import { nativeProfileSchema, nativeBinding } from "./control/nativeConfig.js";
 import { localDeliveryVerifierSchema } from "./control/localDelivery.js";
 import { executionRuntimeHash } from "./control/runtimeFingerprint.js";
 import { assertSubscriptionQualification } from "./control/subscriptionQualification.js";
@@ -17,7 +18,7 @@ import { secretReferenceSchema } from "./credentials.js";
 export { readSecret } from "./credentials.js";
 import { humanBindingSchema } from "./control/human.js";
 import { storageDefaults } from "./control/storage.js";
-import { isolatedRuntimeSchema } from "./control/isolatedRuntime.js";
+import { isolatedRuntimeSchema } from "./control/runtimeConfig.js";
 import {
   authEnvironmentSchema,
   authPolicyHash,
@@ -52,7 +53,7 @@ export const installationSchema = z
       .object({
         allowedProviders: z.array(z.string()).default([]),
         allowedExecutionModes: z
-          .array(z.enum(["fake", "isolated"]))
+          .array(z.enum(["fake", "isolated", "native"]))
           .default(["fake"]),
         publish: z.boolean().default(false),
         autoMerge: z.boolean().default(false),
@@ -145,7 +146,7 @@ export const projectFileSchema = z
     enabled: z.boolean().default(false),
     profile: id.optional(),
     provider: id.optional(),
-    executionMode: z.enum(["fake", "isolated"]).default("fake"),
+    executionMode: z.enum(["fake", "isolated", "native"]).default("fake"),
     promptIds: z.array(id).max(20).default([]),
     contextFiles: z
       .array(z.object({ rootId: id, path: z.string().min(1) }).strict())
@@ -212,7 +213,11 @@ const connectorFileSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 const hostFileSchema = z
-  .object({ id, isolatedRuntime: isolatedRuntimeSchema.optional() })
+  .object({
+    id,
+    isolatedRuntime: isolatedRuntimeSchema.optional(),
+    nativeProfiles: z.record(z.string(), nativeProfileSchema).optional(),
+  })
   .strict();
 const scheduleFileSchema = z
   .object({
@@ -468,6 +473,16 @@ export async function loadConfiguration(
       throw Error(
         `Provider ${provider.id}: configure credentials and runtime in the explicit host/auth environment`,
       );
+    if (contract.execution === "native") {
+      if (contract.authentication.kind !== "local")
+        throw Error("Native execution requires a local profile");
+      const reference = contract.authentication.reference;
+      if (hosts.filter((h) => h.nativeProfiles?.[reference]).length !== 1)
+        throw Error(
+          `Native profile ${reference} must exist on exactly one host`,
+        );
+      continue;
+    }
     const definitions = hosts.flatMap((h) =>
       h.isolatedRuntime?.providers[provider.id]
         ? [h.isolatedRuntime.providers[provider.id]]
@@ -631,6 +646,20 @@ export function effectiveGoal(
       authenticationPolicyHash: admittedAuth
         ? authPolicyHash(admittedAuth)
         : undefined,
+      nativeProfile:
+        provider?.executionContract?.execution === "native" &&
+        provider.executionContract.authentication.kind === "local"
+          ? config.hosts.find(
+              (h) =>
+                h.nativeProfiles?.[
+                  provider.executionContract!.authentication.kind === "local"
+                    ? provider.executionContract!.authentication.reference
+                    : ""
+                ],
+            )?.nativeProfiles?.[
+              provider.executionContract.authentication.reference
+            ]
+          : undefined,
       contexts: config.contexts[p.id] ?? [],
       executionMode: p.executionMode,
       providerId: provider?.id,
@@ -647,6 +676,8 @@ export function effectiveGoal(
     config.hosts.find((h) => h.isolatedRuntime)?.isolatedRuntime,
     config.auth,
   );
+  if (p.executionMode === "native")
+    baseline.admission!.runtimeHash = nativeBinding(baseline);
   baseline = goalSchema.parse(baseline);
   if (baseline.executionContract) {
     const contract = validateBackendContract(

@@ -1,3 +1,5 @@
+import { observedBackend, InvocationStore } from "./invocations.js";
+import type { ExecutionRuntime } from "./executionRuntime.js";
 import { repositoryIdentity } from "./repositories.js";
 import { planningLimits, planningRecovery } from "./planningLimits.js";
 import {
@@ -97,6 +99,7 @@ export class Scheduler {
     readonly stateRoot: string,
     readonly url: string,
     readonly options: {
+      runtime?: ExecutionRuntime;
       backend?: (g: Goal) => AgentBackend;
       asynchronousJobs?: boolean;
       gitHost?: GitHost;
@@ -132,13 +135,18 @@ export class Scheduler {
     );
   }
   backend(g: Goal) {
-    if (g.config.backend.kind !== "fake" && !this.options.isolatedBackend)
+    const selected =
+      this.options.runtime?.backend(g) ?? this.options.isolatedBackend?.(g);
+    if (g.config.backend.kind !== "fake" && !selected)
       throw new ControlError(
         "execution_environment",
-        "Real execution requires a configured isolated runtime",
+        "Selected execution runtime is unavailable",
         409,
       );
-    return this.options.backend?.(g) ?? createBackend(g.config.backend);
+    return observedBackend(
+      this.store,
+      selected ?? this.options.backend?.(g) ?? createBackend(g.config.backend),
+    );
   }
   authorizeControllerWorker(workerId: string) {
     if (this.controllerWorkers.has(workerId))
@@ -197,9 +205,7 @@ export class Scheduler {
       }
       try {
         // Backend policy must be valid before the source/environment is prepared.
-        if (this.options.isolatedBackend)
-          this.options.isolatedBackend(claim.goal);
-        else this.backend(claim.goal);
+        this.backend(claim.goal);
         const pressure = await this.workspaces.storage.pressure();
         if (!pressure.admissionAllowed)
           throw new ControlError(
@@ -239,7 +245,10 @@ export class Scheduler {
           claim.generation,
           error instanceof ControlError && error.code === "storage_pressure"
             ? "waiting_provider"
-            : "retry_wait",
+            : error instanceof ControlError &&
+                error.code !== "worker_registration"
+              ? "blocked"
+              : "retry_wait",
           (error as Error).message,
         );
         throw error;
@@ -369,13 +378,16 @@ export class Scheduler {
                 active?.abort.abort(new Error("Attempt recovery"));
                 // The adapter must finish all import/checkpoint callbacks before ownership is released.
                 if (active) await abortable(active.done, cleanup);
-                if (this.options.recoverAttempt)
+                if (
+                  this.options.runtime?.recoverAttempt ||
+                  this.options.recoverAttempt
+                )
                   await abortable(
-                    this.options.recoverAttempt(
-                      task.id,
-                      task.generation,
-                      cleanup,
-                    ),
+                    (
+                      this.options.runtime?.recoverAttempt?.bind(
+                        this.options.runtime,
+                      ) ?? this.options.recoverAttempt!
+                    )(task.id, task.generation, cleanup),
                     cleanup,
                   );
                 else if (
@@ -444,9 +456,16 @@ export class Scheduler {
           .then(async () => {
             await boundedCleanup(
               async (signal) => {
-                if (this.options.recoverOperation)
+                if (
+                  this.options.runtime?.recoverOperation ||
+                  this.options.recoverOperation
+                )
                   await abortable(
-                    this.options.recoverOperation(attempt.id, signal),
+                    (
+                      this.options.runtime?.recoverOperation?.bind(
+                        this.options.runtime,
+                      ) ?? this.options.recoverOperation!
+                    )(attempt.id, signal),
                     signal,
                   );
                 else if (
@@ -632,9 +651,7 @@ export class Scheduler {
       }
       const admitted = claim;
       {
-        const backend = this.options.isolatedBackend
-          ? this.options.isolatedBackend(claim.goal)
-          : this.backend(claim.goal);
+        const backend = this.backend(claim.goal);
         const abort = new AbortController();
         // Defer to register ownership before the adapter starts asynchronous work.
         const done = Promise.resolve()
@@ -697,15 +714,29 @@ export class Scheduler {
       ).maintain(configured as MaintenanceMode);
       this.store.setting("storage-maintenance-preview", preview);
       if (this.options.executionMaintenance)
-        this.store.setting(
-          "execution-maintenance-preview",
-          await this.options.executionMaintenance(),
-        );
+        try {
+          this.store.setting(
+            "execution-maintenance-preview",
+            await this.options.executionMaintenance(),
+          );
+        } catch {
+          this.store.event("ENVIRONMENT_UNAVAILABLE", "controller", {
+            environment: "isolated",
+            phase: "maintenance",
+          });
+        }
       if (this.options.imageMaintenance)
-        this.store.setting(
-          "image-maintenance-preview",
-          await this.options.imageMaintenance(configured !== "preview"),
-        );
+        try {
+          this.store.setting(
+            "image-maintenance-preview",
+            await this.options.imageMaintenance(configured !== "preview"),
+          );
+        } catch {
+          this.store.event("ENVIRONMENT_UNAVAILABLE", "controller", {
+            environment: "isolated",
+            phase: "image-maintenance",
+          });
+        }
       this.store.setting("storage-maintenance-at", this.store.clock());
       const previousPressure =
         this.store.setting("storage-pressure-active") === true;
@@ -993,13 +1024,12 @@ export class Scheduler {
     let outcome = "failed",
       result: unknown;
     try {
-      const backend = this.options.isolatedBackend
-        ? this.options.isolatedBackend(g)
-        : this.backend(g);
+      const backend = this.backend(g);
       if (
         context.disableTaskHandoffs &&
         g.config.backend.kind !== "fake" &&
-        !this.options.isolatedBackend
+        !this.options.isolatedBackend &&
+        !this.options.runtime
       )
         throw new ControlError(
           "repair_environment",
@@ -1330,6 +1360,7 @@ export class Scheduler {
           "Worker result differs from task HEAD",
           409,
         );
+      new InvocationStore(this.store).bindCandidate(taskId, generation, commit);
       const claim = {
         task,
         goal,
@@ -1394,6 +1425,16 @@ export class Scheduler {
         tests,
       );
       if (!tests.passed) {
+        const signature = (evidence: VerificationResult) =>
+          this.store.redactor.json({
+            unchanged: evidence.unchanged,
+            results: evidence.results.filter((r) => r.exitCode !== 0),
+          });
+        const repeated = this.store.db
+          .query<{ data: string }>(
+            `SELECT data FROM control_evidence WHERE task_id=${sql(taskId)} AND commit_sha=${sql(commit)} AND kind='tests' AND passed=0 AND generation<${generation}`,
+          )
+          .some((row) => signature(JSON.parse(row.data)) === signature(tests));
         this.store.finding(
           goal.id,
           taskId,
@@ -1404,8 +1445,10 @@ export class Scheduler {
           taskId,
           workerId,
           generation,
-          "retry_wait",
-          "Task tests failed",
+          repeated ? "blocked" : "retry_wait",
+          repeated
+            ? "Unchanged candidate failed the same trusted checks; inspect the retained findings"
+            : "Task tests failed",
           (result as any)?.costUsd,
         );
       }
@@ -1435,7 +1478,7 @@ export class Scheduler {
           ),
           deadlineAt: claim.runtime?.deadlineAt,
           onCheckpoint: async () => {},
-          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Explicitly list resolved observation ids in resolvedObservations only after reproducing and verifying their resolution. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nOperator observations: ${JSON.stringify(observations(this.store, goal.id))}\nDiff:\n${diff}`,
+          prompt: `Independently review this exact commit ${commit}. Inspect complete changed files. Explicitly list resolved observation ids in resolvedObservations only after reproducing and verifying their resolution. Return only JSON {"commit":"${commit}","verdict":"pass"|"fail","findings":[{"summary":"...","blocking":true,"evidence":"file or test"}]}. Task: ${JSON.stringify(task.spec)}\nTrusted checks for this exact candidate: ${JSON.stringify({ commit: tests.commit, passed: tests.passed, unchanged: tests.unchanged, commands: tests.results.map((r) => ({ command: r.command, exitCode: r.exitCode })) })}\nOperator observations: ${JSON.stringify(observations(this.store, goal.id))}\nDiff:\n${diff}`,
         },
         "review",
       );
@@ -1480,6 +1523,11 @@ export class Scheduler {
         this.store.finding(goal.id, taskId, { ...finding, commit }, "reviewer");
       const cost = (result as any)?.costUsd;
       if (!reviewPassed) {
+        const repeated = Boolean(
+          this.store.db.one(
+            `SELECT id FROM control_evidence WHERE task_id=${sql(taskId)} AND commit_sha=${sql(commit)} AND kind='review' AND passed=0 AND generation<${generation} LIMIT 1`,
+          ),
+        );
         this.store.checkpoint(taskId, workerId, generation, {
           commit,
           summary: `Repair blocking review findings: ${JSON.stringify(review.findings)}`,
@@ -1488,8 +1536,10 @@ export class Scheduler {
           taskId,
           workerId,
           generation,
-          "retry_wait",
-          "Independent review failed",
+          repeated ? "blocked" : "retry_wait",
+          repeated
+            ? "Unchanged candidate was rejected again; inspect the retained review findings"
+            : "Independent review failed",
           cost,
         );
       }
@@ -1833,6 +1883,7 @@ export class Scheduler {
     return task;
   }
   async verify(claim: Claim, path: string) {
+    if (this.options.runtime) return this.options.runtime.verify(claim, path);
     if (this.options.isolatedVerifier)
       return this.options.isolatedVerifier(claim, path);
     if (claim.goal.config.backend.kind !== "fake")

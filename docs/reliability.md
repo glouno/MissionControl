@@ -51,18 +51,23 @@ in a canonical private directory outside Git. Uploading is a separate operation.
 Private metadata logs rotate at 10 MiB with five retained files; database evidence
 follows existing retention policy.
 
-Schema 8 adds reliability records without rewriting historical admitted source or
-usage. Schema 7 code refuses schema 8 state. Rollback uses a retained schema 8-compatible
-release or an isolated encrypted restore; never downgrade a live database.
+Schema 8 added reliability records without rewriting historical admitted source or
+usage. Schema 9 adds invocation observations. Older code can refuse newer state.
+Rollback uses an isolated encrypted restore and its matching release; never
+downgrade a live database. See [native migration](native-migration.md).
 Changed release support requires ordinary installed acceptance and the private
 24-hour failure-injection soak. Unit tests do not establish Azure, subscription,
 macOS or device qualification.
 
-Native Codex execution supplies the admitted model, reasoning effort and gateway
+Container Codex execution supplies the admitted model, reasoning effort and gateway
 provider settings as CLI overrides. Repository `.codex/config.toml` defaults cannot
 replace that runtime binding. Token values remain in the scoped environment, never
 in command arguments. Inference diagnostics retain the effective reasoning effort
 and output cap so operators can inspect configuration mismatches.
+
+Native devbox execution supplies the admitted model and any explicit reasoning
+effort while retaining the selected Codex home/profile and project instructions.
+Omitted reasoning effort keeps the selected Codex configuration's value.
 
 The native inference gateway serializes requests per admitted attempt and enforces
 persisted retry counts and backoff, including bounded Retry-After. Refusals and

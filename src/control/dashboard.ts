@@ -1,3 +1,6 @@
+import { InvocationStore } from "./invocations.js";
+import { executionCapabilities } from "./executionCapabilities.js";
+
 import { executionLimits } from "./executionLimits.js";
 import type { ControlStore } from "./store.js";
 import { ControlError, type GoalConfig } from "./schema.js";
@@ -37,6 +40,10 @@ export function dashboardSnapshot(
     ...page,
     ...activeGoals.filter((goal) => !page.some((item) => item.id === goal.id)),
   ];
+  const statusGoals = goals.map((g) => ({
+    ...g,
+    executionCapabilities: executionCapabilities(g.config),
+  }));
   const tasks = goals.flatMap((g) => store.tasks(g.id));
   const projects = store.projects().map((p) => {
     let admission = { admissible: false, reason: "Project is disabled" } as {
@@ -64,6 +71,7 @@ export function dashboardSnapshot(
     }
     return {
       ...p,
+      executionCapabilities: executionCapabilities(p.config),
       executionLimits: executionLimits(
         p.config,
         store.setting("configuration-snapshot"),
@@ -100,7 +108,12 @@ export function dashboardSnapshot(
       };
     });
   return {
-    goals,
+    invocationMetrics: Object.fromEntries(
+      goals.map((g) => [g.id, new InvocationStore(store).metrics(g.id)]),
+    ),
+    recentInvocations: new InvocationStore(store).all().slice(-100),
+    goals: statusGoals,
+
     budgetAlerts: goals
       .filter(
         (g) =>

@@ -1,5 +1,7 @@
 import "./canonical-temp.mjs";
 /** Disposable synthetic API/CLI acceptance; no provider credentials or dependencies. */
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -317,6 +319,51 @@ try {
     const attempts = await api("/goals/" + goal.id + "/attempts");
     assert.ok(attempts.length);
     assert.ok(attempts.some((a) => a.endedAt));
+  }
+  // The same observation operations are served through CLI, HTTP and MCP.
+  const expectedMetrics = await api(`/goals/${launched.id}/metrics`);
+  assert.ok(expectedMetrics.invocations >= 2);
+  assert.equal(expectedMetrics.inputTokens.value, null);
+  assert.deepEqual(
+    JSON.parse((await cli("goal", "metrics", launched.id)).stdout),
+    expectedMetrics,
+  );
+  for (const action of ["explain", "preflight"])
+    assert.deepEqual(
+      JSON.parse((await cli("project", action, "synthetic")).stdout),
+      await api(`/projects/synthetic/${action}`),
+    );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [resolve("dist/cli.js"), "--config-dir", config, "mcp"],
+    stderr: "pipe",
+  });
+  const mcp = new McpClient({ name: "synthetic-acceptance", version: "1" });
+  try {
+    await mcp.connect(transport);
+    const tools = await mcp.listTools();
+    for (const name of [
+      "project_explain",
+      "project_preflight",
+      "goal_invocations",
+      "goal_metrics",
+      "goal_experiment",
+      "goal_reviewed",
+    ])
+      assert.ok(tools.tools.some((tool) => tool.name === name));
+    const result = await mcp.callTool({
+      name: "goal_metrics",
+      arguments: { goalId: launched.id },
+    });
+    assert.deepEqual(JSON.parse(result.content[0].text), expectedMetrics);
+    const experiment = await mcp.callTool({
+      name: "goal_experiment",
+      arguments: { goalId: launched.id },
+    });
+    assert.equal(JSON.parse(experiment.content[0].text).status, "completed");
+  } finally {
+    await mcp.close();
+    await transport.close();
   }
   const records = await api("/backlog?projectId=synthetic");
   assert.equal(records.find((e) => e.id === first.id).goalId, launched.id);

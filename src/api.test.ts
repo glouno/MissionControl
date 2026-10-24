@@ -53,3 +53,133 @@ test("approved claim and completed result replay hooks retain registered worker 
  assert.equal((await post("/tasks/task_completed/result",owner,{workerId:"owned-worker",generation:4,result:{commit:"a".repeat(40)}})).status,200);assert.equal(replays,1);
  assert.equal((await post("/tasks/task_completed/result",other,{workerId:"owned-worker",generation:4,result:{commit:"a".repeat(40)}})).status,403);assert.equal(replays,1);
 });
+
+test("project, goal and dashboard status share capability projections without runtime readiness grants", async (t) => {
+  const { goalSchema } = await import("./control/schema.js");
+  const { executionCapabilities } =
+    await import("./control/executionCapabilities.js");
+  const root = await mkdtemp(join(tmpdir(), "mc-capability-http-")),
+    db = new SqliteStore(join(root, "app.db")),
+    store = new ControlStore(db, Date.now, () => {});
+  const token = "synthetic-capability-operator-token";
+  const server = createControlServer(store, {
+    token,
+    validateGoal: () => {
+      throw Error("private-native-diagnostic");
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const get = async (path: string) => {
+    const res = await fetch(base + path, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+    return (await res.json()) as any;
+  };
+  const goals = [];
+  for (const [id, kind, subscription] of [
+    ["paid", "codex", false],
+    ["subscription", "codex", true],
+    ["portable", "azure", false],
+  ] as const) {
+    const config = goalSchema.parse({
+      title: "Fixture",
+      description: "Fixture",
+      repoPath: root,
+      repository: { mode: "local", branch: "main" },
+      verificationCommands: ["true"],
+      containerImage: "synthetic",
+      backend:
+        kind === "azure"
+          ? {
+              kind,
+              model: "fixture",
+              endpoint: "https://example.invalid",
+              inputUsdPerMillion: 1,
+              outputUsdPerMillion: 1,
+            }
+          : { kind },
+      maxCostUsd: subscription ? 0 : 1,
+      estimatePerRunUsd: subscription ? 0 : 1,
+      maxWorkers: 1,
+      maxAttempts: 1,
+      timeoutMs: 1000,
+      executionContract: {
+        harness: kind === "azure" ? "tool-loop" : kind,
+        provider: subscription ? "codex-subscription" : "azure",
+        authentication: {
+          kind: subscription ? "session" : "controller",
+          reference: "fixture",
+        },
+        execution: "isolated",
+        usagePolicy: subscription
+          ? {
+              kind: "subscription",
+              maxAttempts: 1,
+              timeoutMs: 1000,
+              maxConcurrency: 1,
+            }
+          : { kind: "metered", maxCostUsd: 1, estimatePerRunUsd: 1 },
+      },
+    });
+    store.setProject(
+      { id, name: "Fixture", family: "Fixture", enabled: true, config },
+      "operator",
+    );
+    goals.push(store.createGoal(config));
+  }
+  const projects = await get("/projects"),
+    list = await get("/goals"),
+    dashboard = await get("/dashboard");
+  for (const goal of goals) {
+    const expected = executionCapabilities(goal.config);
+    const project = projects.find(
+      (p: any) => executionCapabilities(p.config).path === expected.path,
+    );
+    const dashboardProject = dashboard.projects.find(
+      (p: any) => p.id === project.id,
+    );
+    assert.deepEqual(project.executionCapabilities, expected);
+    assert.deepEqual(
+      list.find((g: any) => g.id === goal.id).executionCapabilities,
+      expected,
+    );
+    assert.deepEqual(
+      (await get("/goals/" + goal.id)).executionCapabilities,
+      expected,
+    );
+    assert.deepEqual(
+      dashboard.goals.find((g: any) => g.id === goal.id).executionCapabilities,
+      expected,
+    );
+    assert.deepEqual(dashboardProject.executionCapabilities, expected);
+    assert.equal(dashboardProject.readiness.admissible, false);
+    assert.equal(dashboardProject.readiness.liveQualified, false);
+    assert.ok(dashboardProject.executionLimits);
+    assert.ok(dashboard.executionLimits[goal.id]);
+    assert.ok(!JSON.stringify(expected).includes(root));
+  }
+  assert.ok(!JSON.stringify(dashboard).includes("private-native-diagnostic"));
+  const contract = openApi();
+  assert.deepEqual(
+    (contract.components.schemas.ExecutionCapabilities as any).properties
+      .features.properties.tools.properties.state.enum,
+    ["supported", "disabled_by_policy", "unavailable"],
+  );
+  for (const path of ["/projects", "/goals", "/goals/{id}"])
+    assert.ok(contract.paths["/api/v1" + path].get.responses[200].content);
+});
+
+
+test("checked-in OpenAPI matches generated capability status contracts", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const documented = JSON.parse(await readFile(new URL("../docs/openapi.json", import.meta.url), "utf8"));
+  assert.deepEqual(documented, openApi());
+});

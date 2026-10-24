@@ -165,3 +165,15 @@ after restart or a later configuration change, without new admission or spending
 Use the original pending revision for replay, not the incremented entry revision.
 A different revision conflicts (409); archived entries cannot launch. Launch
 replay does not revalidate already admitted work. New launches always revalidate.
+
+## Execution capabilities on status reads
+
+Project lists, goal lists and individual goal status include `executionCapabilities`
+(version 1, basis `current_code`, execution path and feature states/reasons). The
+dashboard uses the same projection. `supported`, `disabled_by_policy` and
+`unavailable` describe source implementation and admitted policy, separately from
+runtime readiness, live qualification and numeric execution limits. Reasons are
+fixed sanitized descriptions; they contain no private runtime settings or native
+diagnostics. Creation and mutation responses retain their existing contract; read
+status for this projection. See the [source-linked matrix and field contract](execution-capabilities.md)
+and [OpenAPI](openapi.json).

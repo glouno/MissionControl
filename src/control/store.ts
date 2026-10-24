@@ -1,3 +1,4 @@
+import { matchesGlob } from "node:path";
 import { executionSignal } from "./executionDeadline.js";
 import { inheritPlanResources } from "./planningContract.js";
 import { OperationalLog } from "./operationalLog.js";
@@ -92,7 +93,7 @@ export class ControlStore {
     const tables = this.db.query<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     );
-    if (version > 8)
+    if (version > 9)
       throw new Error("Database schema is newer than this release");
     if (version === 0 && tables.length)
       throw new Error(
@@ -122,6 +123,7 @@ export class ControlStore {
       this.migrateUsageReconciliation();
       this.migrateBacklog();
       this.migrateReliability();
+      this.migrateInvocations();
       return;
     }
     this.db.transaction(() => {
@@ -163,6 +165,7 @@ export class ControlStore {
     this.migrateUsageReconciliation();
     this.migrateBacklog();
     this.migrateReliability();
+    this.migrateInvocations();
   }
   private migrateReliability() {
     if (
@@ -446,6 +449,19 @@ export class ControlStore {
         throw new Error(
           "Active earlier-alpha work lacks admitted attempts; retain it privately and initialize fresh state",
         );
+    });
+  }
+  private migrateInvocations() {
+    const version = Number(
+      this.db.one<{ user_version: number }>("PRAGMA user_version")
+        ?.user_version,
+    );
+    if (version >= 9) return;
+    this.db.transaction(() => {
+      this.db
+        .exec(`CREATE TABLE agent_invocations(id TEXT PRIMARY KEY, goal_id TEXT NOT NULL REFERENCES control_goals(id), task_id TEXT, attempt_id TEXT NOT NULL REFERENCES control_attempts(id), record TEXT NOT NULL);
+        CREATE INDEX agent_invocations_goal ON agent_invocations(goal_id,id);
+        INSERT INTO schema_migrations VALUES(9,strftime('%Y-%m-%dT%H:%M:%fZ','now')); PRAGMA user_version=9;`);
     });
   }
   private startAttempt(
@@ -1015,6 +1031,7 @@ export class ControlStore {
         );
       if (
         project.config.backend.kind !== "fake" &&
+        project.config.executionContract?.execution !== "native" &&
         !project.config.containerImage
       )
         throw new ControlError(
@@ -1217,6 +1234,14 @@ export class ControlStore {
           409,
         );
       for (const spec of specs) {
+        for (const path of g.config.admission?.nativeProfile
+          ?.requiredScopePaths ?? [])
+          if (!spec.allowedPaths.some((scope) => matchesGlob(path, scope)))
+            throw new ControlError(
+              "invalid_plan",
+              `Required fixture or packaging file outside task scope: ${path}`,
+              409,
+            );
         const minimum = g.config.executionResources;
         if (
           minimum &&
@@ -1481,7 +1506,8 @@ export class ControlStore {
             `INSERT INTO control_resources VALUES(${sql(name)},${sql(task.id)},${generation})`,
           );
         if (
-          goal.config.executionContract?.usagePolicy.kind !== "subscription"
+          goal.config.executionContract?.usagePolicy.kind !== "subscription" &&
+          goal.config.executionContract?.usagePolicy.kind !== "observed"
         ) {
           this.db.exec(
             `INSERT INTO control_budgets VALUES(${sql(`${task.id}:${generation}`)},${sql(goal.id)},${sql(task.id)},${goal.config.estimatePerRunUsd},NULL,'reserved')`,
@@ -1882,6 +1908,16 @@ export class ControlStore {
           409,
         );
       if (attempt.outcome !== "recovering") return;
+      if (
+        this.db.one(
+          `SELECT id FROM agent_invocations WHERE attempt_id=${sql(attemptId)} AND json_extract(record,'$.environment')='native' AND json_extract(record,'$.outcome') IN ('active','cleanup_blocked') LIMIT 1`,
+        )
+      )
+        throw new ControlError(
+          "cleanup_blocked",
+          "Native operation still owns retained resources",
+          409,
+        );
       const sessions = `SELECT id,record FROM sessions UNION ALL SELECT id,record FROM execution_invocations`;
       const owned = `SELECT id,record FROM (${sessions}) WHERE json_extract(record,'$.spec.operationReservationId')=${sql(attemptId)}`;
       if (
@@ -2306,13 +2342,28 @@ export class ControlStore {
       });
     });
   }
-  finishStartupRecovery() {
+  finishStartupRecovery(
+    options: {
+      environment?: "native" | "fake" | "isolated";
+      skipRetained?: boolean;
+    } = {},
+  ) {
     return this.db.transaction(() => {
       const prior = this.setting("startup-recovery") as
         StartupRecovery | undefined;
+      const retainedTasks: RecoveryTask[] = [];
+      const retainedOperations: string[] = [];
       for (const entry of this.recoveryTasks(prior)) {
         const task = this.getTask(entry.taskId),
           attemptId = `${task.id}:${task.generation}`;
+        if (
+          options.environment &&
+          (this.getGoal(task.goalId).config.executionContract?.execution ??
+            "fake") !== options.environment
+        ) {
+          retainedTasks.push(entry);
+          continue;
+        }
         if (task.generation !== entry.generation)
           throw new ControlError(
             "stale_recovery",
@@ -2329,7 +2380,19 @@ export class ControlStore {
             "Recovery admission changed",
             409,
           );
-        this.assertInterruptedResourcesStopped(task);
+        try {
+          this.assertInterruptedResourcesStopped(task);
+        } catch (error) {
+          if (
+            options.skipRetained &&
+            error instanceof ControlError &&
+            ["cleanup_blocked", "active_resources"].includes(error.code)
+          ) {
+            retainedTasks.push(entry);
+            continue;
+          }
+          throw error;
+        }
         this.free(task, undefined, "interrupted");
         this.event(
           "RUNTIME_RECOVERED",
@@ -2340,7 +2403,31 @@ export class ControlStore {
         );
       }
       for (const attemptId of prior?.operations ?? []) {
-        this.finishOperationRecovery(attemptId);
+        const owner = this.db.one<{ goal_id: string }>(
+          `SELECT goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
+        );
+        if (
+          options.environment &&
+          owner &&
+          (this.getGoal(owner.goal_id).config.executionContract?.execution ??
+            "fake") !== options.environment
+        ) {
+          retainedOperations.push(attemptId);
+          continue;
+        }
+        try {
+          this.finishOperationRecovery(attemptId);
+        } catch (error) {
+          if (
+            options.skipRetained &&
+            error instanceof ControlError &&
+            ["cleanup_blocked", "active_resources"].includes(error.code)
+          ) {
+            retainedOperations.push(attemptId);
+            continue;
+          }
+          throw error;
+        }
         const r = this.db.one<Row>(
           `SELECT goal_id FROM control_attempts WHERE id=${sql(attemptId)}`,
         );
@@ -2367,8 +2454,12 @@ export class ControlStore {
           });
         }
       }
-      this.setting("startup-recovery", { tasks: [], operations: [] });
-      this.setting("startup-recovery-fault", null);
+      this.setting("startup-recovery", {
+        tasks: retainedTasks,
+        operations: retainedOperations,
+      });
+      if (!retainedTasks.length && !retainedOperations.length)
+        this.setting("startup-recovery-fault", null);
     });
   }
   expired() {
@@ -2395,6 +2486,16 @@ export class ControlStore {
     });
   }
   private assertInterruptedResourcesStopped(task: Task) {
+    if (
+      this.db.one(
+        `SELECT id FROM agent_invocations WHERE task_id=${sql(task.id)} AND json_extract(record,'$.generation')=${task.generation} AND json_extract(record,'$.environment')='native' AND json_extract(record,'$.outcome') IN ('active','cleanup_blocked') LIMIT 1`,
+      )
+    )
+      throw new ControlError(
+        "cleanup_blocked",
+        "Native execution still owns this workspace; inspect and stop it before release",
+        409,
+      );
     const sessions = `SELECT id,record FROM sessions WHERE task_id=${sql(task.id)} AND generation=${task.generation} UNION ALL SELECT id,record FROM execution_invocations WHERE (task_id=${sql(task.id)} AND generation=${task.generation}) OR (json_extract(record,'$.spec.taskId')=${sql(task.id)} AND json_extract(record,'$.spec.authorityGeneration')=${task.generation})`;
     if (
       this.db.one(
@@ -3282,6 +3383,11 @@ export class ControlStore {
         );
       if (amount > this.familyBudget(goalId).remainingUsd)
         throw new ControlError("budget", "Family allowance exhausted", 409);
+      if (g.config.executionContract?.usagePolicy.kind === "observed") {
+        const attemptId = id(`native_${label}`);
+        this.startAttempt(attemptId, g, 0, undefined, "scheduler", label);
+        return attemptId;
+      }
       if (g.config.executionContract?.usagePolicy.kind === "subscription") {
         const attemptId = id(`subscription_${label}`);
         let completedInvocation: string | undefined;

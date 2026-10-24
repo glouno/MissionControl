@@ -256,3 +256,31 @@ test("backlog launch exposes effective planning and global limits without admitt
   assert.match(text, /Codex app-server/);
   assert.equal(h.requests.length, 0);
 });
+
+test("capabilities render literal states and reasons beside the retained limits view", () => {
+  const h = harness();
+  const hostile = '<img src=x onerror="throw Error()">';
+  h.evaluate(
+    `el('view').append(capabilitiesBlock({features:{tools:{state:'supported',reason:'Six coding tools'},nativeApprovals:{state:'disabled_by_policy',reason:${JSON.stringify(hostile)}},integrations:{state:'unavailable',reason:'No qualified adapter'}}}),limitsBlock({harness:'fixture',usagePolicy:'synthetic',timeoutMs:1000,planning:{timeoutMs:1000}}))`,
+  );
+  const elements = descendants(h.elements.view),
+    text = elements.map((e) => e.textContent).join(" ");
+  for (const value of [
+    "Execution capabilities",
+    "supported",
+    "disabled_by_policy",
+    "unavailable",
+    hostile,
+    "Execution timeout",
+    "fixture",
+  ])
+    assert.ok(text.includes(value), value);
+  assert.ok(!elements.some((e) => e.tag === "img"));
+  assert.ok(
+    CONTROL_HTML.includes("capabilitiesBlock(p.executionCapabilities)"),
+  );
+  assert.ok(
+    CONTROL_HTML.includes("capabilitiesBlock(g.executionCapabilities)"),
+  );
+  assert.ok(CONTROL_HTML.includes("limitsBlock(p.executionLimits)"));
+});

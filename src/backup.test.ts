@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import { initializeState, inspectState, lockInstance } from "./instance.js";
 import { ControlStore } from "./control/store.js";
 import { SqliteStore } from "./sqlite.js";
+import { InvocationStore } from "./control/invocations.js";
 import {
   createBackup,
   restoreBackup,
@@ -51,6 +52,47 @@ test(
       backup = join(root, "complete.age");
     try {
       const store = new ControlStore(db);
+      const goal = store.createGoal({
+        title: "Native backup ownership",
+        description: "Retain writer",
+        repoPath: root,
+      });
+      const attemptId = store.reserveOperation(goal.id, "plan");
+      const ledger = new InvocationStore(store);
+      const invocation = {
+        id: "native-backup-writer",
+        goalId: goal.id,
+        attemptId,
+        generation: 0,
+        phase: "plan",
+        environment: "native",
+        agent: "codex",
+        workspace: root,
+        startedAt: Date.now(),
+        outcome: "active",
+        turns: 0,
+        toolEvents: 0,
+        retryEvents: 0,
+      };
+      for (const outcome of ["active", "cleanup_blocked"]) {
+        ledger.save({ ...invocation, outcome });
+        assert.throws(
+          () => assertQuiescentBackup(db),
+          /reconciled native execution/,
+        );
+        await assert.rejects(
+          createBackup(
+            db,
+            state,
+            join(root, `${outcome}.age`),
+            recipient,
+            true,
+          ),
+          /reconciled native execution/,
+        );
+      }
+      ledger.save({ ...invocation, outcome: "interrupted" });
+      assert.doesNotThrow(() => assertQuiescentBackup(db));
       store.setProject(
         {
           id: "backlog-fixture",
@@ -78,7 +120,7 @@ test(
       const manifest = await createBackup(db, state, backup, recipient, true);
       assert.equal(manifest.instanceId, id.id);
       assert.equal(manifest.complete, true);
-      assert.equal(manifest.schemaVersion, 8);
+      assert.equal(manifest.schemaVersion, 9);
       assert.equal(
         (await readFile(backup)).includes(
           Buffer.from("Synthetic private evidence"),
@@ -88,7 +130,7 @@ test(
       const restore = join(root, "restored");
       await restoreBackup(backup, identity, restore);
       assert.equal((await inspectState(restore)).id, id.id);
-      assert.equal((await inspectState(restore)).schemaVersion, 8);
+      assert.equal((await inspectState(restore)).schemaVersion, 9);
       const restoredDb = new SqliteStore(join(restore, "mission-control.db"));
       try {
         assert.deepEqual(
