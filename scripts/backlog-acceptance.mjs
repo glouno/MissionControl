@@ -9,6 +9,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { once } from "node:events";
+import { pathToFileURL } from "node:url";
 import { createServer } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteStore } from "../dist/sqlite.js";
@@ -85,9 +86,25 @@ try {
       },
     }),
   );
+  // Host pressure is tested separately; this fixture exercises scheduler/API flow.
+  const storageFixture = join(root, "synthetic-storage.mjs");
+  await writeFile(
+    storageFixture,
+    `import { mock } from 'node:test';
+import { StorageManager } from ${JSON.stringify(pathToFileURL(resolve("dist/control/storage.js")).href)};
+mock.method(StorageManager.prototype, 'pressure', async () => ({ freeBytes: 100 * 1024 ** 3, reserveBytes: 50 * 1024 ** 3, admissionAllowed: true }));
+`,
+  );
   controller = spawn(
     process.execPath,
-    [resolve("dist/cli.js"), "--config-dir", config, "serve"],
+    [
+      "--import",
+      storageFixture,
+      resolve("dist/cli.js"),
+      "--config-dir",
+      config,
+      "serve",
+    ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
   controller.stderr.on("data", (b) => {
