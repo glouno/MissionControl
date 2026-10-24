@@ -1390,7 +1390,6 @@ export class ControlStore {
     } = {},
   ): Claim | null {
     return this.db.transaction(() => {
-      this.registerWorker(workerId, options.capabilities);
       this.ready(options.goalId);
       const limits = this.setting("scheduler-limits") ?? {
         workers: 4,
@@ -1498,6 +1497,8 @@ export class ControlStore {
         if (goal.config.estimatePerRunUsd > 0 && !this.meteredCapacity())
           continue;
         const generation = task.generation + 1;
+        // Idle dispatch identities are ephemeral; persist only actual task owners.
+        this.registerWorker(workerId, options.capabilities);
         this.db.exec(
           `UPDATE control_tasks SET status='claimed',generation=${generation},worker_id=${sql(workerId)},lease_until=${this.clock() + 120000},attempts=attempts+1,revision=revision+1 WHERE id=${sql(task.id)};`,
         );

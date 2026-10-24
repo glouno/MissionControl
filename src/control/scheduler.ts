@@ -155,7 +155,6 @@ export class Scheduler {
         "Dispatch identity already registered",
         409,
       );
-    this.store.registerWorker(workerId);
     this.controllerWorkers.set(workerId, { closed: false });
   }
   revokeControllerWorker(workerId: string) {

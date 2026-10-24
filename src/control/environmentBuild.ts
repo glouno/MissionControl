@@ -1,13 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  mkdir,
-  writeFile,
-  rename,
-  lstat,
-  statfs,
-  readFile,
-} from "node:fs/promises";
+import { mkdir, writeFile, rename, lstat, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SqliteStore, sql, registryDatabase } from "../sqlite.js";
@@ -16,10 +9,25 @@ import { git } from "./git.js";
 import { StatePaths } from "./statePaths.js";
 import { ownedBuildCache } from "./buildCache.js";
 import {
+  measureStoragePressure,
+  windowsStorageRequired,
+} from "./storagePressure.js";
+import {
   resolveEnvironmentManifest,
   type EnvironmentManifest,
 } from "./environmentManifest.js";
 const exec = promisify(execFile);
+export function ownedDockerInvocation(
+  args: string[],
+  wsl = windowsStorageRequired(),
+) {
+  if (wsl && args[0] === "buildx" && args[1] === "build")
+    return {
+      command: "/usr/local/bin/devbox-storage",
+      args: ["run", "--peak-gib", "10", "--", "docker", ...args],
+    };
+  return { command: "docker", args };
+}
 export interface EnvironmentBuildRecord {
   id: string;
   projectId: string;
@@ -99,14 +107,23 @@ export class EnvironmentImageBuilder {
     readonly root: string,
     readonly docker: (
       args: string[],
-    ) => Promise<{ stdout: string; stderr: string }> = (args: string[]) =>
-      exec("docker", args, { timeout: 900000, maxBuffer: 4 * 1024 * 1024 }),
+    ) => Promise<{ stdout: string; stderr: string }> = (args: string[]) => {
+      const invocation = ownedDockerInvocation(args);
+      return exec(invocation.command, invocation.args, {
+        timeout: 900000,
+        maxBuffer: 4 * 1024 * 1024,
+      });
+    },
     readonly admission = async () => {
-      const disk = await statfs(root);
-      if (disk.bavail * disk.bsize < 50 * 1024 ** 3)
+      const pressure = await measureStoragePressure(
+        root,
+        50 * 1024 ** 3,
+        10 * 1024 ** 3,
+      );
+      if (!pressure.admissionAllowed)
         throw new ControlError(
           "storage_pressure",
-          "Image build requires fifty GiB free storage",
+          "Image build requires Linux and Windows reserves plus estimated peak storage",
           409,
         );
     },
