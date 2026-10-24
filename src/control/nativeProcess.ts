@@ -123,11 +123,14 @@ export async function cleanupNativeProcess(
     });
     const members = await ownedGroup(identity);
     // Proving absent resources does not spend or replenish an attempt's cleanup allowance.
-    if (!members.length && done) return;
+    if (!members.length && done && !(await ownedGroup(identity)).length) return;
     await boundedCleanup(
       async (signal) => {
         await stopOwnedGroup(identity, signal);
         await abortable(closed, signal);
+        // Closing the launcher can reveal descendants created during the first
+        // inventory. Prove their absence after close before releasing ownership.
+        await stopOwnedGroup(identity, signal);
       },
       60000,
       cleanupSignal?.(),

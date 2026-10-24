@@ -541,6 +541,60 @@ linuxTest(
   },
 );
 linuxTest(
+  "native cleanup rechecks detached descendants when the launcher closes",
+  async (t) => {
+    const f = await fixture(t);
+    let identity: Awaited<ReturnType<typeof processIdentity>>;
+    await nativeCommand("/bin/true", [], {
+      cwd: f.repo,
+      env: nativeEnvironment(f.profile),
+      onProcess: (id) => (identity = id),
+    });
+    assert.ok(identity?.executionId);
+    let descendant: ReturnType<typeof spawn> | undefined;
+    let descendantClosed: Promise<void> | undefined;
+    t.after(async () => {
+      if (
+        descendant &&
+        descendant.exitCode === null &&
+        descendant.signalCode === null
+      )
+        descendant.kill("SIGKILL");
+      await descendantClosed;
+    });
+    // Model a detached descendant becoming visible as the launcher's close
+    // promise settles, after the initial process inventory was empty.
+    const closed = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      descendant = spawn(
+        process.execPath,
+        ["-e", "setInterval(() => {}, 1000)"],
+        {
+          detached: true,
+          stdio: "ignore",
+          env: {
+            ...nativeEnvironment(f.profile),
+            MC_NATIVE_EXECUTION_ID: identity!.executionId,
+          },
+        },
+      );
+      descendantClosed = new Promise<void>((resolve) =>
+        descendant!.once("close", () => resolve()),
+      );
+      const deadline = Date.now() + 5000;
+      while (
+        (await processIdentity(descendant.pid!))?.executionId !==
+        identity!.executionId
+      ) {
+        assert.ok(Date.now() < deadline, "Detached fixture did not start");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    })();
+    await cleanupNativeProcess(identity!, closed);
+    assert.deepEqual(await ownedGroup(identity!), []);
+  },
+);
+linuxTest(
   "native verification rejects source mutation and undeclared outputs but permits declared build outputs",
   async (t) => {
     const f = await fixture(t),
