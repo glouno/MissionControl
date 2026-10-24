@@ -1,103 +1,67 @@
-# Native runtime validation and remaining acceptance
+# Native runtime validation and acceptance
 
-The native route passed Linux live lifecycle acceptance with the selected existing
-Codex subscription on 2026-10-23 after quota became available. It remains a preview
-pending broader operational qualification and an operator-reviewed activation.
-Source review and the candidate follow-up below are complete. No production activation, publication, merging, credential
-copying or automatic login was performed.
+Native Codex execution currently supports Linux/WSL. Source verification and
+installation activation are separate: merging or building this code does not
+start services, authenticate providers, or enable native projects.
 
-## Evidence and limits
+## Reproduce source verification
 
-The baseline source was `3786cbf`; the baseline suite passed 466 tests. Installed
-Codex 0.163.0 supports JSONL execution, output schemas, explicit session resumption
-and selected profiles. The implementation preserves its normal configuration and
-hook-trust behavior. [Official noninteractive documentation](https://learn.chatgpt.com/docs/non-interactive-mode)
-describes the CLI integration; installed help was checked for actual flags.
+Use the pinned Node 24.21.0 and Rust 1.96.0 toolchains, install the locked
+JavaScript dependencies with `npm ci --ignore-scripts`, and keep evidence outside
+the source checkout:
 
-A preceding prototype run reached implementation, trusted checks and fresh review
-in a real repository worktree. Those two successful agent invocations reported
-765,249 and 99,357 input tokens, and 4,361 and 1,083 output tokens. Their cached
-input subsets were 722,176 and 78,080. No completed goal followed: integration and
-later quota failures prevented full delivery. These are historical observations,
-not acceptance receipts for the final source or evidence for a new usage cutoff.
+```sh
+python3 -B scripts/verify.py --lane linux --logs /private/new-linux-verification
+```
 
-The first resumed full-controller run used Docker unavailable to the test controller.
-Preflight and declared setup succeeded; the selected subscription rejected the
-first implementation invocation before tool activity. One agent invocation was
-recorded with quota failure and unknown usage. The goal paused without automatic
-replay. That historical quota receipt is retained.
+The required Linux lane covers TypeScript, Node tests, Python status checks,
+publication privacy, the installed package, the production dependency audit,
+Git history, and locked Matrix Rust tests. The owned verifier separately binds
+source, base, policy, dependency locks, toolchains and signed receipts. A local
+summary is not a substitute for that authority.
 
-After quota reset, five workflows completed: one real repository task, two ordinary
-fixtures, a failed-check repair and a failed-review repair. The two repairs each
-used one task, two attempts and the explicitly resumed implementation session;
-each review used a fresh session. Two direct Codex comparisons passed their checks.
-The controller's inspection results for a completed native goal matched through
-CLI, HTTP and MCP. Normal-delivery sample size is three; repair sample size is two.
+The optional `--lane macos` checks portable source behavior. Linux native process
+lifecycle tests are explicitly skipped on other hosts; portable protocol,
+configuration, launcher and output tests still run. This does not qualify native
+execution on macOS, which remains unsupported.
 
-The initial restart harness incorrectly attempted startup over a stale same-boot
-controller lock. The harness now verifies its crashed owner's PID and uses
-`state recover-lock --nonce` before restarting. The corrected cancellation and
-restart cases wait for a running sleep command, verified by JSONL and owned Linux
-process identities. Both stopped all owned processes and settled the invocation
-as interrupted with unavailable usage retained. After crash recovery the harness
-pauses the goal for inspection before another attempt is admitted. This explicit
-inspection step is part of the receipt.
+## Automated coverage
 
-The real repository workflow completed its admitted checks and review, but an
-additional probe found that its private candidate still rewrites quoted sibling
-paths such as `/repos/app:backup/file`. The feature branch now contains a separate
-reviewed correction: literal path matching with quote-aware boundaries and one
-translation pass. Regressions cover quoted punctuation, spaces, escaped quotes,
-JSON context, overlapping admitted roots and replacement prefixes. The private
-candidate remains retained as evidence; it was not merged. The original checkout
-was not changed.
+Synthetic native tests use disposable repositories, independent controller state,
+local executable fixtures and unused loopback ports. They require no provider
+credentials and do not use a running installation or its repositories. Coverage
+includes:
 
-Source review also found two ownership gaps. Cleanup inspection errors occurred
-before the bounded-cleanup wrapper and could mark an ambiguous writer as failed
-or interrupted. All cleanup inspection failures now retain `cleanup_blocked`
-ownership; a cancellation regression verifies that startup keeps the claim fenced.
-Complete filesystem backup now refuses active or cleanup-blocked native
-invocations alongside existing container writers. Backup/restore regressions
-exercise both refusals and successful restoration after native ownership settles.
+- Full task delivery, trusted checks, independent review workspaces, and repair
+  after failed checks or review findings.
+- Explicit coding-session continuation, fresh review sessions, preserved native
+  profile configuration, and excluded controller credentials.
+- Shared preflight deadlines, cancellation before launch, missing prerequisites,
+  task scope, unsupported hosts, and installation paths containing spaces,
+  punctuation or non-ASCII characters.
+- Malformed or duplicate protocol events, unknown usage, quota failures, launch
+  authorization, detached descendants, reused process IDs, and bounded cleanup.
+- Retained ambiguous ownership during startup and operation recovery, source
+  mutation checks, declared build outputs, private output rotation, and compatible
+  historical admission fingerprints.
+- Complete backup refusal while native writers are active or cleanup is blocked,
+  and restoration after ownership has settled.
 
-Automated native tests cover full candidate delivery, check/review repair within
-one task, explicit session reuse, fresh review workspaces, malformed/duplicate
-events, quota handling, prerequisite/scope failures, tracked/untracked mutations,
-detached child cleanup, reused PIDs, retained startup/operation ownership, the
-launch crash window, cleanup allowances, private output rotation and historical
-binding compatibility. The synthetic installed workflow exercises equivalent
-CLI/API/MCP inspection. Component tests do not replace the outstanding live cases.
+The protocol remains invalid after a parse failure; later buffered events cannot
+restore successful completion or trusted usage. Cancellation and preflight
+expiration stop owned probe processes. Recovery must prove process ownership and
+absence before releasing a claim; inspection errors preserve the fence.
 
-The implementation suite before this source review passed 486 tests, including 20 native behavioral tests.
-The source review suite passed 495 core tests, including 21 native behavioral
-tests and eight path-boundary tests. A fresh ordinary delivery, cancellation and
-crash/restart campaign passed with the same selected Codex login and model.
-Typecheck, Python status, privacy and package checks passed. The required audit
-identified GHSA-rxp7-6hxx-x8q5 in transitive `ip-address` 10.7.2; the lockfile now
-selects 10.7.4 and the production dependency audit reports zero vulnerabilities.
-Linux history and Rust Matrix checks also passed. These deterministic results
-remain separate from the live provider receipts and their source follow-up.
-
-Migration rehearsal copied the installed v1 database through a read-only SQLite
-backup connection. Schema 8 advanced to schema 9. All 856 rows inspected across
-historical goals, tasks, attempts, evidence, budgets and execution registries had
-identical before/after hashes. The legacy dashboard database was separately
-identified as pre-v1 and refused by the new controller; it was not migrated.
-
-Current-source Docker portable-execution acceptance passed with synthetic inference:
-isolated tools, traversal/private-network denial, stopped scoped import and
-independent checks. Gateway and active-container crash recovery acceptance also
-passed using the reviewed immutable worker image. Browser acceptance passed 19
-checks at a 390 by 844 viewport, including six views, authenticated evidence,
-decision flows, pause/resume/cancel and mobile layout. These browser checks use a
-synthetic controller. Live container providers, macOS and optional
-connector/provider coverage require their own existing valid identities and
-qualification; unavailable coverage must remain a documented gap.
+For synthetic installed CLI, HTTP and MCP acceptance, run
+`node scripts/backlog-acceptance.mjs` from the built checkout. Its controller and
+configuration are disposable. Synthetic delivery does not establish live provider
+behavior, billing, operational performance, or production acceptance.
 
 ## Reproduce live acceptance
 
-From the reviewed built checkout, use a new private output root and the selected
-existing subscription. Replace paths/model with the already tested profile:
+Use a new private output root, an explicitly selected existing subscription and
+the reviewed built source. Substitute the executable, home and model already
+qualified for that installation:
 
 ```sh
 node scripts/native-acceptance.mjs \
@@ -107,32 +71,28 @@ node scripts/native-acceptance.mjs \
   --model your-selected-model
 ```
 
-The script creates disposable repositories and a controller with its own state,
-configuration, token and unused port. Docker is unavailable to that controller.
-It records ordinary delivery, failed check/repair, review finding/repair, explicit
-session continuation, cancellation, restart and a prerequisite failure. The
-ordinary fixture includes a direct Codex comparison with the same base/model and
-checks; it explicitly reports the additional MissionControl prompts and review
-work. Quota stops the sequential campaign with an acceptance gap, preserving
-unknown measurements and the selected login.
+The script creates its own controller, state, configuration, token, disposable
+repositories and unused port. It refuses an existing output root. It does not
+activate native execution in another installation or edit an input checkout.
 
-Use `--cases ordinary,cancellation,restart` to rerun selected scenarios in a fresh
-output root. Available names are `ordinary`, `check-repair`, `review-repair`,
-`cancellation` and `restart`; `real` additionally requires the real repository
-flags below. Lifecycle checks establish an actual owned running command before
-interruption, use the supported stale-lock recovery command and verify all owned
-processes are absent afterward.
+Available cases are `ordinary`, `check-repair`, `review-repair`, `cancellation`
+and `restart`. Use `--cases ordinary,cancellation,restart` for a selected campaign.
+Cancellation and restart cases establish an actual owned running command before
+interruption, use supported stale-lock recovery, and verify process absence.
+Quota failure stops the campaign with an acceptance gap and unknown usage retained.
 
-To include ordinary work in a real repository worktree, also supply
-`--real-repo`, `--real-branch`, `--real-check`, `--real-envelope` and optionally
-`--real-setup`. The envelope uses project ID `real` and the reviewed-goal shape
-documented in [native execution](native-execution.md). The repository/target branch
-is explicit; publication and auto-merge stay disabled. The script refuses to reuse
-an existing output root and never edits the input checkout.
+The optional `real` case additionally requires `--real-repo`, `--real-branch`,
+`--real-check`, `--real-envelope` and optionally `--real-setup`. Its explicit reviewed
+scope uses project ID `real`, as documented in [native execution](native-execution.md).
+Publication and automatic integration remain disabled for the acceptance fixture.
 
-The resulting private `summary.json`, per-case experiment JSON, prerequisite
-result, direct comparison and raw invocation files establish sample sizes,
-outcomes, usages, durations, findings and interventions. Report unavailable
-measurements as null. Do not infer hidden model-request counts from invocations,
-add cached tokens to input, or assign subscription dollar costs. Collect several
-successful ordinary runs before proposing evidence-based performance limits.
+Keep per-case summaries, raw invocation files, exact source identities and
+prerequisite results private. Historical receipts are evidence for their recorded
+source and environment; repeat affected acceptance after either changes. Report
+unavailable measurements as null, keep cached tokens as a subset of input, and do
+not infer hidden request counts or subscription dollar charges.
+
+Live evaluation adapters, actual private application acceptance, native macOS,
+broader provider coverage and off-host recovery require separate qualification.
+Passing source tests does not resolve those gates or establish a performance
+ranking.
