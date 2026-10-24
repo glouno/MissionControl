@@ -4,21 +4,21 @@
   "exportedAt": "2026-10-22T12:00:00Z",
   "projects": [
     {
-      "id": "missioncontrol",
+      "id": "example-engine",
       "project": {
-        "id": "missioncontrol",
-        "name": "MissionControl",
+        "id": "example-engine",
+        "name": "ExampleEngine",
         "enabled": true,
         "provider": "illustrative-codex",
         "executionMode": "isolated",
         "config": {
-          "repoPath": "example.invalid/MissionControl",
+          "repoPath": "example.invalid/ExampleEngine",
           "repository": {
             "mode": "remote",
-            "remoteUrl": "example.invalid/MissionControl",
+            "remoteUrl": "example.invalid/ExampleEngine",
             "primaryBranch": "main",
             "auditedPrimarySha": "1111111111111111111111111111111111111111",
-            "verificationEnvironment": "missioncontrol-illustrative-verifier"
+            "verificationEnvironment": "example-engine-illustrative-verifier"
           },
           "policy": {
             "targetBranch": "main",
@@ -39,7 +39,7 @@
       },
       "providerEnabled": false,
       "requirements": {
-        "repository": "example.invalid/MissionControl",
+        "repository": "example.invalid/ExampleEngine",
         "targetBranch": "main",
         "exactBase": "1111111111111111111111111111111111111111",
         "requiredChecks": [
@@ -47,7 +47,7 @@
         ],
         "context": [
           {
-            "id": "missioncontrol-operator-policy",
+            "id": "example-engine-operator-policy",
             "sha256": null
           }
         ],

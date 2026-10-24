@@ -6,6 +6,99 @@
   "errors": [],
   "projects": [
     {
+      "id": "example-engine",
+      "schemaValid": true,
+      "projectEnabled": true,
+      "providerEnabled": false,
+      "requirements": {
+        "repository": "example.invalid/ExampleEngine",
+        "targetBranch": "main",
+        "exactBase": "1111111111111111111111111111111111111111",
+        "requiredChecks": [
+          "mc-check"
+        ],
+        "context": [
+          {
+            "id": "example-engine-operator-policy",
+            "sha256": null
+          }
+        ],
+        "projectHash": null,
+        "configHash": null,
+        "runtimeHash": null,
+        "implementationHash": null,
+        "providerId": "illustrative-codex",
+        "model": "illustrative-operator-selected-model",
+        "contract": {
+          "harness": "codex",
+          "provider": "codex-subscription",
+          "authentication": {
+            "kind": "session",
+            "reference": "illustrative-dedicated-codex"
+          },
+          "execution": "isolated",
+          "usagePolicy": {
+            "kind": "subscription",
+            "maxAttempts": 2,
+            "timeoutMs": 600000,
+            "maxConcurrency": 1
+          }
+        },
+        "runtime": {
+          "protocol": "subscription",
+          "model": "illustrative-operator-selected-model",
+          "authenticationReference": "illustrative-dedicated-codex"
+        },
+        "authenticationPolicyHash": null,
+        "executionImage": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "verificationImage": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "platform": "darwin",
+        "architecture": "arm64"
+      },
+      "requirementsHash": "d0813c5fc0700a3bdf37d546d83a4ab2d9df5d7d98fde051a17fd8e53cda2869",
+      "reportedReady": true,
+      "executionQualified": false,
+      "qualificationGaps": [
+        "authenticationPolicyHash_unknown",
+        "configHash_unknown",
+        "context_hash_unknown:example-engine-operator-policy",
+        "effective_execution_limits_unknown",
+        "executionImage_unavailable_or_mismatched",
+        "implementationHash_unknown",
+        "projectHash_unknown",
+        "project_snapshot_binding_mismatch",
+        "qualification_evidence_missing",
+        "runtimeHash_unknown",
+        "status_requirements_binding_mismatch",
+        "verificationImage_unavailable_or_mismatched"
+      ],
+      "executionBlockers": [
+        "authPrepared_unknown",
+        "authWriterActive_unknown",
+        "authenticationPolicyHash_unknown",
+        "configHash_unknown",
+        "context_hash_unknown:example-engine-operator-policy",
+        "dockerAvailable_unknown",
+        "effective_execution_limits_unknown",
+        "executionImage_unavailable_or_mismatched",
+        "hostPolicyAllowsExecution_unknown",
+        "implementationHash_unknown",
+        "projectHash_unknown",
+        "project_snapshot_binding_mismatch",
+        "provider_disabled",
+        "qualification_evidence_missing",
+        "runtimeHash_unknown",
+        "status_requirements_binding_mismatch",
+        "unknownUsageHold_unknown",
+        "verificationImage_unavailable_or_mismatched"
+      ],
+      "ready": false,
+      "operatorActions": [
+        "Review exact gaps against fresh private exports; keep disabled states, paused work and unknown-usage holds.",
+        "Operator owns private config application, enablement and platform/live acceptance; rerun this audit after review."
+      ]
+    },
+    {
       "id": "example-python",
       "schemaValid": true,
       "projectEnabled": false,
@@ -180,99 +273,6 @@
         "implementationHash_unknown",
         "projectHash_unknown",
         "project_disabled",
-        "project_snapshot_binding_mismatch",
-        "provider_disabled",
-        "qualification_evidence_missing",
-        "runtimeHash_unknown",
-        "status_requirements_binding_mismatch",
-        "unknownUsageHold_unknown",
-        "verificationImage_unavailable_or_mismatched"
-      ],
-      "ready": false,
-      "operatorActions": [
-        "Review exact gaps against fresh private exports; keep disabled states, paused work and unknown-usage holds.",
-        "Operator owns private config application, enablement and platform/live acceptance; rerun this audit after review."
-      ]
-    },
-    {
-      "id": "missioncontrol",
-      "schemaValid": true,
-      "projectEnabled": true,
-      "providerEnabled": false,
-      "requirements": {
-        "repository": "example.invalid/MissionControl",
-        "targetBranch": "main",
-        "exactBase": "1111111111111111111111111111111111111111",
-        "requiredChecks": [
-          "mc-check"
-        ],
-        "context": [
-          {
-            "id": "missioncontrol-operator-policy",
-            "sha256": null
-          }
-        ],
-        "projectHash": null,
-        "configHash": null,
-        "runtimeHash": null,
-        "implementationHash": null,
-        "providerId": "illustrative-codex",
-        "model": "illustrative-operator-selected-model",
-        "contract": {
-          "harness": "codex",
-          "provider": "codex-subscription",
-          "authentication": {
-            "kind": "session",
-            "reference": "illustrative-dedicated-codex"
-          },
-          "execution": "isolated",
-          "usagePolicy": {
-            "kind": "subscription",
-            "maxAttempts": 2,
-            "timeoutMs": 600000,
-            "maxConcurrency": 1
-          }
-        },
-        "runtime": {
-          "protocol": "subscription",
-          "model": "illustrative-operator-selected-model",
-          "authenticationReference": "illustrative-dedicated-codex"
-        },
-        "authenticationPolicyHash": null,
-        "executionImage": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "verificationImage": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-        "platform": "darwin",
-        "architecture": "arm64"
-      },
-      "requirementsHash": "db4076452e256dcc0baa5eeab68149ecc602b06375ecaec5ea2e42111bfcff59",
-      "reportedReady": true,
-      "executionQualified": false,
-      "qualificationGaps": [
-        "authenticationPolicyHash_unknown",
-        "configHash_unknown",
-        "context_hash_unknown:missioncontrol-operator-policy",
-        "effective_execution_limits_unknown",
-        "executionImage_unavailable_or_mismatched",
-        "implementationHash_unknown",
-        "projectHash_unknown",
-        "project_snapshot_binding_mismatch",
-        "qualification_evidence_missing",
-        "runtimeHash_unknown",
-        "status_requirements_binding_mismatch",
-        "verificationImage_unavailable_or_mismatched"
-      ],
-      "executionBlockers": [
-        "authPrepared_unknown",
-        "authWriterActive_unknown",
-        "authenticationPolicyHash_unknown",
-        "configHash_unknown",
-        "context_hash_unknown:missioncontrol-operator-policy",
-        "dockerAvailable_unknown",
-        "effective_execution_limits_unknown",
-        "executionImage_unavailable_or_mismatched",
-        "hostPolicyAllowsExecution_unknown",
-        "implementationHash_unknown",
-        "projectHash_unknown",
         "project_snapshot_binding_mismatch",
         "provider_disabled",
         "qualification_evidence_missing",

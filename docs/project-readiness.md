@@ -11,19 +11,21 @@ node scripts/audit-project-readiness.mjs \
 ```
 
 Use `--format text` (the default) for a concise handoff. The public fixture exits
-
-1. Both formats carry the same decision; fixed inputs and `--as-of` produce the
-   same report, independent of project enumeration order and host environment.
-   Output goes only to stdout. Exit 0 means all supplied projects have matching
-   exported qualification evidence and no exported blockers; exit 1 means valid
-   export envelopes contain unqualified, disabled, unknown or blocked projects;
-   exit 2 means missing/unreadable/malformed exports, invalid arguments/version or
-   conflicting project IDs. Invalid exports produce fixed error codes, never raw
-   input, file paths or exception messages. A schema-invalid project has its own
-   `schemaValid: false` and exits 1; envelope validity remains separate.
+with code 1. Both formats carry the same decision; fixed inputs and `--as-of`
+produce the same report, independent of project enumeration order and host
+environment. Output goes only to stdout. Exit 0 means all supplied projects have
+matching exported qualification evidence and no exported blockers; exit 1 means
+valid export envelopes contain unqualified, disabled, unknown or blocked projects;
+exit 2 means missing/unreadable/malformed exports, invalid arguments/version or
+conflicting project IDs. Invalid exports produce fixed error codes, never raw
+input, file paths or exception messages. A schema-invalid project has its own
+`schemaValid: false` and exits 1; envelope validity remains separate.
 
 The command reads at most 1 MiB from each of two regular, non-symlink files.
 It rejects FIFOs, missing files, duplicate/unknown flags and oversize inputs.
+JSON must be valid UTF-8, with no duplicate object keys (including escaped
+equivalents) or `__proto__` keys, at most 32 nesting levels and 20,000 tokens.
+These parser bounds reuse the offline project qualification parser.
 It does not discover installations, follow references in JSON, read stdin,
 contact networks, run subprocesses, access private state, inspect host tools,
 load configuration directories, inspect images, or mutate configuration/state.

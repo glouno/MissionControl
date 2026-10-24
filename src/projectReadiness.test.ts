@@ -255,6 +255,65 @@ test("CLI reads only explicit regular exports, rejects bad flags/links/oversize 
   await writeFile(join(dir, "large.json"), " ".repeat(1024 * 1024 + 1));
   bad[2] = join(dir, "large.json");
   assert.equal(run(bad).status, 2);
+  const hostile = join(dir, "hostile.json");
+  for (const [flagIndex, content] of [
+    [
+      2,
+      JSON.stringify(c).replace(
+        '"schemaVersion":1',
+        '"schemaVersion":2,"schemaVersion":1',
+      ),
+    ],
+    [
+      2,
+      JSON.stringify(c).replace(
+        '"schemaVersion":1',
+        '"schemaVersion":2,"schema\\u0056ersion":1',
+      ),
+    ],
+    [
+      4,
+      JSON.stringify(s).replace(
+        '"paused":false',
+        '"paused":true,"paused":false',
+      ),
+    ],
+    [
+      4,
+      JSON.stringify(s).replace(
+        '"passed":true',
+        '"passed":false,"passed":true',
+      ),
+    ],
+    [
+      2,
+      JSON.stringify(c).replace(
+        '"name":"ExampleEngine"',
+        '"name":' + "[".repeat(33) + "null" + "]".repeat(33),
+      ),
+    ],
+    [
+      2,
+      Buffer.concat([
+        Buffer.from(JSON.stringify(c).split("ExampleEngine")[0]),
+        Buffer.from([0xff]),
+        Buffer.from(
+          JSON.stringify(c).slice(
+            JSON.stringify(c).indexOf("ExampleEngine") + "ExampleEngine".length,
+          ),
+        ),
+      ]),
+    ],
+  ] as const) {
+    await writeFile(hostile, content);
+    const hostileArgs = [...args];
+    hostileArgs[flagIndex] = hostile;
+    const result = run(hostileArgs);
+    assert.equal(result.status, 2);
+    assert.equal(JSON.parse(result.stdout).inputValid, false);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout.includes(hostile), false);
+  }
   assert.equal(
     await readFile(join(dir, "private-sentinel"), "utf8"),
     "never-read-or-modify",
@@ -265,7 +324,7 @@ test("CLI reads only explicit regular exports, rejects bad flags/links/oversize 
   );
   assert.deepEqual(
     (await readdir(dir)).filter(
-      (n) => !["link.json", "large.json"].includes(n),
+      (n) => !["link.json", "large.json", "hostile.json"].includes(n),
     ),
     before,
   );

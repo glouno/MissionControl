@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { open } from "node:fs/promises";
 import { constants } from "node:fs";
+import { parseQualificationJson } from "../dist/projectQualification.js";
 import {
   auditProjectReadiness,
   formatReadinessReport,
@@ -24,7 +25,9 @@ async function localExport(path) {
       size += read.bytesRead;
     }
     if (size > LIMIT) throw Error("Oversized export");
-    return JSON.parse(bytes.subarray(0, size).toString("utf8"));
+    return parseQualificationJson(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)),
+    );
   } finally {
     await file.close();
   }
