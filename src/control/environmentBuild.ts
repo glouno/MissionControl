@@ -21,10 +21,26 @@ export function ownedDockerInvocation(
   args: string[],
   wsl = windowsStorageRequired(),
 ) {
-  if (wsl && args[0] === "buildx" && args[1] === "build")
+  if (
+    wsl &&
+    (args[0] === "build" || (args[0] === "buildx" && args[1] === "build"))
+  )
     return {
       command: "/usr/local/bin/devbox-storage",
-      args: ["run", "--peak-gib", "10", "--", "docker", ...args],
+      // Keep the lock owner alive until Docker's bounded execution ends.
+      // An outer execFile timeout would kill only the wrapper, releasing its lock.
+      args: [
+        "run",
+        "--peak-gib",
+        "10",
+        "--",
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "--kill-after=30s",
+        "900s",
+        "docker",
+        ...args,
+      ],
     };
   return { command: "docker", args };
 }
@@ -110,7 +126,7 @@ export class EnvironmentImageBuilder {
     ) => Promise<{ stdout: string; stderr: string }> = (args: string[]) => {
       const invocation = ownedDockerInvocation(args);
       return exec(invocation.command, invocation.args, {
-        timeout: 900000,
+        timeout: invocation.command === "docker" ? 900000 : 0,
         maxBuffer: 4 * 1024 * 1024,
       });
     },

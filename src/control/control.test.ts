@@ -117,16 +117,30 @@ test("idle controller dispatches do not accumulate durable worker registrations"
     0,
   );
   await planned(f, [spec("one")]);
-  const claim = f.store.claimNextTask("actual-worker")!;
-  assert.ok(claim);
+  for (let n = 0; n < 200; n++)
+    assert.equal(
+      f.store.claimNextTask(`incompatible-${n}`, { capabilities: ["other"] }),
+      null,
+    );
+  assert.equal(
+    f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
+    0,
+  );
+  f.store.registerWorker("explicit-worker", ["other"]);
   assert.equal(
     f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
     1,
   );
+  const claim = f.store.claimNextTask("actual-worker")!;
+  assert.ok(claim);
+  assert.equal(
+    f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
+    2,
+  );
   f.store.heartbeat(claim.task.id, claim.workerId, claim.generation);
   assert.equal(
     f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
-    1,
+    2,
   );
 });
 

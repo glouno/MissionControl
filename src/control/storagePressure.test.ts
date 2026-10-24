@@ -20,18 +20,33 @@ const snapshot = {
   hostWarning: true,
 };
 test("WSL image builds use the shared heavy gate while inspection and native builds stay unchanged", () => {
-  const build = ["buildx", "build", "--load", "."];
-  assert.deepEqual(ownedDockerInvocation(build, true), {
-    command: "/usr/local/bin/devbox-storage",
-    args: ["run", "--peak-gib", "10", "--", "docker", ...build],
-  });
+  for (const build of [
+    ["build", "."],
+    ["buildx", "build", "--load", "."],
+  ]) {
+    assert.deepEqual(ownedDockerInvocation(build, true), {
+      command: "/usr/local/bin/devbox-storage",
+      args: [
+        "run",
+        "--peak-gib",
+        "10",
+        "--",
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "--kill-after=30s",
+        "900s",
+        "docker",
+        ...build,
+      ],
+    });
+    assert.deepEqual(ownedDockerInvocation(build, false), {
+      command: "docker",
+      args: build,
+    });
+  }
   assert.deepEqual(ownedDockerInvocation(["image", "inspect", "tag"], true), {
     command: "docker",
     args: ["image", "inspect", "tag"],
-  });
-  assert.deepEqual(ownedDockerInvocation(build, false), {
-    command: "docker",
-    args: build,
   });
 });
 test("Windows reserve plus job peak overrides an incorrectly optimistic admission flag", () => {

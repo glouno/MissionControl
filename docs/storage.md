@@ -10,8 +10,10 @@ deny admission rather than treating Linux free space as physical host capacity.
 Non-WSL hosts retain Linux/native filesystem admission behavior.
 
 Environment image builds check reserves plus a 10 GiB estimated peak. The default
-WSL Buildx invocation runs through the shared host-owned heavy-job gate, which
-serializes cooperating builds and measures again under its lock. Inspection does
+WSL Docker build and Buildx build invocations run through the shared host-owned heavy-job gate, which
+serializes cooperating builds and measures again under its lock. The build
+timeout runs inside that lock, so the lock owner waits until Docker exits.
+Inspection does
 not take a heavy-build slot. Trusted custom Docker adapters must preserve these
 admission/coordination guarantees. Do not wrap an already gated image builder in
 another instance of the same gate. Workspace pressure is an observation, not a
