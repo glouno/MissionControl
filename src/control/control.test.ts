@@ -101,6 +101,35 @@ async function serve(
   return { server, url, client: new ControlClient(url, token) };
 }
 
+test("idle controller dispatches do not accumulate durable worker registrations", async (t) => {
+  const f = await fixture();
+  t.after(() => f.db.close());
+  const scheduler = new Scheduler(f.store, f.root, "http://localhost");
+  t.after(() => scheduler.workspaces.storage.db.close());
+  for (let n = 0; n < 200; n++) {
+    const id = `idle-${n}`;
+    scheduler.authorizeControllerWorker(id);
+    assert.equal(await scheduler.claimControllerWorker(id), null);
+    scheduler.revokeControllerWorker(id);
+  }
+  assert.equal(
+    f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
+    0,
+  );
+  await planned(f, [spec("one")]);
+  const claim = f.store.claimNextTask("actual-worker")!;
+  assert.ok(claim);
+  assert.equal(
+    f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
+    1,
+  );
+  f.store.heartbeat(claim.task.id, claim.workerId, claim.generation);
+  assert.equal(
+    f.db.one<{ n: number }>("SELECT count(*) n FROM control_workers")!.n,
+    1,
+  );
+});
+
 test("plan rejects cycles, missing dependencies and duplicate keys", () => {
   assert.throws(
     () => validatePlan({ tasks: [spec("a", ["b"]), spec("b", ["a"])] }),

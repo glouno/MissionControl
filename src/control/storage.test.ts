@@ -130,6 +130,44 @@ test("credentials cannot be explicitly retained or bundled from tracked history"
     /credential-like path/,
   );
 });
+
+test("Matrix Rust build output stays out of source recovery archives", async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.path, ".gitignore"), "connectors/matrix/target/\n");
+  await git(f.path, ["add", ".gitignore"]);
+  await git(f.path, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@localhost",
+    "commit",
+    "-m",
+    "Ignore build output",
+  ]);
+  const head = await git(f.path, ["rev-parse", "HEAD"]);
+  f.storage.register({ ...f.workspace, headSha: head });
+  const generated = "connectors/matrix/target/debug/test-binary";
+  await mkdir(join(f.path, "connectors/matrix/target/debug"), {
+    recursive: true,
+  });
+  await writeFile(join(f.path, generated), "generated output");
+  await assert.rejects(
+    f.storage.archive(
+      f.workspace.id,
+      { [generated]: "retain" },
+      async () => {},
+    ),
+    /disposable build outputs/,
+  );
+  const archive = await f.storage.archive(f.workspace.id, {}, async () => {});
+  assert.deepEqual(archive.files, []);
+  const restored = await f.storage.restore(archive.id);
+  await assert.rejects(readFile(join(restored.path, generated)));
+  assert.equal(
+    await readFile(join(f.path, generated), "utf8"),
+    "generated output",
+  );
+});
 test("explicit cleanup archives owned inactive worktrees and restores them; user clones are retained", async (t) => {
   const f = await fixture(t);
   await assert.rejects(
