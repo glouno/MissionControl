@@ -4,7 +4,11 @@ import type { Claim, QuestionInput, OwnerOperationInput } from "./schema.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 export interface NativeExecution {
   workspace: string;
-  spawn(command: string, args: string[]): ChildProcessWithoutNullStreams;
+  spawn(
+    command: string,
+    args: string[],
+    outputSchema?: Record<string, unknown>,
+  ): ChildProcessWithoutNullStreams;
 }
 export interface RunContext {
   claim: Claim;
