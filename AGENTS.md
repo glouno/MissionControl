@@ -7,8 +7,10 @@ reserved dashboard ports and existing private preview routes.
 Admission must include the physical Windows volume backing WSL, not only Linux
 free space. Missing or stale host metrics block heavy work. Use the installed
 host-owned devbox-storage gate for cooperating heavy jobs, with realistic peak
-estimates; do not nest its lock or bypass denied admission. Parallel editing is
-separate from heavy-build concurrency.
+estimates and explicit exclusive mutable resources. Independent isolated builds
+run concurrently when declared storage fits (CPU/RAM estimates are advisory); do not take heavy.lock
+directly, nest admission or bypass a denial. Inspect devbox-storage status for
+queue reasons and use --wait-seconds 0 for immediate capacity-unavailable exit75.
 
 Durable evidence and source recovery are not caches. Exclude generated Matrix
 Rust targets and dependency trees from recovery artifacts. Retention requires

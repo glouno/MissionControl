@@ -21,27 +21,67 @@ export function ownedDockerInvocation(
   args: string[],
   wsl = windowsStorageRequired(),
 ) {
-  if (
-    wsl &&
-    (args[0] === "build" || (args[0] === "buildx" && args[1] === "build"))
-  )
+  if (wsl && args[0] === "buildx" && args[1] === "build")
+    throw new ControlError(
+      "storage_admission",
+      "WSL Buildx daemon ownership is not supported by the host gate",
+      409,
+    );
+  if (wsl && args[0] === "build") {
+    const context = args.at(-1);
+    if (!context || context === "-" || context.includes("://"))
+      throw new ControlError(
+        "storage_admission",
+        "A local build context is required",
+        409,
+      );
+    const iidIndex = args.indexOf("--iidfile");
+    const iidFile =
+      iidIndex >= 0
+        ? args[iidIndex + 1]
+        : join(context, ".missioncontrol-image-id");
+    if (!iidFile || args.some((arg) => arg.startsWith("--iidfile=")))
+      throw new ControlError(
+        "storage_admission",
+        "A separate --iidfile path is required",
+        409,
+      );
+    const buildArgs =
+      iidIndex >= 0 ? args : [args[0], "--iidfile", iidFile, ...args.slice(1)];
     return {
       command: "/usr/local/bin/devbox-storage",
-      // Keep the lock owner alive until Docker's bounded execution ends.
-      // An outer execFile timeout would kill only the wrapper, releasing its lock.
+      // Register the daemon request inside its admission scope. Interrupted
+      // transport retains the intent until native completion is established.
       args: [
         "run",
         "--peak-gib",
         "10",
+        "--cpu",
+        "2",
+        "--project",
+        "missioncontrol-image",
+        "--resource",
+        `path:${context}`,
+        ...(iidIndex >= 0 ? ["--resource", `path:${iidFile}`] : []),
+        ...args.flatMap((value, index) => {
+          const tag = ["--tag", "-t"].includes(value)
+            ? args[index + 1]
+            : value.startsWith("--tag=")
+              ? value.slice(6)
+              : undefined;
+          return tag ? ["--resource", `name:docker-image:${tag}`] : [];
+        }),
         "--",
-        "/usr/bin/timeout",
-        "--signal=TERM",
-        "--kill-after=30s",
-        "900s",
+        "/usr/local/bin/devbox-storage",
+        "daemon-command",
+        "--timeout",
+        "900",
+        "--",
         "docker",
-        ...args,
+        ...buildArgs,
       ],
     };
+  }
   return { command: "docker", args };
 }
 /** Drain build output without killing the storage-lock owner on verbose logs. */
@@ -284,11 +324,6 @@ export class EnvironmentImageBuilder {
       "builds",
       `${id}_${randomUUID().replaceAll("-", "")}`,
     );
-    const cachePath = join(
-      this.root,
-      "caches",
-      `${id}_${randomUUID().replaceAll("-", "")}`,
-    );
     await this.admission();
     const ownerIdentity = await processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("Build owner identity unavailable");
@@ -318,7 +353,9 @@ export class EnvironmentImageBuilder {
         baseImageDigest,
         imageTag: `missioncontrol/project-${manifest.projectId.toLowerCase()}:${resolved.version}`,
         context,
-        cachePath,
+        // A retry may replace a legacy record. Preserve its registered export
+        // reference for native verified maintenance; never orphan old output.
+        cachePath: current?.cachePath,
         status: "preparing",
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -365,20 +402,9 @@ export class EnvironmentImageBuilder {
         await writeFile(path, blob.stdout, { mode: 0o600, flag: "wx" });
       }
       record = this.save({ ...record, status: "building" });
-      await mkdir(dirname(cachePath), { recursive: true, mode: 0o700 });
-      const priorCache = this.records()
-        .filter(
-          (r) =>
-            r.projectId === manifest.projectId &&
-            r.id !== id &&
-            r.status === "built" &&
-            r.cachePath,
-        )
-        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-      const cacheFrom =
-        priorCache && (await ownedBuildCache(this.root, priorCache)).present
-          ? ["--cache-from", `type=local,src=${priorCache.cachePath}`]
-          : [];
+      // Reuse the daemon's bounded native BuildKit cache. Exporting mode=max
+      // into a unique per-build directory duplicated whole cache trees. Legacy
+      // records keep their cachePath for existing verified maintenance consumers.
       const baseTag = `missioncontrol/build-base:${baseImageDigest.slice(7)}`;
       await this.docker(["image", "tag", baseImageDigest, baseTag]);
       if (
@@ -392,9 +418,6 @@ export class EnvironmentImageBuilder {
         );
       await this.docker([
         "build",
-        ...cacheFrom,
-        "--cache-to",
-        `type=local,dest=${cachePath},mode=max`,
         "--build-arg",
         `BASE_IMAGE=${baseTag}`,
         "--label",
@@ -421,12 +444,6 @@ export class EnvironmentImageBuilder {
           409,
         );
       await this.verify(record);
-      if (!(await ownedBuildCache(this.root, record)).present)
-        throw new ControlError(
-          "cache_format",
-          "Dependency build did not export its recorded cache",
-          409,
-        );
       record = this.save({ ...record, status: "built" });
       await this.evidence(record);
       return record;

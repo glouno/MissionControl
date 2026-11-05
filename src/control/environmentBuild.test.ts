@@ -43,24 +43,6 @@ async function fixture(t: any) {
     )
       return { stdout: JSON.stringify([{ Id: base }]), stderr: "" };
     if (args[0] === "build") {
-      const cache = args[args.indexOf("--cache-to") + 1]
-        .split("dest=")[1]
-        .split(",")[0];
-      const content = Buffer.from('{"schemaVersion":2}');
-      const hash = createHash("sha256").update(content).digest("hex");
-      await mkdir(join(cache, "blobs", "sha256"), { recursive: true });
-      await writeFile(join(cache, "blobs", "sha256", hash), content);
-      await writeFile(
-        join(cache, "oci-layout"),
-        JSON.stringify({ imageLayoutVersion: "1.0.0" }),
-      );
-      await writeFile(
-        join(cache, "index.json"),
-        JSON.stringify({
-          schemaVersion: 2,
-          manifests: [{ digest: `sha256:${hash}`, size: content.length }],
-        }),
-      );
       const labels = Object.fromEntries(
         args
           .map((x, i) => (x === "--label" ? args[i + 1].split("=") : []))
@@ -116,6 +98,11 @@ test("controlled image build uses exact pinned blobs and verifies reuse provenan
   const r = await f.builder.build(f.manifest, f.root, f.revision, recipe, base);
   assert.equal(r.status, "built");
   assert.equal(r.imageDigest, digest);
+  assert.equal(r.cachePath, undefined);
+  assert.equal(
+    f.calls.some((c) => c.includes("--cache-to") || c.includes("--cache-from")),
+    false,
+  );
   assert.deepEqual(
     await readFile(join(r.context, "lock")),
     Buffer.from([0, 1, 2, 10, 10]),
