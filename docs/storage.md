@@ -10,15 +10,17 @@ deny admission rather than treating Linux free space as physical host capacity.
 Non-WSL hosts retain Linux/native filesystem admission behavior.
 
 Environment image builds check reserves plus a 10 GiB estimated peak. The default
-WSL Docker build and Buildx build invocations run through the shared host-owned heavy-job gate, which
-serializes cooperating builds and measures again under its lock. The build
-timeout runs inside that lock, so the lock owner waits until Docker exits. Verbose output is drained with
-bounded diagnostic tails rather than killing the lock owner at a buffer limit.
-Inspection does
-not take a heavy-build slot. Trusted custom Docker adapters must preserve these
-admission/coordination guarantees. Do not wrap an already gated image builder in
-another instance of the same gate. Workspace pressure is an observation, not a
-multi-job storage reservation; unrelated processes can still consume space.
+WSL Docker builds use host-owned concurrent admission with explicit
+isolated context and mutable image-tag resources. Storage measurements are fresh;
+independent jobs overlap when declared storage requirements fit; CPU and memory
+estimates are advisory.
+The Docker daemon request is registered inside its task scope with an image-ID
+receipt. Interrupted transport retains the admission intent for native completion
+inspection. The host helper enforces the timeout; retained diagnostic tails remain
+bounded. Buildx is refused on WSL because its daemon tracking is not supported
+by the installed host gate; native non-WSL adapters remain unchanged. Read-only
+inspection does not reserve build capacity. Trusted custom Docker adapters must
+preserve the same admission and ownership guarantees.
 
 Worker registrations are created for actual task claims, explicit registrations
 or lease heartbeats, not every idle controller dispatch. Historical registrations
@@ -38,3 +40,12 @@ retention, inactive-process checks and crash reconciliation. Confirm storage
 plateaus across repeated revisions and preserve exact-source signed verification.
 WSL file deletion/trim does not prove the host VHDX shrank; physical recovery
 requires separate host measurement and an approved maintenance window.
+
+Dependency-image builds now use the daemon's bounded native BuildKit cache;
+new records do not export a full local cache per revision. Exact resolved
+manifest/toolchain/base/recipe identities still select immutable image reuse,
+and the database transaction rejects duplicate active builds of that identity.
+Historical exported caches remain owned by their existing records and verified
+maintenance; this source change does not delete them or switch a live runtime.
+On Paris, the host wrapper declares the isolated context and mutable image tag
+as resources so independent image builds do not serialize on a checkout path.
