@@ -19,7 +19,7 @@ const snapshot = {
   admissionAllowed: true,
   hostWarning: true,
 };
-test("WSL image builds use the shared heavy gate while inspection and native builds stay unchanged", () => {
+test("WSL image builds reserve isolated mutable resources while inspection and native builds stay unchanged", () => {
   for (const build of [
     ["build", "."],
     ["buildx", "build", "--load", "."],
@@ -30,6 +30,12 @@ test("WSL image builds use the shared heavy gate while inspection and native bui
         "run",
         "--peak-gib",
         "10",
+        "--cpu",
+        "2",
+        "--project",
+        "missioncontrol-image",
+        "--resource",
+        "path:.",
         "--",
         "/usr/bin/timeout",
         "--signal=TERM",
